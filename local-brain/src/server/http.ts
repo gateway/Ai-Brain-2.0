@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { ignoreClarification, processBrainOutboxEvents, resolveClarification } from "../clarifications/service.js";
 import { readConfig } from "../config.js";
 import { attachTextDerivation, deriveArtifactViaProvider } from "../derivations/service.js";
 import { ingestArtifact } from "../ingest/worker.js";
@@ -7,7 +8,7 @@ import { runCandidateConsolidation } from "../jobs/consolidation.js";
 import { ProducerRequestError, ingestDiscordRelayRequest, ingestSlackEventsRequest } from "../producers/live.js";
 import { ingestWebhookPayload } from "../producers/webhook.js";
 import { getArtifactDetail, getRelationships, searchMemory, timelineMemory } from "../retrieval/service.js";
-import { getOpsOverview, getOpsRelationshipGraph, getOpsTimelineView } from "../ops/service.js";
+import { getOpsClarificationInbox, getOpsOverview, getOpsRelationshipGraph, getOpsTimelineView } from "../ops/service.js";
 
 interface JsonResponse {
   readonly statusCode: number;
@@ -137,6 +138,18 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
     };
   }
 
+  if (request.method === "GET" && url.pathname === "/ops/inbox") {
+    const result = await getOpsClarificationInbox(
+      requireString(url.searchParams.get("namespace_id"), "namespace_id"),
+      optionalNumber(url.searchParams.get("limit")) ?? 40
+    );
+
+    return {
+      statusCode: 200,
+      body: result
+    };
+  }
+
   if (request.method === "GET" && url.pathname === "/search") {
     const result = await searchMemory({
       namespaceId: requireString(url.searchParams.get("namespace_id"), "namespace_id"),
@@ -231,6 +244,52 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
     return {
       statusCode: 200,
       body: result
+    };
+  }
+
+  if (request.method === "POST" && url.pathname === "/ops/inbox/resolve") {
+    const body = await readJsonBody(request);
+    const result = await resolveClarification({
+      namespaceId: requireString(body.namespace_id, "namespace_id"),
+      candidateId: requireString(body.candidate_id, "candidate_id"),
+      canonicalName: requireString(body.canonical_name, "canonical_name"),
+      entityType: requireString(body.entity_type, "entity_type"),
+      targetRole: optionalString(body.target_role) as "subject" | "object" | undefined,
+      aliases: Array.isArray(body.aliases) ? body.aliases.filter((value): value is string => typeof value === "string") : undefined,
+      note: optionalString(body.note)
+    });
+    const outbox = await processBrainOutboxEvents({
+      namespaceId: result.namespaceId,
+      limit: 25
+    });
+
+    return {
+      statusCode: 200,
+      body: {
+        ...result,
+        outbox
+      }
+    };
+  }
+
+  if (request.method === "POST" && url.pathname === "/ops/inbox/ignore") {
+    const body = await readJsonBody(request);
+    const result = await ignoreClarification({
+      namespaceId: requireString(body.namespace_id, "namespace_id"),
+      candidateId: requireString(body.candidate_id, "candidate_id"),
+      note: optionalString(body.note)
+    });
+    const outbox = await processBrainOutboxEvents({
+      namespaceId: result.namespaceId,
+      limit: 25
+    });
+
+    return {
+      statusCode: 200,
+      body: {
+        ...result,
+        outbox
+      }
     };
   }
 

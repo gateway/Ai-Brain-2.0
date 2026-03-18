@@ -1,99 +1,83 @@
 {
-  "generatedAt": "2026-03-18T08:40:25.117Z",
-  "namespaceId": "eval_1773823224691_e2aa57fb",
-  "baselineEvalPassed": false,
-  "baselineEvalFailures": [
-    "ingest.fragments",
-    "relationships.japan",
-    "relationships.adjudication",
-    "temporal.descendant_support",
-    "temporal.layer_gating"
-  ],
+  "generatedAt": "2026-03-18T09:23:18.756Z",
+  "namespaceId": "eval_1773825798144_fd62d958",
+  "baselineEvalPassed": true,
+  "baselineEvalFailures": [],
   "cases": [
     {
-      "name": "japan_exact_temporal",
+      "name": "chiang_mai_exact_temporal",
       "provider": "fts",
-      "passed": false,
+      "passed": true,
       "resultCount": 2,
       "effectiveLexicalProvider": "fts",
       "lexicalFallbackUsed": false,
       "topMemoryType": "temporal_nodes",
-      "topContent": "YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.",
+      "topContent": "YEAR rollup Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time) -> Fri Jan 01 2027 00:00:00 GMT+0700 (Indochina Time). events=11. roles=import:11. top_entities=Benjamin Williams:1, Chiang Mai:1, Gumi:1, Iceland:1, Icelandic Air:1.",
       "topOverlap": 0.9992009132420091,
-      "approxTokens": 53,
-      "failureReasons": [
-        "top result missing term: Japan",
-        "top result missing term: Sarah"
-      ]
-    },
-    {
-      "name": "japan_exact_temporal",
-      "provider": "bm25",
-      "passed": false,
-      "resultCount": 3,
-      "effectiveLexicalProvider": "bm25",
-      "lexicalFallbackUsed": false,
-      "topMemoryType": "temporal_nodes",
-      "topContent": "YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.",
-      "topOverlap": 0.9992009132420091,
-      "approxTokens": 68,
-      "failureReasons": [
-        "top result missing term: Japan",
-        "top result missing term: Sarah"
-      ]
-    },
-    {
-      "name": "japan_temporal_natural_language",
-      "provider": "fts",
-      "passed": false,
-      "resultCount": 3,
-      "effectiveLexicalProvider": "fts",
-      "lexicalFallbackUsed": false,
-      "topMemoryType": "temporal_nodes",
-      "topContent": "YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.",
-      "topOverlap": 0.9992009132420091,
-      "approxTokens": 65,
-      "failureReasons": [
-        "top result missing term: Japan"
-      ]
-    },
-    {
-      "name": "japan_temporal_natural_language",
-      "provider": "bm25",
-      "passed": false,
-      "resultCount": 3,
-      "effectiveLexicalProvider": "bm25",
-      "lexicalFallbackUsed": false,
-      "topMemoryType": "temporal_nodes",
-      "topContent": "YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.",
-      "topOverlap": 0.9992009132420091,
-      "approxTokens": 65,
-      "failureReasons": [
-        "top result missing term: Japan"
-      ]
-    },
-    {
-      "name": "relationship_context_kyoto",
-      "provider": "fts",
-      "passed": true,
-      "resultCount": 1,
-      "effectiveLexicalProvider": "fts",
-      "lexicalFallbackUsed": false,
-      "topMemoryType": "episodic_memory",
-      "topContent": "In June 2025 Steve was in Japan with Sarah and Ken. They spent time in Tokyo and Kyoto together. The trip included shared dinners, transit days, and travel notes worth preserving.",
-      "approxTokens": 31,
+      "approxTokens": 50,
       "failureReasons": []
     },
     {
-      "name": "relationship_context_kyoto",
+      "name": "chiang_mai_exact_temporal",
+      "provider": "bm25",
+      "passed": true,
+      "resultCount": 3,
+      "effectiveLexicalProvider": "bm25",
+      "lexicalFallbackUsed": false,
+      "topMemoryType": "temporal_nodes",
+      "topContent": "YEAR rollup Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time) -> Fri Jan 01 2027 00:00:00 GMT+0700 (Indochina Time). events=11. roles=import:11. top_entities=Benjamin Williams:1, Chiang Mai:1, Gumi:1, Iceland:1, Icelandic Air:1.",
+      "topOverlap": 0.9992009132420091,
+      "approxTokens": 76,
+      "failureReasons": []
+    },
+    {
+      "name": "chiang_mai_temporal_natural_language",
+      "provider": "fts",
+      "passed": true,
+      "resultCount": 4,
+      "effectiveLexicalProvider": "fts",
+      "lexicalFallbackUsed": false,
+      "topMemoryType": "temporal_nodes",
+      "topContent": "YEAR rollup Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time) -> Fri Jan 01 2027 00:00:00 GMT+0700 (Indochina Time). events=11. roles=import:11. top_entities=Benjamin Williams:1, Chiang Mai:1, Gumi:1, Iceland:1, Icelandic Air:1.",
+      "topOverlap": 0.9992009132420091,
+      "approxTokens": 88,
+      "failureReasons": []
+    },
+    {
+      "name": "chiang_mai_temporal_natural_language",
+      "provider": "bm25",
+      "passed": true,
+      "resultCount": 4,
+      "effectiveLexicalProvider": "bm25",
+      "lexicalFallbackUsed": false,
+      "topMemoryType": "temporal_nodes",
+      "topContent": "YEAR rollup Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time) -> Fri Jan 01 2027 00:00:00 GMT+0700 (Indochina Time). events=11. roles=import:11. top_entities=Benjamin Williams:1, Chiang Mai:1, Gumi:1, Iceland:1, Icelandic Air:1.",
+      "topOverlap": 0.9992009132420091,
+      "approxTokens": 84,
+      "failureReasons": []
+    },
+    {
+      "name": "alias_collision_stephen",
+      "provider": "fts",
+      "passed": true,
+      "resultCount": 1,
+      "effectiveLexicalProvider": "fts",
+      "lexicalFallbackUsed": false,
+      "topMemoryType": "episodic_memory",
+      "topContent": "Stephen Park handled the summer home repair plan near Tahoe in August 2026 and coordinated the cabin access list.",
+      "approxTokens": 19,
+      "failureReasons": []
+    },
+    {
+      "name": "alias_collision_stephen",
       "provider": "bm25",
       "passed": true,
       "resultCount": 1,
       "effectiveLexicalProvider": "bm25",
       "lexicalFallbackUsed": false,
       "topMemoryType": "episodic_memory",
-      "topContent": "In June 2025 Steve was in Japan with Sarah and Ken. They spent time in Tokyo and Kyoto together. The trip included shared dinners, transit days, and travel notes worth preserving.",
-      "approxTokens": 31,
+      "topContent": "Stephen Park handled the summer home repair plan near Tahoe in August 2026 and coordinated the cabin access list.",
+      "approxTokens": 19,
       "failureReasons": []
     },
     {
@@ -154,7 +138,7 @@
       "effectiveLexicalProvider": "fts",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019d001a-6bb2-7073-b10f-5265f7ad2abd\", \"semantic_memory_id\": \"019d001a-6c06-7d60-86a8-bc5824e89744\"}",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019d0041-b056-781d-9267-c751d49be01e\", \"semantic_memory_id\": \"019d0041-b102-7172-8fed-bbe746c833c4\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -166,7 +150,7 @@
       "effectiveLexicalProvider": "bm25",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019d001a-6bb2-7073-b10f-5265f7ad2abd\", \"semantic_memory_id\": \"019d001a-6c06-7d60-86a8-bc5824e89744\"}",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019d0041-b056-781d-9267-c751d49be01e\", \"semantic_memory_id\": \"019d0041-b102-7172-8fed-bbe746c833c4\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -178,7 +162,7 @@
       "effectiveLexicalProvider": "fts",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019d001a-6bb2-7073-b10f-5265f7ad2abd\", \"semantic_memory_id\": \"019d001a-6c08-7cc2-a8ac-5d2cfcbb049f\"}",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019d0041-b056-781d-9267-c751d49be01e\", \"semantic_memory_id\": \"019d0041-b104-76ae-9dd5-b7ff2456cc6c\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -190,7 +174,7 @@
       "effectiveLexicalProvider": "bm25",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019d001a-6bb2-7073-b10f-5265f7ad2abd\", \"semantic_memory_id\": \"019d001a-6c08-7cc2-a8ac-5d2cfcbb049f\"}",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019d0041-b056-781d-9267-c751d49be01e\", \"semantic_memory_id\": \"019d0041-b104-76ae-9dd5-b7ff2456cc6c\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -362,12 +346,12 @@
     }
   ],
   "summary": {
-    "ftsPassed": 12,
-    "bm25Passed": 12,
+    "ftsPassed": 14,
+    "bm25Passed": 14,
     "totalCases": 14,
-    "bm25TokenDelta": 15,
+    "bm25TokenDelta": 22,
     "bm25FallbackCases": 0,
-    "recommendation": "keep_feature_gated",
-    "reason": "Keep BM25 behind a flag until it clears the expanded lexical stress suite, baseline eval remains clean, and BM25 fallback frequency reaches zero."
+    "recommendation": "candidate_for_default",
+    "reason": "BM25 matched or exceeded FTS across the expanded lexical stress suite with zero fallback and only a small acceptable token overhead."
   }
 }

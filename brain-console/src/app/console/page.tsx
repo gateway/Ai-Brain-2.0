@@ -104,8 +104,15 @@ export default async function ConsoleOverviewPage() {
                 <span className="font-mono text-xs uppercase tracking-[0.3em]">graph</span>
               </Link>
               <Link
+                href="/console/inbox"
+                className="flex w-full items-center justify-between rounded-2xl border border-slate-900/15 bg-white px-4 py-3 text-sm font-medium text-slate-900 hover:bg-slate-50"
+              >
+                <span>Review clarification inbox</span>
+                <span className="font-mono text-xs uppercase tracking-[0.3em]">inbox</span>
+              </Link>
+              <Link
                 href="/console/benchmark"
-                className="flex w-full items-center justify-between rounded-2xl border border-slate-900/15 bg-white px-4 py-3 text-sm font-medium text-slate-900 hover:bg-slate-50 md:col-span-2"
+                className="flex w-full items-center justify-between rounded-2xl border border-slate-900/15 bg-white px-4 py-3 text-sm font-medium text-slate-900 hover:bg-slate-50"
               >
                 <span>Inspect lexical benchmark</span>
                 <span className="font-mono text-xs uppercase tracking-[0.3em]">bm25</span>
@@ -139,6 +146,14 @@ export default async function ConsoleOverviewPage() {
             <div className="flex items-center justify-between">
               <span>Relationship candidates pending</span>
               <span className="font-mono text-sm">{overview?.memorySummary.relationshipCandidatesPending ?? "?"}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Clarifications pending</span>
+              <span className="font-mono text-sm">{overview?.memorySummary.clarificationPending ?? "?"}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Outbox pending</span>
+              <span className="font-mono text-sm">{overview?.memorySummary.outboxPending ?? "?"}</span>
             </div>
             <div className="flex items-center justify-between">
               <span>Semantic decay events</span>

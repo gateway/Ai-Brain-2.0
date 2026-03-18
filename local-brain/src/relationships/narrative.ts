@@ -59,6 +59,15 @@ interface PriorScore {
   readonly reason: string;
 }
 
+interface ClaimAmbiguity {
+  readonly state: "requires_clarification";
+  readonly type: "possible_misspelling" | "undefined_kinship" | "vague_place" | "alias_collision" | "unknown_reference";
+  readonly reason: string;
+  readonly targetRole: "subject" | "object";
+  readonly rawText: string;
+  readonly suggestedMatches: readonly string[];
+}
+
 interface StageNarrativeClaimsInput {
   readonly namespaceId: string;
   readonly artifactId: string;
@@ -108,6 +117,26 @@ const STOP_PERSON_NAMES = new Set([
   "Chiang",
   "Koh"
 ]);
+
+const KINSHIP_TERMS = new Set([
+  "uncle",
+  "aunt",
+  "grandpa",
+  "grandma",
+  "grandfather",
+  "grandmother",
+  "mother",
+  "mom",
+  "father",
+  "dad",
+  "brother",
+  "sister",
+  "cousin",
+  "nephew",
+  "niece"
+]);
+
+const VAGUE_PLACE_PHRASES = [/^summer home$/iu, /^cabin$/iu, /^the cabin$/iu, /^lake house$/iu, /^beach house$/iu, /^family house$/iu];
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
@@ -181,6 +210,168 @@ function looksLikePersonName(value: string): boolean {
   }
 
   return tokens.every((token) => /^[A-Z][a-z]+$/u.test(token));
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+
+  if (left.length === 0) {
+    return right.length;
+  }
+
+  if (right.length === 0) {
+    return left.length;
+  }
+
+  const matrix = Array.from({ length: left.length + 1 }, () => new Array<number>(right.length + 1).fill(0));
+
+  for (let i = 0; i <= left.length; i += 1) {
+    matrix[i]![0] = i;
+  }
+
+  for (let j = 0; j <= right.length; j += 1) {
+    matrix[0]![j] = j;
+  }
+
+  for (let i = 1; i <= left.length; i += 1) {
+    for (let j = 1; j <= right.length; j += 1) {
+      const substitutionCost = left[i - 1] === right[j - 1] ? 0 : 1;
+      matrix[i]![j] = Math.min(
+        matrix[i - 1]![j]! + 1,
+        matrix[i]![j - 1]! + 1,
+        matrix[i - 1]![j - 1]! + substitutionCost
+      );
+    }
+  }
+
+  return matrix[left.length]![right.length]!;
+}
+
+function findSuggestedAliasMatches(rawText: string, namespaceAliases: ReadonlyMap<string, string>): string[] {
+  const normalizedRaw = normalizeName(rawText);
+  if (!normalizedRaw) {
+    return [];
+  }
+
+  const canonicals = new Set<string>();
+  for (const [alias, canonical] of namespaceAliases.entries()) {
+    if (!alias || !canonical) {
+      continue;
+    }
+
+    const distance = levenshteinDistance(normalizedRaw, alias);
+    if (distance <= 2 || alias.includes(normalizedRaw) || normalizedRaw.includes(alias)) {
+      canonicals.add(canonical);
+    }
+  }
+
+  return [...canonicals].sort((left, right) => left.localeCompare(right)).slice(0, 5);
+}
+
+function shouldAbstainPersonResolution(rawText: string, namespaceAliases: ReadonlyMap<string, string>): readonly string[] {
+  const normalizedRaw = normalizeName(rawText);
+  if (!normalizedRaw) {
+    return [];
+  }
+
+  if (namespaceAliases.has(normalizedRaw)) {
+    return [];
+  }
+
+  const rawTokenCount = normalizeWhitespace(rawText).split(/\s+/u).filter(Boolean).length;
+  return findSuggestedAliasMatches(rawText, namespaceAliases).filter((candidate) => {
+    const candidateNormalized = normalizeName(candidate);
+    const candidateTokenCount = normalizeWhitespace(candidate).split(/\s+/u).filter(Boolean).length;
+    if (candidateNormalized === normalizedRaw) {
+      return false;
+    }
+
+    if (rawTokenCount < 2 && candidateTokenCount > rawTokenCount) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function isVaguePlaceReference(rawText: string): boolean {
+  const cleaned = normalizeWhitespace(rawText);
+  return VAGUE_PLACE_PHRASES.some((pattern) => pattern.test(cleaned));
+}
+
+function classifyAmbiguity(
+  claim: ResolvedNarrativeClaim,
+  namespaceAliases: ReadonlyMap<string, string>
+): ClaimAmbiguity | null {
+  const candidates: Array<{
+    readonly role: "subject" | "object";
+    readonly text?: string;
+    readonly entityId: string | null;
+    readonly entityType?: EntityType;
+  }> = [
+    { role: "subject", text: claim.subjectName, entityId: claim.subjectEntityId, entityType: claim.resolvedSubjectType ?? claim.subjectType },
+    { role: "object", text: claim.objectName, entityId: claim.objectEntityId, entityType: claim.resolvedObjectType ?? claim.objectType }
+  ];
+
+  for (const candidate of candidates) {
+    const rawText = normalizeWhitespace(candidate.text ?? "");
+    if (!rawText || candidate.entityId) {
+      continue;
+    }
+
+    const normalized = normalizeName(rawText);
+    if (!normalized) {
+      continue;
+    }
+
+    if (KINSHIP_TERMS.has(normalized)) {
+      return {
+        state: "requires_clarification",
+        type: "undefined_kinship",
+        reason: `The ${candidate.role} reference "${rawText}" is a kinship role without a grounded person entity.`,
+        targetRole: candidate.role,
+        rawText,
+        suggestedMatches: findSuggestedAliasMatches(rawText, namespaceAliases)
+      };
+    }
+
+    if (VAGUE_PLACE_PHRASES.some((pattern) => pattern.test(rawText))) {
+      return {
+        state: "requires_clarification",
+        type: "vague_place",
+        reason: `The ${candidate.role} reference "${rawText}" looks like a vague place that needs a concrete location.`,
+        targetRole: candidate.role,
+        rawText,
+        suggestedMatches: findSuggestedAliasMatches(rawText, namespaceAliases)
+      };
+    }
+
+    if ((candidate.entityType === "person" || looksLikePersonName(rawText)) && findSuggestedAliasMatches(rawText, namespaceAliases).length > 0) {
+      return {
+        state: "requires_clarification",
+        type: "possible_misspelling",
+        reason: `The ${candidate.role} reference "${rawText}" looks close to an existing person alias but did not resolve cleanly.`,
+        targetRole: candidate.role,
+        rawText,
+        suggestedMatches: findSuggestedAliasMatches(rawText, namespaceAliases)
+      };
+    }
+
+    if (candidate.entityType === "place" || /home|house|villa|island|city|town|beach|cabin/iu.test(rawText)) {
+      return {
+        state: "requires_clarification",
+        type: "unknown_reference",
+        reason: `The ${candidate.role} reference "${rawText}" did not resolve to a known place or entity.`,
+        targetRole: candidate.role,
+        rawText,
+        suggestedMatches: findSuggestedAliasMatches(rawText, namespaceAliases)
+      };
+    }
+  }
+
+  return null;
 }
 
 async function loadExistingSelfName(client: PoolClient, namespaceId: string): Promise<string | null> {
@@ -361,7 +552,12 @@ function extractClaimsFromScene(
     const sentencePeople = extractExplicitPeople(sentenceText, aliasPairs).map((name) =>
       resolvePersonName(name, aliasMap, resolvedSelfName, explicitPeople)
     );
-    const explicitSubject = sentencePeople.find(Boolean);
+    const leadingPersonToken = normalizeWhitespace(sentenceText.match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/u)?.[1] ?? "");
+    const leadingSubject =
+      leadingPersonToken && looksLikePersonName(leadingPersonToken)
+        ? resolvePersonName(leadingPersonToken, aliasMap, resolvedSelfName, explicitPeople) ?? leadingPersonToken
+        : undefined;
+    const explicitSubject = sentencePeople.find(Boolean) ?? leadingSubject;
     const subject =
       /\b(?:I|my|me|we|our)\b/u.test(sentenceText)
         ? resolvedSelfName ?? undefined
@@ -387,10 +583,19 @@ function extractClaimsFromScene(
       lastPerson = name;
     }
 
-    if (subject && /\b(?:I|He|She|They|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:live|lives|living)\s+(?:out here too|in)\b/u.test(sentenceText)) {
+    if (
+      subject &&
+      /\b(?:I|He|She|They|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+(?:(?:am|are|is|was|were|had been)\s+)?(?:live|lives|living)\s+(?:out here too|in)\b/u.test(
+        sentenceText
+      )
+    ) {
       const placeMentions = unique(
         [...PLACE_NAMES.values()].filter((place) => new RegExp(`\\b${place.replace(/\s+/gu, "\\s+")}\\b`, "iu").test(sentenceText))
       );
+      const rawPlaceMatch = sentenceText.match(
+        /\b(?:(?:am|are|is|was|were|had been)\s+)?(?:live|lives|living)\s+in\s+([^.,;]+?)(?:\s+for\b|\s+with\b|[.?!,;]|$)/iu
+      );
+      const rawPlace = normalizeWhitespace(rawPlaceMatch?.[1] ?? "");
 
       if (/\bout here too\b/iu.test(sentenceText) && placeMentions.length === 0) {
         claims.push({
@@ -401,6 +606,19 @@ function extractClaimsFromScene(
           confidence: 0.4,
           status: "abstained",
           metadata: { reason: "vague_relative_place" }
+        });
+      }
+
+      if (!/\bout here too\b/iu.test(sentenceText) && rawPlace && placeMentions.length === 0) {
+        claims.push({
+          claimType: "location",
+          subjectName: subject,
+          subjectType: subject === resolvedSelfName ? "self" : "person",
+          predicate: "lives_in",
+          objectName: rawPlace,
+          objectType: "place",
+          confidence: 0.48,
+          status: "pending"
         });
       }
 
@@ -422,6 +640,8 @@ function extractClaimsFromScene(
       const placeMentions = unique(
         [...PLACE_NAMES.values()].filter((place) => new RegExp(`\\b${place.replace(/\s+/gu, "\\s+")}\\b`, "iu").test(sentenceText))
       );
+      const rawPlaceMatch = sentenceText.match(/\blived\s+(?:on|in)\s+([^.,;]+?)(?:\s+for\b|\s+with\b|[.?!,;]|$)/iu);
+      const rawPlace = normalizeWhitespace(rawPlaceMatch?.[1] ?? "");
 
       for (const place of placeMentions) {
         claims.push({
@@ -433,6 +653,19 @@ function extractClaimsFromScene(
           objectType: "place",
           confidence: 0.9,
           status: "accepted"
+        });
+      }
+
+      if (rawPlace && placeMentions.length === 0) {
+        claims.push({
+          claimType: "location_history",
+          subjectName: subject,
+          subjectType: subject === selfName ? "self" : "person",
+          predicate: "lived_in",
+          objectName: rawPlace,
+          objectType: "place",
+          confidence: 0.46,
+          status: "pending"
         });
       }
 
@@ -621,6 +854,25 @@ function extractClaimsFromScene(
           });
         }
       }
+    }
+
+    const workedWithMatch = sentenceText.match(
+      /\bworked\s+with\s+((?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|uncle|aunt|cousin|brother|sister|dad|father|mom|mother)\b(?=\s+on\b|[.?!,;]|$)/iu
+    );
+    if (subject && workedWithMatch) {
+      const rawPerson = normalizeWhitespace(workedWithMatch[1] ?? "");
+      const person = resolvePersonName(rawPerson, aliasMap, resolvedSelfName, explicitPeople) ?? rawPerson;
+      claims.push({
+        claimType: "relationship",
+        subjectName: subject,
+        subjectType: resolvedSelfName && subject === resolvedSelfName ? "self" : "person",
+        predicate: "works_with",
+        objectName: person,
+        objectType: "person",
+        confidence: KINSHIP_TERMS.has(normalizeName(rawPerson)) ? 0.42 : 0.78,
+        status: KINSHIP_TERMS.has(normalizeName(rawPerson)) ? "pending" : "accepted"
+      });
+      lastPerson = person;
     }
 
     const explicitProjectStatusMatch = sentenceText.match(
@@ -1475,19 +1727,37 @@ export async function stageNarrativeClaims(
         .map(([alias]) => alias)
         .filter(Boolean)
         .map((alias) => titleCase(alias));
+      const subjectAmbiguousMatches =
+        subjectType === "person" && claim.subjectName
+          ? KINSHIP_TERMS.has(normalizeName(claim.subjectName))
+            ? [claim.subjectName]
+            : shouldAbstainPersonResolution(claim.subjectName, namespaceAliases)
+          : [];
+      const objectAmbiguousMatches =
+        objectType === "person" && claim.objectName
+          ? KINSHIP_TERMS.has(normalizeName(claim.objectName))
+            ? [claim.objectName]
+            : shouldAbstainPersonResolution(claim.objectName, namespaceAliases)
+          : [];
 
       const subjectEntityId =
         claim.subjectName && subjectType
-          ? await upsertEntity(client, input.namespaceId, subjectType, claim.subjectName, aliasList, {
-              extraction_method: "deterministic_scene_claims"
-            })
+          ? subjectType === "person" && subjectAmbiguousMatches.length > 0
+            ? null
+            : await upsertEntity(client, input.namespaceId, subjectType, claim.subjectName, aliasList, {
+                extraction_method: "deterministic_scene_claims"
+              })
           : null;
 
       const objectEntityId =
         claim.objectName && objectType
-          ? await upsertEntity(client, input.namespaceId, objectType, claim.objectName, objectType === "person" ? aliasList : [], {
-              extraction_method: "deterministic_scene_claims"
-            })
+          ? objectType === "person" && objectAmbiguousMatches.length > 0
+            ? null
+            : objectType === "place" && isVaguePlaceReference(claim.objectName)
+              ? null
+              : await upsertEntity(client, input.namespaceId, objectType, claim.objectName, objectType === "person" ? aliasList : [], {
+                  extraction_method: "deterministic_scene_claims"
+                })
           : null;
 
       if (subjectType === "self" && claim.subjectName) {
@@ -1495,22 +1765,53 @@ export async function stageNarrativeClaims(
         namespaceAliases.set(normalizeName(claim.subjectName), claim.subjectName);
       }
 
-      if (subjectType === "person" && claim.subjectName) {
+      if (subjectType === "person" && claim.subjectName && subjectEntityId) {
         namespaceAliases.set(normalizeName(claim.subjectName), claim.subjectName);
         for (const alias of aliasList) {
           namespaceAliases.set(normalizeName(alias), claim.subjectName);
         }
       }
 
-      if (objectType === "person" && claim.objectName) {
+      if (objectType === "person" && claim.objectName && objectEntityId) {
         namespaceAliases.set(normalizeName(claim.objectName), claim.objectName);
         for (const alias of aliasList) {
           namespaceAliases.set(normalizeName(alias), claim.objectName);
         }
       }
 
+      const ambiguity = classifyAmbiguity(
+        {
+          ...claim,
+          metadata: {
+            ...(claim.metadata ?? {}),
+            subject_suggested_matches: subjectAmbiguousMatches,
+            object_suggested_matches: objectAmbiguousMatches
+          },
+          subjectEntityId,
+          objectEntityId,
+          resolvedSubjectType: subjectType,
+          resolvedObjectType: objectType
+        },
+        namespaceAliases
+      );
+      const claimStatus = ambiguity ? "abstained" : claim.status;
+
       resolvedClaims.push({
         ...claim,
+        status: claimStatus,
+        metadata: {
+          ...(claim.metadata ?? {}),
+          ...(ambiguity
+            ? {
+                ambiguity_state: ambiguity.state,
+                ambiguity_type: ambiguity.type,
+                ambiguity_reason: ambiguity.reason,
+                ambiguity_target_role: ambiguity.targetRole,
+                suggested_matches: ambiguity.suggestedMatches,
+                raw_ambiguous_text: ambiguity.rawText
+              }
+            : {})
+        },
         subjectEntityId,
         objectEntityId,
         resolvedSubjectType: subjectType,
@@ -1586,6 +1887,9 @@ export async function stageNarrativeClaims(
             prior_score,
             prior_reason,
             status,
+            ambiguity_state,
+            ambiguity_type,
+            ambiguity_reason,
             occurred_at,
             time_expression_text,
             time_start,
@@ -1596,7 +1900,7 @@ export async function stageNarrativeClaims(
             extraction_method,
             metadata
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, 'deterministic_scene_claims', $26::jsonb)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, 'deterministic_scene_claims', $29::jsonb)
         `,
         [
           input.namespaceId,
@@ -1619,6 +1923,9 @@ export async function stageNarrativeClaims(
           claimPrior.score,
           claimPrior.reason,
           claim.status,
+          typeof claim.metadata?.ambiguity_state === "string" ? claim.metadata.ambiguity_state : "none",
+          typeof claim.metadata?.ambiguity_type === "string" ? claim.metadata.ambiguity_type : null,
+          typeof claim.metadata?.ambiguity_reason === "string" ? claim.metadata.ambiguity_reason : null,
           scene.occurredAt,
           scene.timeExpressionText ?? null,
           scene.timeStart ?? null,

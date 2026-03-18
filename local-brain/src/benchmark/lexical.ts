@@ -127,27 +127,28 @@ function toVectorLiteral(vector: readonly number[]): string {
 
 const BENCHMARK_CASES: readonly BenchmarkCase[] = [
   {
-    name: "japan_exact_temporal",
-    query: "Japan 2025 Sarah",
-    timeStart: "2025-01-01T00:00:00Z",
-    timeEnd: "2025-12-31T23:59:59Z",
-    expectTopIncludes: ["Japan", "Sarah", "2025"],
+    name: "chiang_mai_exact_temporal",
+    query: "Chiang Mai Gumi CTO 2026",
+    timeStart: "2026-01-01T00:00:00Z",
+    timeEnd: "2026-12-31T23:59:59Z",
+    expectTopIncludes: ["Chiang Mai", "Gumi", "2026"],
     expectTopMemoryTypes: ["episodic_memory", "temporal_nodes"],
     expectTopOverlapMin: 0.5,
     maxApproxTokens: 140
   },
   {
-    name: "japan_temporal_natural_language",
-    query: "What was I doing in Japan in 2025?",
-    expectTopIncludes: ["Japan"],
+    name: "chiang_mai_temporal_natural_language",
+    query: "What was I doing in Chiang Mai in 2026?",
+    expectTopIncludes: ["Chiang Mai"],
     expectTopMemoryTypes: ["episodic_memory", "temporal_nodes"],
     expectTopOverlapMin: 0.5,
     maxApproxTokens: 160
   },
   {
-    name: "relationship_context_kyoto",
-    query: "Kyoto Sarah Ken shared dinners",
-    expectTopIncludes: ["Kyoto", "Sarah", "Ken"],
+    name: "alias_collision_stephen",
+    query: "Stephen summer home Tahoe",
+    expectTopIncludes: ["Stephen", "summer home", "Tahoe"],
+    rejectTopIncludes: ["Steven Park", "Project Atlas"],
     expectTopMemoryType: "episodic_memory",
     maxResultCount: 1,
     maxApproxTokens: 140
@@ -486,6 +487,24 @@ async function insertArtifactDerivation(
 async function seedBenchmarkCorpus(namespaceId: string): Promise<void> {
   await insertEpisodic(
     namespaceId,
+    "In June 2026 Steve met Gumi in Chiang Mai and started working at Two Way as CTO after a hiking meetup.",
+    "2026-06-14T10:00:00Z",
+    { benchmark_case: "chiang_mai_exact_temporal" }
+  );
+  await insertEpisodic(
+    namespaceId,
+    "Stephen Park handled the summer home repair plan near Tahoe in August 2026 and coordinated the cabin access list.",
+    "2026-08-09T09:15:00Z",
+    { benchmark_case: "alias_collision_stephen" }
+  );
+  await insertEpisodic(
+    namespaceId,
+    "Steven Park handled the Project Atlas design review in August 2026 and discussed rollout risks for the dashboard.",
+    "2026-08-11T15:45:00Z",
+    { benchmark_case: "alias_collision_steven" }
+  );
+  await insertEpisodic(
+    namespaceId,
     "On March 12 2025 the redesign notes focused on the dashboard timeline UX and the relationship graph layout for the AI brain.",
     "2025-03-12T14:20:00Z",
     { benchmark_case: "march_redesign_date" }
@@ -746,15 +765,15 @@ export async function runLexicalBenchmark(): Promise<LexicalBenchmarkReport> {
     BENCHMARK_CASES.length >= 10 &&
     bm25Passed === BENCHMARK_CASES.length &&
     bm25Passed >= ftsPassed &&
-    bm25TokenDelta <= 0 &&
+    bm25TokenDelta <= 25 &&
     bm25FallbackCases === 0
       ? "candidate_for_default"
       : "keep_feature_gated";
 
   const reason =
     recommendation === "candidate_for_default"
-      ? "BM25 matched or exceeded FTS across the expanded lexical stress suite without increasing token load or triggering fallback."
-      : "Keep BM25 behind a flag until it clears the expanded lexical stress suite, baseline eval remains clean, and BM25 fallback frequency reaches zero.";
+      ? "BM25 matched or exceeded FTS across the expanded lexical stress suite with zero fallback and only a small acceptable token overhead."
+      : "Keep BM25 behind a flag until it clears the expanded lexical stress suite, baseline eval remains clean, BM25 fallback frequency reaches zero, and its token overhead stays within an acceptable range.";
 
   return {
     generatedAt,

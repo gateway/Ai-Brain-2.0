@@ -154,6 +154,8 @@ export interface OpsOverview {
     readonly relationshipCandidatesPending: number;
     readonly relationshipMemoryActive: number;
     readonly semanticDecayEvents: number;
+    readonly clarificationPending: number;
+    readonly outboxPending: number;
   };
 }
 
@@ -213,6 +215,31 @@ export interface OpsRelationshipGraph {
   readonly selectedEntity?: string;
   readonly nodes: readonly OpsRelationshipGraphNode[];
   readonly edges: readonly OpsRelationshipGraphEdge[];
+}
+
+export interface OpsClarificationInboxItem {
+  readonly candidateId: string;
+  readonly claimType: string;
+  readonly predicate: string;
+  readonly targetRole: "subject" | "object";
+  readonly rawText: string;
+  readonly confidence: number;
+  readonly priorScore: number;
+  readonly ambiguityType: string;
+  readonly ambiguityReason?: string | null;
+  readonly suggestedMatches: readonly string[];
+  readonly occurredAt: string;
+  readonly sceneText?: string | null;
+  readonly sourceUri?: string | null;
+}
+
+export interface OpsClarificationInbox {
+  readonly namespaceId: string;
+  readonly summary: {
+    readonly total: number;
+    readonly byType: Record<string, number>;
+  };
+  readonly items: readonly OpsClarificationInboxItem[];
 }
 
 async function readJsonFile<T>(segments: readonly string[]): Promise<T> {
@@ -278,14 +305,14 @@ export async function getConsoleDefaults(): Promise<{
     const { json } = await getLatestEval();
     return {
       namespaceId: json.namespaceId,
-      timeStart: "2025-01-01T00:00:00Z",
-      timeEnd: "2025-12-31T23:59:59Z"
+      timeStart: "2026-01-01T00:00:00Z",
+      timeEnd: "2026-12-31T23:59:59Z"
     };
   } catch {
     return {
       namespaceId: "personal",
-      timeStart: "2025-01-01T00:00:00Z",
-      timeEnd: "2025-12-31T23:59:59Z"
+      timeStart: "2026-01-01T00:00:00Z",
+      timeEnd: "2026-12-31T23:59:59Z"
     };
   }
 }
@@ -399,6 +426,21 @@ export async function getRelationshipGraph(input: {
   }
 
   return fetchJson<OpsRelationshipGraph>("/ops/graph", params);
+}
+
+export async function getClarificationInbox(input: {
+  readonly namespaceId: string;
+  readonly limit?: string;
+}): Promise<OpsClarificationInbox> {
+  const params = new URLSearchParams({
+    namespace_id: input.namespaceId
+  });
+
+  if (input.limit) {
+    params.set("limit", input.limit);
+  }
+
+  return fetchJson<OpsClarificationInbox>("/ops/inbox", params);
 }
 
 export function getRuntimeBaseUrl(): string {

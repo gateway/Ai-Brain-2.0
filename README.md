@@ -53,6 +53,7 @@ Latest verified run log:
 - [BM25 closure and TMT hardening](brain-spec/local/40-bm25-default-and-tmt-closure.md)
 - [Local status after BM25 closure](brain-spec/local/41-local-brain-status-after-bm25-closure.md)
 - [Timeline, relationship graph, and console atlas slice](brain-spec/local/42-console-timeline-relationship-slice.md)
+- [Ambiguity inbox, outbox propagation, and BM25/TMT closure refresh](brain-spec/local/46-ambiguity-inbox-and-bm25-refresh.md)
 
 ## Main Folders
 
@@ -84,7 +85,7 @@ Latest verified run log:
 ## Honest Current Limits
 
 - the default lexical branch is now ParadeDB BM25
-- the expanded lexical suite now clears `14/14` for both FTS and BM25, BM25 fallback is `0`, and BM25 token delta is `-17` versus FTS on the seeded local corpus
+- the expanded lexical suite now clears `14/14` for both FTS and BM25, BM25 fallback is `0`, and BM25 token delta is a small `+22` across the whole seeded suite
 - native PostgreSQL FTS still remains as the guarded lexical fallback and as the procedural-memory bridge inside BM25 mode
 - the `procedural_memory` branch still uses native FTS inside BM25 mode because that path currently preserves active-truth lookups better on live data
 - the hybrid fusion kernel is still app-side, not the final SQL-first kernel
@@ -96,6 +97,7 @@ Latest verified run log:
 - provider adapters are wired, but live provider execution still requires API keys or a reachable external AI endpoint
 - relative-time understanding is still limited
 - TMT is stronger now through parent-linked temporal nodes, ancestor budgeting, and bounded descendant support, but it is still not a full best-effort hierarchical descent stack
+- ambiguity handling is now real for misspellings, kinship placeholders, and vague places, but the inbox is still an operator workflow rather than fully autonomous clarification
 
 ## Next High-Value Moves
 

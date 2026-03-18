@@ -2,6 +2,12 @@
 
 ## 2026-03-18
 
+- Added a clarification inbox plus `brain_outbox_events` propagation loop so misspellings, unknown kinship references, and vague place references can be resolved by an operator and reprocessed safely.
+- Added type-specific ambiguity surfacing through `claim_candidates` for `possible_misspelling`, `undefined_kinship`, `vague_place`, and related follow-up states.
+- Added `/ops/inbox`, `POST /ops/inbox/resolve`, and `POST /ops/inbox/ignore`, plus a server-rendered `/console/inbox` page for ambiguity review.
+- Fixed the narrative parser so phrases like `was living in Chiang Mai` create place claims and survive into temporal rollups, improving both relationship memory and temporal lexical recall.
+- Tightened broad temporal pruning so year-style queries now prefer the `year` temporal ancestor instead of arbitrary lower-layer temporal rows.
+- Re-ran eval, planner tests, and the lexical benchmark after the ambiguity/TMT fixes; the suite is now `14/14` for both FTS and BM25 with zero BM25 fallback and a small acceptable token delta.
 - Added lightweight relation-prior scoring to `claim_candidates` and `relationship_candidates`, so relationship adjudication now uses scene/event grounding as a prior instead of raw extractor confidence alone.
 - Added conservative multi-scene narrative event clustering, so adjacent scenes can roll up into one logical event without losing per-scene provenance.
 - Extended deterministic consolidation to promote project/spec claims into `procedural_memory` as `project_status`, `project_spec`, `project_deadline`, and `project_role`.

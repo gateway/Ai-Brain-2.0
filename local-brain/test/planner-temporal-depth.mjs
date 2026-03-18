@@ -5,14 +5,14 @@ import { planRecallQuery } from "../dist/retrieval/planner.js";
 
 test("planner keeps year-only historical queries broad and summary-biased", () => {
   const plan = planRecallQuery({
-    query: "Who was I with in Japan in 2025?",
+    query: "Who was I with in Chiang Mai in 2026?",
     namespaceId: "personal"
   });
 
   assert.equal(plan.intent, "complex");
   assert.equal(plan.temporalFocus, true);
-  assert.equal(plan.inferredTimeStart, "2025-01-01T00:00:00.000Z");
-  assert.equal(plan.inferredTimeEnd, "2025-12-31T23:59:59.999Z");
+  assert.equal(plan.inferredTimeStart, "2026-01-01T00:00:00.000Z");
+  assert.equal(plan.inferredTimeEnd, "2026-12-31T23:59:59.999Z");
   assert.equal(plan.branchPreference, "episodic_then_temporal");
   assert.equal(plan.candidateLimitMultiplier, 6);
   assert.ok(plan.temporalSummaryWeight > plan.episodicWeight);

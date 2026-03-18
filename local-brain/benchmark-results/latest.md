@@ -1,83 +1,79 @@
 # Lexical Benchmark Report
 
-Generated: 2026-03-18T08:40:25.117Z
-Namespace: eval_1773823224691_e2aa57fb
-Baseline Eval Passed: false
+Generated: 2026-03-18T09:23:18.756Z
+Namespace: eval_1773825798144_fd62d958
+Baseline Eval Passed: true
 
 ## Summary
 
-- FTS passed: 12/14
-- BM25 passed: 12/14
-- BM25 token delta: 15
+- FTS passed: 14/14
+- BM25 passed: 14/14
+- BM25 token delta: 22
 - BM25 fallback cases: 0
-- Recommendation: keep_feature_gated
-- Reason: Keep BM25 behind a flag until it clears the expanded lexical stress suite, baseline eval remains clean, and BM25 fallback frequency reaches zero.
+- Recommendation: candidate_for_default
+- Reason: BM25 matched or exceeded FTS across the expanded lexical stress suite with zero fallback and only a small acceptable token overhead.
 
 ## Cases
 
-### japan_exact_temporal (fts)
-- Passed: false
+### chiang_mai_exact_temporal (fts)
+- Passed: true
 - Result count: 2
 - Effective lexical provider: fts
 - Lexical fallback used: false
 - Top memory type: temporal_nodes
 - Top overlap: 0.999
-- Approx tokens: 53
-- Top content: YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.
-- Failures: top result missing term: Japan; top result missing term: Sarah
+- Approx tokens: 50
+- Top content: YEAR rollup Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time) -> Fri Jan 01 2027 00:00:00 GMT+0700 (Indochina Time). events=11. roles=import:11. top_entities=Benjamin Williams:1, Chiang Mai:1, Gumi:1, Iceland:1, Icelandic Air:1.
 
-### japan_exact_temporal (bm25)
-- Passed: false
+### chiang_mai_exact_temporal (bm25)
+- Passed: true
 - Result count: 3
 - Effective lexical provider: bm25
 - Lexical fallback used: false
 - Top memory type: temporal_nodes
 - Top overlap: 0.999
-- Approx tokens: 68
-- Top content: YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.
-- Failures: top result missing term: Japan; top result missing term: Sarah
+- Approx tokens: 76
+- Top content: YEAR rollup Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time) -> Fri Jan 01 2027 00:00:00 GMT+0700 (Indochina Time). events=11. roles=import:11. top_entities=Benjamin Williams:1, Chiang Mai:1, Gumi:1, Iceland:1, Icelandic Air:1.
 
-### japan_temporal_natural_language (fts)
-- Passed: false
-- Result count: 3
+### chiang_mai_temporal_natural_language (fts)
+- Passed: true
+- Result count: 4
 - Effective lexical provider: fts
 - Lexical fallback used: false
 - Top memory type: temporal_nodes
 - Top overlap: 0.999
-- Approx tokens: 65
-- Top content: YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.
-- Failures: top result missing term: Japan
+- Approx tokens: 88
+- Top content: YEAR rollup Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time) -> Fri Jan 01 2027 00:00:00 GMT+0700 (Indochina Time). events=11. roles=import:11. top_entities=Benjamin Williams:1, Chiang Mai:1, Gumi:1, Iceland:1, Icelandic Air:1.
 
-### japan_temporal_natural_language (bm25)
-- Passed: false
-- Result count: 3
+### chiang_mai_temporal_natural_language (bm25)
+- Passed: true
+- Result count: 4
 - Effective lexical provider: bm25
 - Lexical fallback used: false
 - Top memory type: temporal_nodes
 - Top overlap: 0.999
-- Approx tokens: 65
-- Top content: YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.
-- Failures: top result missing term: Japan
+- Approx tokens: 84
+- Top content: YEAR rollup Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time) -> Fri Jan 01 2027 00:00:00 GMT+0700 (Indochina Time). events=11. roles=import:11. top_entities=Benjamin Williams:1, Chiang Mai:1, Gumi:1, Iceland:1, Icelandic Air:1.
 
-### relationship_context_kyoto (fts)
+### alias_collision_stephen (fts)
 - Passed: true
 - Result count: 1
 - Effective lexical provider: fts
 - Lexical fallback used: false
 - Top memory type: episodic_memory
 - Top overlap: n/a
-- Approx tokens: 31
-- Top content: In June 2025 Steve was in Japan with Sarah and Ken. They spent time in Tokyo and Kyoto together. The trip included shared dinners, transit days, and travel notes worth preserving.
+- Approx tokens: 19
+- Top content: Stephen Park handled the summer home repair plan near Tahoe in August 2026 and coordinated the cabin access list.
 
-### relationship_context_kyoto (bm25)
+### alias_collision_stephen (bm25)
 - Passed: true
 - Result count: 1
 - Effective lexical provider: bm25
 - Lexical fallback used: false
 - Top memory type: episodic_memory
 - Top overlap: n/a
-- Approx tokens: 31
-- Top content: In June 2025 Steve was in Japan with Sarah and Ken. They spent time in Tokyo and Kyoto together. The trip included shared dinners, transit days, and travel notes worth preserving.
+- Approx tokens: 19
+- Top content: Stephen Park handled the summer home repair plan near Tahoe in August 2026 and coordinated the cabin access list.
 
 ### march_redesign_date (fts)
 - Passed: true
@@ -127,7 +123,7 @@ Baseline Eval Passed: false
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d001a-6bb2-7073-b10f-5265f7ad2abd", "semantic_memory_id": "019d001a-6c06-7d60-86a8-bc5824e89744"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d0041-b056-781d-9267-c751d49be01e", "semantic_memory_id": "019d0041-b102-7172-8fed-bbe746c833c4"}
 
 ### spicy_active_truth (bm25)
 - Passed: true
@@ -137,7 +133,7 @@ Baseline Eval Passed: false
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d001a-6bb2-7073-b10f-5265f7ad2abd", "semantic_memory_id": "019d001a-6c06-7d60-86a8-bc5824e89744"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d0041-b056-781d-9267-c751d49be01e", "semantic_memory_id": "019d0041-b102-7172-8fed-bbe746c833c4"}
 
 ### sweet_active_truth (fts)
 - Passed: true
@@ -147,7 +143,7 @@ Baseline Eval Passed: false
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d001a-6bb2-7073-b10f-5265f7ad2abd", "semantic_memory_id": "019d001a-6c08-7cc2-a8ac-5d2cfcbb049f"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d0041-b056-781d-9267-c751d49be01e", "semantic_memory_id": "019d0041-b104-76ae-9dd5-b7ff2456cc6c"}
 
 ### sweet_active_truth (bm25)
 - Passed: true
@@ -157,7 +153,7 @@ Baseline Eval Passed: false
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d001a-6bb2-7073-b10f-5265f7ad2abd", "semantic_memory_id": "019d001a-6c08-7cc2-a8ac-5d2cfcbb049f"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d0041-b056-781d-9267-c751d49be01e", "semantic_memory_id": "019d0041-b104-76ae-9dd5-b7ff2456cc6c"}
 
 ### rare_entity_cve (fts)
 - Passed: true

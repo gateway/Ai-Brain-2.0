@@ -307,7 +307,7 @@ function extractLexicalTerms(queryText: string, temporalFocus: boolean): readonl
     }
   });
 
-  const budget = temporalFocus ? 3 : 4;
+  const budget = temporalFocus ? 4 : 4;
 
   return [...scored.values()]
     .sort((left, right) => (right.score - left.score) || (left.position - right.position))

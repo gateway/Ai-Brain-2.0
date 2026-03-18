@@ -46,6 +46,27 @@ interface RelationshipGraphRow {
   readonly metadata: Record<string, unknown>;
 }
 
+interface ClarificationInboxSummaryRow {
+  readonly ambiguity_type: string | null;
+  readonly total: string;
+}
+
+interface ClarificationInboxItemRow {
+  readonly candidate_id: string;
+  readonly claim_type: string;
+  readonly predicate: string;
+  readonly subject_text: string | null;
+  readonly object_text: string | null;
+  readonly confidence: number;
+  readonly prior_score: number;
+  readonly ambiguity_type: string;
+  readonly ambiguity_reason: string | null;
+  readonly occurred_at: string;
+  readonly scene_text: string | null;
+  readonly source_uri: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
 export interface QueueSummary {
   readonly pending: number;
   readonly processing: number;
@@ -66,6 +87,8 @@ export interface OpsOverview {
     readonly relationshipCandidatesPending: number;
     readonly relationshipMemoryActive: number;
     readonly semanticDecayEvents: number;
+    readonly clarificationPending: number;
+    readonly outboxPending: number;
   };
 }
 
@@ -127,6 +150,31 @@ export interface OpsRelationshipGraph {
   readonly edges: readonly OpsRelationshipGraphEdge[];
 }
 
+export interface OpsClarificationInboxItem {
+  readonly candidateId: string;
+  readonly claimType: string;
+  readonly predicate: string;
+  readonly targetRole: "subject" | "object";
+  readonly rawText: string;
+  readonly confidence: number;
+  readonly priorScore: number;
+  readonly ambiguityType: string;
+  readonly ambiguityReason?: string | null;
+  readonly suggestedMatches: readonly string[];
+  readonly occurredAt: string;
+  readonly sceneText?: string | null;
+  readonly sourceUri?: string | null;
+}
+
+export interface OpsClarificationInbox {
+  readonly namespaceId: string;
+  readonly summary: {
+    readonly total: number;
+    readonly byType: Record<string, number>;
+  };
+  readonly items: readonly OpsClarificationInboxItem[];
+}
+
 function toCount(rows: readonly CountRow[]): number {
   return Number(rows[0]?.total ?? 0);
 }
@@ -175,7 +223,9 @@ export async function getOpsOverview(): Promise<OpsOverview> {
     temporalNodeRows,
     relationshipCandidateRows,
     relationshipMemoryRows,
-    semanticDecayRows
+    semanticDecayRows,
+    clarificationPendingRows,
+    outboxPendingRows
   ] = await Promise.all([
     queryRows<QueueStatusRow>(
       `
@@ -234,6 +284,20 @@ export async function getOpsOverview(): Promise<OpsOverview> {
       SELECT COUNT(*)::text AS total
       FROM semantic_decay_events
       `
+    ),
+    queryRows<CountRow>(
+      `
+      SELECT COUNT(*)::text AS total
+      FROM claim_candidates
+      WHERE ambiguity_state = 'requires_clarification'
+      `
+    ),
+    queryRows<CountRow>(
+      `
+      SELECT COUNT(*)::text AS total
+      FROM brain_outbox_events
+      WHERE status IN ('pending', 'processing', 'failed')
+      `
     )
   ]);
 
@@ -254,8 +318,115 @@ export async function getOpsOverview(): Promise<OpsOverview> {
       temporalNodes: toCount(temporalNodeRows),
       relationshipCandidatesPending: toCount(relationshipCandidateRows),
       relationshipMemoryActive: toCount(relationshipMemoryRows),
-      semanticDecayEvents: toCount(semanticDecayRows)
+      semanticDecayEvents: toCount(semanticDecayRows),
+      clarificationPending: toCount(clarificationPendingRows),
+      outboxPending: toCount(outboxPendingRows)
     }
+  };
+}
+
+function parseSuggestedMatches(metadata: Record<string, unknown>): string[] {
+  const raw = metadata.suggested_matches;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw
+    .map((value) => {
+      if (typeof value === "string") {
+        return value;
+      }
+      if (value && typeof value === "object" && typeof (value as { name?: unknown }).name === "string") {
+        return (value as { name: string }).name;
+      }
+      return "";
+    })
+    .filter((value) => typeof value === "string" && value.trim().length > 0);
+}
+
+export async function getOpsClarificationInbox(namespaceId: string, limit = 40): Promise<OpsClarificationInbox> {
+  const [summaryRows, itemRows] = await Promise.all([
+    queryRows<ClarificationInboxSummaryRow>(
+      `
+      SELECT ambiguity_type, COUNT(*)::text AS total
+      FROM claim_candidates
+      WHERE namespace_id = $1
+        AND ambiguity_state = 'requires_clarification'
+      GROUP BY ambiguity_type
+      `,
+      [namespaceId]
+    ),
+    queryRows<ClarificationInboxItemRow>(
+      `
+      SELECT
+        cc.id AS candidate_id,
+        cc.claim_type,
+        cc.predicate,
+        cc.subject_text,
+        cc.object_text,
+        cc.confidence,
+        cc.prior_score,
+        cc.ambiguity_type,
+        cc.ambiguity_reason,
+        cc.occurred_at::text,
+        ns.scene_text,
+        a.uri AS source_uri,
+        cc.metadata
+      FROM claim_candidates cc
+      LEFT JOIN narrative_scenes ns ON ns.id = cc.source_scene_id
+      LEFT JOIN artifacts a ON a.id = ns.artifact_id
+      WHERE cc.namespace_id = $1
+        AND cc.ambiguity_state = 'requires_clarification'
+      ORDER BY cc.prior_score DESC, cc.occurred_at DESC, cc.created_at DESC
+      LIMIT $2
+      `,
+      [namespaceId, limit]
+    )
+  ]);
+
+  const byType: Record<string, number> = {};
+  for (const row of summaryRows) {
+    byType[row.ambiguity_type ?? "unknown"] = Number(row.total);
+  }
+
+  return {
+    namespaceId,
+    summary: {
+      total: Object.values(byType).reduce((sum, value) => sum + value, 0),
+      byType
+    },
+    items: itemRows.map((row) => {
+      const targetRole =
+        typeof row.metadata.ambiguity_target_role === "string" && (row.metadata.ambiguity_target_role === "subject" || row.metadata.ambiguity_target_role === "object")
+          ? row.metadata.ambiguity_target_role
+          : row.object_text
+            ? "object"
+            : "subject";
+      const rawText = typeof row.metadata.raw_ambiguous_text === "string"
+        ? row.metadata.raw_ambiguous_text
+        : targetRole === "subject"
+          ? row.subject_text ?? ""
+          : row.object_text ?? "";
+
+      return {
+        candidateId: row.candidate_id,
+        claimType: row.claim_type,
+        predicate: row.predicate,
+        targetRole,
+        rawText,
+        confidence: row.confidence,
+        priorScore: row.prior_score,
+        ambiguityType: row.ambiguity_type,
+        ambiguityReason: row.ambiguity_reason,
+        suggestedMatches:
+          row.ambiguity_type === "possible_misspelling" || row.ambiguity_type === "alias_collision"
+            ? parseSuggestedMatches(row.metadata)
+            : [],
+        occurredAt: row.occurred_at,
+        sceneText: row.scene_text,
+        sourceUri: row.source_uri
+      };
+    })
   };
 }
 

@@ -455,6 +455,29 @@ function buildBm25DisjunctionClause(
   };
 }
 
+function lexicalHitMultiplier(content: string, terms: readonly string[]): number {
+  if (terms.length === 0) {
+    return 1;
+  }
+
+  const normalizedContent = content.toLowerCase();
+  const hitCount = terms.filter((term) => normalizedContent.includes(term.toLowerCase())).length;
+
+  if (hitCount === 0) {
+    return 0.55;
+  }
+
+  if (hitCount === 1) {
+    return 0.9;
+  }
+
+  if (hitCount === 2) {
+    return 1.08;
+  }
+
+  return 1.16;
+}
+
 function proceduralLexicalDocument(): string {
   return `
     coalesce(state_type, '') || ' ' ||
@@ -565,17 +588,31 @@ function pruneRankedResults(
     }
   }
 
+  const preferredTemporalRows = (() => {
+    const temporalRows = rows.filter((item) => item.row.memory_type === "temporal_nodes");
+    if (temporalRows.length === 0) {
+      return [] as typeof temporalRows;
+    }
+
+    for (const targetLayer of planner.targetLayers) {
+      const matched = temporalRows.find((item) => item.row.provenance.layer === targetLayer);
+      if (matched) {
+        return [matched];
+      }
+    }
+
+    return temporalRows.slice(0, 1);
+  })();
+
   if (planner.temporalFocus && hasTemporal && hasEpisodic) {
     if (narrowTemporalWindow) {
       const episodicRows = rows.filter((item) => item.row.memory_type === "episodic_memory").slice(0, 2);
-      const temporalRows = rows.filter((item) => item.row.memory_type === "temporal_nodes").slice(0, 1);
-      return [...episodicRows, ...temporalRows];
+      return [...episodicRows, ...preferredTemporalRows];
     }
 
-    const temporalRows = rows.filter((item) => item.row.memory_type === "temporal_nodes").slice(0, 1);
     const episodicRows = rows.filter((item) => item.row.memory_type === "episodic_memory").slice(0, 2);
     const artifactRows = rows.filter((item) => item.row.memory_type === "artifact_derivation").slice(0, 1);
-    return [...temporalRows, ...episodicRows, ...artifactRows];
+    return [...preferredTemporalRows, ...episodicRows, ...artifactRows];
   }
 
   return rows.filter((item) => item.row.memory_type !== "memory_candidate");
@@ -590,7 +627,8 @@ function rankLexicalSources(
   precisionLexicalFocus: boolean,
   planner: ReturnType<typeof planRecallQuery>,
   timeStart: string | null,
-  timeEnd: string | null
+  timeEnd: string | null,
+  lexicalTerms: readonly string[]
 ): RankedSearchRow[] {
   const accumulator = new Map<string, { row: RankedSearchRow; score: number }>();
 
@@ -602,7 +640,8 @@ function rankLexicalSources(
       current.row = row;
       const branchWeight = lexicalBranchWeight(source.branch, planner, relationshipExactFocus, precisionLexicalFocus);
       const temporalAlignment = temporalWindowAlignmentMultiplier(row, timeStart, timeEnd);
-      current.score += (branchWeight * temporalAlignment) / (20 + index + 1);
+      const lexicalHitWeight = lexicalHitMultiplier(row.content, lexicalTerms);
+      current.score += (branchWeight * temporalAlignment * lexicalHitWeight) / (20 + index + 1);
       accumulator.set(key, current);
     }
   }
@@ -1522,7 +1561,8 @@ async function loadBm25LexicalRows(
     precisionLexicalFocus,
     planner,
     timeStart,
-    timeEnd
+    timeEnd,
+    plannerTerms
   );
 }
 

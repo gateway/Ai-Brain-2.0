@@ -34,6 +34,7 @@ Current working slice:
 - deterministic temporal summary scaffolding (`day`/`week`/`month`/`year`)
 - parent-linked temporal nodes for the first real TMT ancestry chain
 - timeline and relationship ops surfaces for the console (`GET /ops/timeline`, `GET /ops/graph`)
+- clarification inbox plus outbox-driven reprocessing for misspellings, unknown kinship, and vague place references
 - deterministic relationship adjudication into `relationship_memory`
 - deterministic semantic forgetting/decay loop with archival thresholds
 - ParadeDB BM25 lexical branch implemented, benchmarked, and now the default lexical provider
@@ -149,11 +150,16 @@ infers a conservative `occurred_at` value. Relative expressions like
 - `relationship_candidates`
 - `relationship_memory`
 - `relationship_adjudication_events`
+- `brain_outbox_events`
 - `semantic_memory`
 - `semantic_decay_events`
 - `procedural_memory`
 - `temporal_nodes`
 - `temporal_node_members`
+- `narrative_scenes`
+- `claim_candidates`
+- `narrative_events`
+- `narrative_event_members`
 - `vector_sync_jobs`
 
 ## Query The Brain
@@ -162,7 +168,7 @@ Search current plus historical memory:
 
 ```bash
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
-npm run search -- "Japan 2025 Sarah" --namespace personal --time-start 2025-01-01T00:00:00Z --time-end 2025-12-31T23:59:59Z
+npm run search -- "What was I doing in Chiang Mai in 2026?" --namespace personal --time-start 2026-01-01T00:00:00Z --time-end 2026-12-31T23:59:59Z
 ```
 
 Provider-backed hybrid query:
@@ -188,34 +194,46 @@ Current retrieval behavior:
 - BM25 currently covers `episodic_memory`, `semantic_memory`, `memory_candidates`, `artifact_derivations`, and `temporal_nodes`
 - `procedural_memory` stays on an FTS bridge inside BM25 mode for now, because that path is still more trustworthy for active-truth preference/state lookups
 - the expanded lexical benchmark now passes `14/14` for both FTS and BM25
-- BM25 no longer falls back on the seeded corpus and now returns a lower token total than FTS on the strengthened benchmark set
+- BM25 no longer falls back on the seeded corpus and now stays within a small acceptable token delta versus FTS on the strengthened benchmark set
 - exact relationship recall, active-truth preference recall, and narrow date lookups were all re-verified before flipping BM25 to the runtime default
+- broad year queries now prefer the `year` temporal ancestor over arbitrary lower-layer temporal rows, which closes the remaining BM25/TMT mismatch on the seeded suite
+- freeform narrative ingestion now surfaces clarification work instead of forcing bad edges, and the console can drive alias/kinship/place fixes back through the outbox
 
 Operator console-backed ops endpoints:
 
 - `GET /ops/overview`
+- `GET /ops/inbox?namespace_id=...`
+- `POST /ops/inbox/resolve`
+- `POST /ops/inbox/ignore`
 - `GET /ops/timeline?namespace_id=...&time_start=...&time_end=...&limit=...`
 - `GET /ops/graph?namespace_id=...&entity_name=...&time_start=...&time_end=...&limit=...`
+
+Clarification reprocessing worker:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run outbox:work
+```
 
 Example search with the default lexical provider:
 
 ```bash
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
-npm run search -- "Japan 2025 Sarah" --namespace personal --time-start 2025-01-01T00:00:00Z --time-end 2025-12-31T23:59:59Z
+npm run search -- "Chiang Mai Gumi CTO 2026" --namespace personal --time-start 2026-01-01T00:00:00Z --time-end 2026-12-31T23:59:59Z
 ```
 
 Example forced FTS comparison:
 
 ```bash
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
-BRAIN_LEXICAL_PROVIDER=fts npm run search -- "Japan 2025 Sarah" --namespace personal --time-start 2025-01-01T00:00:00Z --time-end 2025-12-31T23:59:59Z
+BRAIN_LEXICAL_PROVIDER=fts npm run search -- "Chiang Mai Gumi CTO 2026" --namespace personal --time-start 2026-01-01T00:00:00Z --time-end 2026-12-31T23:59:59Z
 ```
 
 Relationship lookup:
 
 ```bash
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
-npm run relationships -- Japan --namespace personal --predicate with --time-start 2025-01-01T00:00:00Z --time-end 2025-12-31T23:59:59Z
+npm run relationships -- Gumi --namespace personal --time-start 2026-01-01T00:00:00Z --time-end 2026-12-31T23:59:59Z
 ```
 
 Chronological timeline:

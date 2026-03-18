@@ -8,6 +8,7 @@ const navigation = [
   { href: "/console/query", label: "Query" },
   { href: "/console/timeline", label: "Timeline" },
   { href: "/console/relationships", label: "Relationships" },
+  { href: "/console/inbox", label: "Inbox" },
   { href: "/console/eval", label: "Eval" },
   { href: "/console/benchmark", label: "Benchmark" },
   { href: "/console/jobs", label: "Jobs" }

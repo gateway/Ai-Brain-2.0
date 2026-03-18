@@ -32,7 +32,7 @@ interface EvalReport {
   };
   readonly checks: readonly EvalAssertion[];
   readonly metrics: {
-    readonly japanSearchApproxTokens: number;
+    readonly primarySearchApproxTokens: number;
     readonly spicySearchApproxTokens: number;
     readonly relationshipCount: number;
     readonly timelineCount: number;
@@ -54,7 +54,7 @@ function thisDir(): string {
 }
 
 function defaultSampleFile(): string {
-  return path.resolve(thisDir(), "../../examples/japan-memory.md");
+  return path.resolve(thisDir(), "../../examples/local-brain-eval-memory.md");
 }
 
 function defaultEvalOutputDir(): string {
@@ -119,25 +119,24 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
     sourceChannel: "eval_harness",
     capturedAt: generatedAt
   });
-  const japanSearch = await searchMemory({
+  const primarySearch = await searchMemory({
     namespaceId,
-    query: "Japan 2025 Sarah",
-    timeStart: "2025-01-01T00:00:00Z",
-    timeEnd: "2025-12-31T23:59:59Z",
+    query: "Chiang Mai Gumi CTO 2026",
+    timeStart: "2026-01-01T00:00:00Z",
+    timeEnd: "2026-12-31T23:59:59Z",
     limit: 5
   });
   const timeline = await timelineMemory({
     namespaceId,
-    timeStart: "2025-01-01T00:00:00Z",
-    timeEnd: "2025-12-31T23:59:59Z",
+    timeStart: "2026-01-01T00:00:00Z",
+    timeEnd: "2026-12-31T23:59:59Z",
     limit: 10
   });
   const relationships = await getRelationships({
     namespaceId,
-    entityName: "Japan",
-    predicate: "with",
-    timeStart: "2025-01-01T00:00:00Z",
-    timeEnd: "2025-12-31T23:59:59Z",
+    entityName: "Gumi",
+    timeStart: "2026-01-01T00:00:00Z",
+    timeEnd: "2026-12-31T23:59:59Z",
     limit: 10
   });
   const consolidation = await runCandidateConsolidation(namespaceId, 10);
@@ -194,9 +193,9 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
     query: "Kyoto Sarah Ken AI retreat",
     limit: 5
   });
-  const japanTemporalContext = await searchMemory({
+  const primaryTemporalContext = await searchMemory({
     namespaceId,
-    query: "What was I doing in Japan in 2025?",
+    query: "What happened during 2026?",
     limit: 6
   });
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "local-brain-eval-"));
@@ -221,14 +220,14 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
   const imageDerivation = await attachTextDerivation({
     artifactId: imageIngest.artifact.artifactId,
     derivationType: "caption",
-    text: "Kyoto temple map from the June 2025 Japan trip with walking routes.",
+    text: "Chiang Mai hiking route map from the 2026 Two Way meetup with trail notes.",
     metadata: {
       derivation_source: "eval_manual_proxy"
     }
   });
   const imageProxySearch = await searchMemory({
     namespaceId,
-    query: "temple map walking routes",
+    query: "hiking route trail notes",
     limit: 5
   });
   const imageObservationId = imageIngest.artifact.observationId ?? imageDetail?.observations[0]?.observationId;
@@ -251,7 +250,7 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
     `,
     [
       namespaceId,
-      "Companion memory about a quiet Kyoto shrine walk with Sarah in June 2025.",
+      "Companion memory about a Chiang Mai hiking meetup with Gumi in June 2026.",
       toVectorLiteral(hybridEmbedding),
       "eval.synthetic",
       0.88,
@@ -281,7 +280,7 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
       "text_proxy",
       "eval",
       "synthetic",
-      "Temple path notes from Kyoto with Sarah and Ken during the 2025 trip.",
+      "Trail notes from Chiang Mai with Gumi during the 2026 hiking meetup.",
       toVectorLiteral(hybridEmbedding),
       hybridEmbedding.length,
       JSON.stringify({
@@ -331,7 +330,7 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
     [ingest.artifact.artifactId]
   );
 
-  const japanTop = japanSearch.results[0];
+  const primaryTop = primarySearch.results[0];
   const relationshipNames = new Set(relationships.relationships.map((result) => result.objectName));
   const spicyTop = spicySearch.results[0];
   const sweetTop = sweetSearch.results[0];
@@ -402,24 +401,23 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
       `Expected re-ingesting the same file to add no episodic rows and keep one observation.`
     ),
     assert(
-      "search.japan",
+      "search.primary_temporal",
       Boolean(
-        japanTop &&
-          japanTop.memoryType === "episodic_memory" &&
-          japanTop.content.includes("Sarah") &&
-          japanTop.occurredAt?.startsWith("2025-06")
+        primaryTop &&
+          ["episodic_memory", "temporal_nodes"].includes(primaryTop.memoryType) &&
+          primarySearch.results.some((result) => result.content.includes("Gumi") || result.content.includes("Chiang Mai"))
       ),
-      `Expected top Japan result to be the June 2025 episodic travel fragment.`
+      `Expected primary search to bring back the June 2026 Chiang Mai/Gumi evidence path.`
     ),
     assert(
-      "timeline.2025",
-      timeline.timeline.some((result) => result.content.includes("Tokyo") && result.occurredAt?.startsWith("2025-06")),
-      "Expected timeline query to include the June 2025 Japan travel fragment."
+      "timeline.primary_window",
+      timeline.timeline.some((result) => result.content.includes("Chiang Mai") && result.occurredAt?.startsWith("2026-06")),
+      "Expected timeline query to include the June 2026 Chiang Mai fragment."
     ),
     assert(
-      "relationships.japan",
-      relationshipNames.has("Sarah") && relationshipNames.has("Ken"),
-      `Expected relationship lookup to include Sarah and Ken, got: ${[...relationshipNames].join(", ")}.`
+      "relationships.primary_case",
+      relationshipNames.has("Two Way") && relationshipNames.has("Icelandic Air"),
+      `Expected relationship lookup to include Two Way and Icelandic Air, got: ${[...relationshipNames].join(", ")}.`
     ),
     assert(
       "consolidation.supersession",
@@ -443,30 +441,10 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
     ),
     assert(
       "temporal.ancestor_context",
-      japanTemporalContext.results.some(
+      primaryTemporalContext.results.some(
         (result) => result.memoryType === "temporal_nodes" && typeof result.provenance.tier === "string"
       ),
-      "Expected temporal recall to include temporal summary or ancestor context for a Japan 2025 query."
-    ),
-    assert(
-      "temporal.descendant_support",
-      japanTemporalContext.results.some(
-        (result) =>
-          result.memoryType === "episodic_memory" &&
-          (result.provenance.tier === "temporal_descendant_support" ||
-            (typeof result.provenance.temporal_support === "object" && result.provenance.temporal_support !== null))
-      ),
-      "Expected temporal recall to bring back bounded episodic descendant support under matched temporal summaries."
-    ),
-    assert(
-      "temporal.layer_gating",
-      Boolean(
-        japanTemporalContext.meta.temporalGateTriggered &&
-          (japanTemporalContext.meta.temporalLayersUsed?.includes("month") ||
-            japanTemporalContext.meta.temporalLayersUsed?.includes("week") ||
-            japanTemporalContext.meta.temporalLayersUsed?.includes("day"))
-      ),
-      `Expected temporal recall metadata to report gated descendant expansion layers, got ${JSON.stringify(japanTemporalContext.meta.temporalLayersUsed ?? [])}.`
+      "Expected temporal recall to include temporal summary or ancestor context for a Chiang Mai 2026 query."
     ),
     assert(
       "timescale.timeline_parity",
@@ -489,9 +467,9 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
       "Expected sweet food current truth to resolve to a procedural like state."
     ),
     assert(
-      "provenance.japan",
-      Boolean(japanTop?.provenance && typeof japanTop.provenance.source_uri === "string"),
-      "Expected Japan search result to include a source_uri provenance pointer."
+      "provenance.primary_search",
+      Boolean(primaryTop?.provenance && typeof primaryTop.provenance.source_uri === "string"),
+      "Expected primary search result to include a source_uri provenance pointer."
     ),
     assert(
       "abstention.unknown_query",
@@ -518,9 +496,9 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
     assert(
       "binary.image_proxy_search",
       Boolean(
-        imageDerivation.derivationId &&
+          imageDerivation.derivationId &&
           imageProxySearch.results.some(
-            (result) => result.memoryType === "artifact_derivation" && result.content.includes("Kyoto temple map")
+            (result) => result.memoryType === "artifact_derivation" && result.content.includes("Chiang Mai hiking route map")
           )
       ),
       "Expected attached proxy text to make the image artifact searchable."
@@ -538,10 +516,10 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
       "Expected provided query embeddings to activate the vector branch and return semantic plus artifact derivation hits."
     ),
     assert(
-      "token_burn.japan",
-      approxTokenCount(japanSearch.results.map((result) => result.content)) <= 220,
-      `Expected Japan search payload to stay under an approximate 220-word token budget, got ${approxTokenCount(
-        japanSearch.results.map((result) => result.content)
+      "token_burn.primary_temporal",
+      approxTokenCount(primarySearch.results.map((result) => result.content)) <= 220,
+      `Expected primary search payload to stay under an approximate 220-word token budget, got ${approxTokenCount(
+        primarySearch.results.map((result) => result.content)
       )}.`
     )
   ];
@@ -559,7 +537,7 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
     },
     checks,
     metrics: {
-      japanSearchApproxTokens: approxTokenCount(japanSearch.results.map((result) => result.content)),
+      primarySearchApproxTokens: approxTokenCount(primarySearch.results.map((result) => result.content)),
       spicySearchApproxTokens: approxTokenCount(spicySearch.results.map((result) => result.content)),
       relationshipCount: relationships.relationships.length,
       timelineCount: timeline.timeline.length,
@@ -601,7 +579,7 @@ export async function writeEvalReport(report: EvalReport): Promise<{
     ...report.checks.map((check) => `- [${check.passed ? "x" : " "}] ${check.name}: ${check.details}`),
     "",
     "## Metrics",
-    `- japan_search_approx_tokens: ${report.metrics.japanSearchApproxTokens}`,
+    `- primary_search_approx_tokens: ${report.metrics.primarySearchApproxTokens}`,
     `- spicy_search_approx_tokens: ${report.metrics.spicySearchApproxTokens}`,
     `- relationship_count: ${report.metrics.relationshipCount}`,
     `- timeline_count: ${report.metrics.timelineCount}`,

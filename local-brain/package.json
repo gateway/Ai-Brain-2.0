@@ -23,6 +23,7 @@
     "decay:semantic": "npm run build && node dist/cli/decay-semantic.js",
     "provider:smoke": "npm run build && node dist/cli/provider-smoke.js",
     "vector-sync:enqueue": "npm run build && node dist/cli/enqueue-vector-sync.js",
+    "outbox:work": "npm run build && node dist/cli/process-outbox.js",
     "mcp": "npm run build && node dist/cli/mcp.js",
     "eval": "npm run build && node dist/cli/eval.js",
     "test:planner": "npm run build && node --test ./test/planner-temporal-depth.mjs",
