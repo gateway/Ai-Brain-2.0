@@ -12,6 +12,7 @@ This package currently provides:
 - binary artifact registration for image/pdf/audio evidence
 - entity and relationship staging
 - hybrid search with lexical fallback
+- TMT planner helper for temporal queries like `What was I doing in Japan in 2025?`
 - timeline queries
 - deterministic preference supersession
 - deterministic relationship adjudication
@@ -70,6 +71,23 @@ Useful endpoints:
 - `POST /derive/text`
 - `POST /derive/provider`
 - `POST /derive/queue`
+
+## Start The MCP Server
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run build && node dist/cli/mcp.js
+```
+
+This is a stdio JSON-RPC surface intended for local assistant clients. The
+first tools are:
+
+- `memory.search`
+- `memory.timeline`
+- `memory.get_artifact`
+- `memory.get_relationships`
+- `memory.save_candidate`
+- `memory.upsert_state`
 
 ## Smoke Test Provider Wiring
 
@@ -158,6 +176,7 @@ npm run decay:semantic -- --namespace personal_refined2 --inactivity-hours 24 --
 - raw binary artifacts are stored, and the new derivation queue is the safe path for OCR/transcription/caption work when no live external service is connected
 - the current safe multimodal path is artifact registration plus attached text proxies or queued derivation jobs
 - relative-time resolution is still limited
+- time-bounded queries now infer year windows and include temporal summaries when useful, but explicit parent-child TMT links are still the next structural step
 
 ## Live Producer Security
 
@@ -175,3 +194,6 @@ Set these env vars before using the live Slack/Discord receivers:
 - `BRAIN_PRODUCER_SHARED_SECRET`
 
 Allowlists are comma-separated IDs. Leave them empty to allow all teams/guilds/channels/users.
+
+The MCP server is read-first and candidate/state write-safe. It is not the
+consolidation engine.

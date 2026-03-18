@@ -18,6 +18,7 @@ Current working slice:
 - staged semantic/procedural candidate writes
 - entity and relationship staging
 - hybrid retrieval service with lexical fallback
+- small TMT planner helper with query classification and year hint expansion
 - preference supersession into semantic and procedural memory
 - timeline and relationship CLI queries
 - webhook producer ingestion (generic/slack/discord payload adapters)
@@ -161,6 +162,7 @@ Current retrieval behavior:
 - `semantic_memory` and embedded `artifact_derivations` drive the vector branch
 - RRF fusion runs in the app today
 - if no embedding provider or query embedding is available, search degrades safely to lexical-only
+- time-bounded queries infer a temporal planning window and bias episodic plus temporal summaries ahead of flatter lexical hits
 - time-windowed queries bias historical episodic evidence above speculative candidate rows
 
 Relationship lookup:
@@ -267,6 +269,26 @@ Current worker behavior:
 - retries provider outages, timeouts, and transient transport failures with backoff
 - fails terminal on auth and invalid-request errors
 - writes finished derivations into `artifact_derivations` with provenance preserved
+
+MCP server:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run build && node dist/cli/mcp.js
+```
+
+The first stdio tool surface is:
+
+- `memory.search`
+- `memory.timeline`
+- `memory.get_artifact`
+- `memory.get_relationships`
+- `memory.save_candidate`
+- `memory.upsert_state`
+
+NotebookLM's guidance for the first assistant-facing slice was to keep
+consolidation deferred and expose a small read-first surface plus safe
+candidate/state write paths.
 
 Live producer security knobs:
 
