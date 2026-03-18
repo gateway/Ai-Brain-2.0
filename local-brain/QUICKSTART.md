@@ -44,6 +44,13 @@ cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
 npm run eval
 ```
 
+BM25 / ParadeDB validation run:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+BRAIN_LEXICAL_PROVIDER=bm25 npm run eval
+```
+
 Outputs:
 
 - `local-brain/eval-results/latest.json`
@@ -179,7 +186,9 @@ npm run decay:semantic -- --namespace personal_refined2 --inactivity-hours 24 --
 
 ## Current Honest Limits
 
-- retrieval is hybrid today, but the fusion kernel is still app-side and the lexical branch is native PostgreSQL FTS rather than ParadeDB BM25
+- retrieval is hybrid today, but the fusion kernel is still app-side
+- ParadeDB BM25 is now available behind `BRAIN_LEXICAL_PROVIDER=bm25`, but it is not the default yet
+- the procedural/current-truth branch still uses an FTS bridge even in BM25 mode because that behavior is currently more reliable than pure BM25 for state rows
 - relationship extraction is still heuristic; adjudication is deterministic threshold/rule-based (no LLM judge yet)
 - raw binary artifacts are stored, and the new derivation queue is the safe path for OCR/transcription/caption work when no live external service is connected
 - the current safe multimodal path is artifact registration plus queued derivation jobs, with embeddings handled as a second queued stage

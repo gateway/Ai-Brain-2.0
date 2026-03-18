@@ -34,6 +34,7 @@ Current working slice:
 - deterministic temporal summary scaffolding (`day`/`week`/`month`)
 - deterministic relationship adjudication into `relationship_memory`
 - deterministic semantic forgetting/decay loop with archival thresholds
+- feature-gated ParadeDB BM25 lexical branch with guarded fallback to native PostgreSQL FTS
 
 This is not the full brain yet. It is the first implementation slice that
 proves the substrate, schema, and file ingestion loop without Docker.
@@ -158,12 +159,22 @@ OPENROUTER_API_KEY=... npm run search -- "Kyoto shrine companion notes" --namesp
 
 Current retrieval behavior:
 
-- native PostgreSQL full-text search drives the lexical branch
+- native PostgreSQL full-text search remains the safe default lexical branch
+- ParadeDB BM25 can be enabled with `BRAIN_LEXICAL_PROVIDER=bm25`
 - `semantic_memory` and embedded `artifact_derivations` drive the vector branch
 - RRF fusion runs in the app today
 - if no embedding provider or query embedding is available, search degrades safely to lexical-only
 - time-bounded queries infer a temporal planning window and bias episodic plus temporal summaries ahead of flatter lexical hits
 - time-windowed queries bias historical episodic evidence above speculative candidate rows
+- BM25 currently covers `episodic_memory`, `semantic_memory`, `memory_candidates`, `artifact_derivations`, and `temporal_nodes`
+- `procedural_memory` stays on an FTS bridge inside BM25 mode for now, because that path is still more trustworthy for active-truth preference/state lookups
+
+Example BM25 search:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+BRAIN_LEXICAL_PROVIDER=bm25 npm run search -- "Japan 2025 Sarah" --namespace personal --time-start 2025-01-01T00:00:00Z --time-end 2025-12-31T23:59:59Z
+```
 
 Relationship lookup:
 

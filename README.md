@@ -32,6 +32,7 @@ Verified local runtime slice in [local-brain/README.md](local-brain/README.md):
 - second-stage vector sync worker for replayable embedding backfill
 - stdio MCP server for local assistant/tool integration
 - hybrid retrieval with lexical fallback
+- feature-gated ParadeDB BM25 lexical upgrade path
 - TMT-style temporal planner for historical recall
 - preference supersession
 - deterministic relationship adjudication
@@ -44,6 +45,7 @@ Latest verified run log:
 - [Timescale, pgvectorscale, pgai, and live producers run log](brain-spec/local/30-timescale-vectorscale-pgai-live-producers-run-log.md)
 - [Progress, runtime proof, and next slices](brain-spec/local/31-progress-and-next-slices.md)
 - [MCP, temporal planner, and multimodal/vector-sync runtime proof](brain-spec/local/33-multimodal-vector-sync-runtime-log.md)
+- [ParadeDB BM25 rollout and benchmark notes](brain-spec/local/34-paradedb-bm25-run-log.md)
 
 ## Main Folders
 
@@ -68,7 +70,9 @@ Latest verified run log:
 
 ## Honest Current Limits
 
-- the lexical branch is native PostgreSQL full-text search, not ParadeDB BM25 yet
+- the default lexical branch is still native PostgreSQL full-text search
+- ParadeDB BM25 is now implemented behind a feature flag, but not promoted to the default yet
+- the `procedural_memory` branch still uses native FTS inside BM25 mode because that path currently preserves active-truth lookups better on live data
 - the hybrid fusion kernel is still app-side, not the final SQL-first kernel
 - Timescale is implemented as a sidecar hypertable mirror for episodic time-scans, not as an in-place conversion of the authoritative `episodic_memory` table
 - `pgvectorscale` is in use through DiskANN indexes, but the current corpus is still small and not yet benchmarked at larger scale

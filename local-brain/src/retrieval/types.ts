@@ -38,6 +38,9 @@ export interface RecallResponse {
   readonly results: RecallResult[];
   readonly meta: {
     readonly retrievalMode: "lexical" | "hybrid";
+    readonly lexicalProvider: "fts" | "bm25";
+    readonly lexicalFallbackUsed: boolean;
+    readonly lexicalFallbackReason?: string;
     readonly queryEmbeddingSource: "provided" | "provider" | "none";
     readonly queryEmbeddingProvider?: string;
     readonly queryEmbeddingModel?: string;

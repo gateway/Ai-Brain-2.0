@@ -3,6 +3,8 @@ export interface BrainConfig {
   readonly artifactRoot: string;
   readonly producerInboxRoot: string;
   readonly namespaceDefault: string;
+  readonly lexicalProvider: "fts" | "bm25";
+  readonly lexicalFallbackEnabled: boolean;
   readonly embeddingProvider: string;
   readonly embeddingModel: string;
   readonly embeddingDimensions?: number;
@@ -45,6 +47,27 @@ function parseList(value: string | undefined): readonly string[] {
     .filter((item) => item.length > 0);
 }
 
+function parseBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  switch (value.trim().toLowerCase()) {
+    case "1":
+    case "true":
+    case "yes":
+    case "on":
+      return true;
+    case "0":
+    case "false":
+    case "no":
+    case "off":
+      return false;
+    default:
+      return fallback;
+  }
+}
+
 export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
   const artifactRoot = env.BRAIN_ARTIFACT_ROOT ?? "";
   const producerInboxRoot = env.BRAIN_PRODUCER_INBOX_ROOT ?? (artifactRoot ? `${artifactRoot}/producer-inbox` : "producer-inbox");
@@ -58,6 +81,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     artifactRoot,
     producerInboxRoot,
     namespaceDefault: env.BRAIN_NAMESPACE_DEFAULT ?? "personal",
+    lexicalProvider: env.BRAIN_LEXICAL_PROVIDER === "bm25" ? "bm25" : "fts",
+    lexicalFallbackEnabled: parseBoolean(env.BRAIN_LEXICAL_FALLBACK_ENABLED, true),
     embeddingProvider: env.BRAIN_EMBEDDING_PROVIDER ?? "openrouter",
     embeddingModel: env.BRAIN_EMBEDDING_MODEL ?? "text-embedding-default",
     embeddingDimensions: Number.isFinite(embeddingDimensions) ? embeddingDimensions : undefined,

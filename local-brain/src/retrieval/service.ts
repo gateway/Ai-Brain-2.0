@@ -33,6 +33,65 @@ interface RankedSearchRow extends SearchRow {
   readonly scoreValue: number;
 }
 
+type LexicalProvider = "fts" | "bm25";
+
+interface LexicalSourceRows {
+  readonly branch: string;
+  readonly rows: RankedSearchRow[];
+}
+
+const BM25_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "did",
+  "do",
+  "does",
+  "for",
+  "from",
+  "had",
+  "has",
+  "have",
+  "he",
+  "her",
+  "his",
+  "i",
+  "in",
+  "is",
+  "it",
+  "its",
+  "me",
+  "my",
+  "of",
+  "on",
+  "or",
+  "our",
+  "she",
+  "that",
+  "the",
+  "their",
+  "them",
+  "then",
+  "they",
+  "this",
+  "to",
+  "was",
+  "we",
+  "were",
+  "what",
+  "when",
+  "where",
+  "who",
+  "with",
+  "you",
+  "your"
+]);
+
 interface ArtifactRow {
   readonly artifact_id: string;
   readonly namespace_id: string;
@@ -250,6 +309,544 @@ function resultKey(row: SearchRow): string {
   return `${row.memory_type}:${row.memory_id}`;
 }
 
+function extractBm25Terms(queryText: string): string[] {
+  const tokens = queryText.match(/[A-Za-z0-9]+/g) ?? [];
+
+  return tokens.filter((token) => {
+    const normalized = token.toLowerCase();
+    if (/^\d{4}$/.test(normalized)) {
+      return true;
+    }
+
+    return normalized.length >= 3 && !BM25_STOP_WORDS.has(normalized);
+  });
+}
+
+function buildBm25MustClause(
+  fields: readonly string[],
+  terms: readonly string[],
+  startIndex: number
+): {
+  readonly clause: string;
+  readonly values: readonly string[];
+  readonly nextIndex: number;
+} {
+  const values: string[] = [];
+  const groups: string[] = [];
+  let placeholder = startIndex;
+
+  for (const term of terms) {
+    const branchClauses: string[] = [];
+    for (const field of fields) {
+      branchClauses.push(`${field} ||| $${placeholder}`);
+    }
+    groups.push(`(${branchClauses.join(" OR ")})`);
+    values.push(term);
+    placeholder += 1;
+  }
+
+  return {
+    clause: groups.length > 0 ? groups.join("\n            AND ") : "TRUE",
+    values,
+    nextIndex: placeholder
+  };
+}
+
+function lexicalBranchWeight(branch: string, planner: ReturnType<typeof planRecallQuery>): number {
+  switch (branch) {
+    case "episodic_memory":
+      return planner.episodicWeight;
+    case "temporal_nodes":
+      return planner.temporalSummaryWeight;
+    default:
+      return 1;
+  }
+}
+
+function rankLexicalSources(
+  sources: readonly LexicalSourceRows[],
+  candidateLimit: number,
+  hasTimeWindow: boolean,
+  temporalFocus: boolean,
+  planner: ReturnType<typeof planRecallQuery>
+): RankedSearchRow[] {
+  const accumulator = new Map<string, { row: RankedSearchRow; score: number }>();
+
+  for (const source of sources) {
+    for (let index = 0; index < source.rows.length; index += 1) {
+      const row = source.rows[index];
+      const key = resultKey(row);
+      const current = accumulator.get(key) ?? { row, score: 0 };
+      current.row = row;
+      current.score += lexicalBranchWeight(source.branch, planner) / (20 + index + 1);
+      accumulator.set(key, current);
+    }
+  }
+
+  return [...accumulator.values()]
+    .map(({ row, score }) => ({
+      ...row,
+      raw_score: score,
+      scoreValue: score
+    }))
+    .sort((left, right) => compareLexical(left, right, hasTimeWindow, temporalFocus))
+    .slice(0, candidateLimit);
+}
+
+async function loadFtsLexicalRows(
+  namespaceId: string,
+  queryText: string,
+  candidateLimit: number,
+  timeStart: string | null,
+  timeEnd: string | null,
+  planner: ReturnType<typeof planRecallQuery>,
+  hasTimeWindow: boolean
+): Promise<RankedSearchRow[]> {
+  const temporalRowsPromise = planner.temporalFocus || hasTimeWindow
+    ? queryRows<SearchRow>(
+        `
+          SELECT
+            id AS memory_id,
+            'temporal_nodes'::text AS memory_type,
+            summary_text AS content,
+            ts_rank(to_tsvector('english', coalesce(summary_text, '')), websearch_to_tsquery('english', $2)) AS raw_score,
+            NULL::uuid AS artifact_id,
+            period_end AS occurred_at,
+            namespace_id,
+            jsonb_build_object(
+              'tier', 'temporal_summary',
+              'layer', layer,
+              'period_start', period_start,
+              'period_end', period_end,
+              'summary_version', summary_version,
+              'source_count', source_count,
+              'generated_by', generated_by,
+              'metadata', metadata
+            ) AS provenance
+          FROM temporal_nodes
+          WHERE namespace_id = $1
+            AND summary_text <> ''
+            AND (
+              ($3::timestamptz IS NULL OR period_end >= $3::timestamptz)
+              AND ($4::timestamptz IS NULL OR period_start <= $4::timestamptz)
+            )
+            AND to_tsvector('english', coalesce(summary_text, '')) @@ websearch_to_tsquery('english', $2)
+          ORDER BY raw_score DESC, period_end DESC
+          LIMIT $5
+        `,
+        [namespaceId, queryText, timeStart, timeEnd, candidateLimit]
+      )
+    : Promise.resolve<SearchRow[]>([]);
+
+  const [proceduralRows, semanticRows, candidateRows, temporalRows, episodicRows, derivationRows] = await Promise.all([
+    queryRows<SearchRow>(
+      `
+        SELECT
+          id AS memory_id,
+          'procedural_memory'::text AS memory_type,
+          CONCAT(state_type, ': ', state_key, ' = ', state_value::text) AS content,
+          ts_rank(
+            to_tsvector(
+              'english',
+              coalesce(state_type, '') || ' ' || coalesce(state_key, '') || ' ' || coalesce(state_value::text, '')
+            ),
+            websearch_to_tsquery('english', $2)
+          ) AS raw_score,
+          NULL::uuid AS artifact_id,
+          updated_at AS occurred_at,
+          namespace_id,
+          jsonb_build_object(
+            'tier', 'current_procedural',
+            'state_type', state_type,
+            'state_key', state_key,
+            'version', version,
+            'valid_from', valid_from,
+            'valid_until', valid_until,
+            'metadata', metadata
+          ) AS provenance
+        FROM procedural_memory
+        WHERE namespace_id = $1
+          AND valid_until IS NULL
+          AND to_tsvector(
+                'english',
+                coalesce(state_type, '') || ' ' || coalesce(state_key, '') || ' ' || coalesce(state_value::text, '')
+              ) @@ websearch_to_tsquery('english', $2)
+        ORDER BY raw_score DESC, updated_at DESC
+        LIMIT $3
+      `,
+      [namespaceId, queryText, candidateLimit]
+    ),
+    queryRows<SearchRow>(
+      `
+        SELECT
+          id AS memory_id,
+          'semantic_memory'::text AS memory_type,
+          content_abstract AS content,
+          ts_rank(search_vector, websearch_to_tsquery('english', $2)) AS raw_score,
+          NULL::uuid AS artifact_id,
+          valid_from AS occurred_at,
+          namespace_id,
+          jsonb_build_object(
+            'tier', 'current_semantic',
+            'memory_kind', memory_kind,
+            'canonical_key', canonical_key,
+            'valid_from', valid_from,
+            'valid_until', valid_until,
+            'status', status,
+            'source_episodic_id', source_episodic_id,
+            'source_chunk_id', source_chunk_id,
+            'source_artifact_observation_id', source_artifact_observation_id,
+            'metadata', metadata
+          ) AS provenance
+        FROM semantic_memory
+        WHERE namespace_id = $1
+          AND status = 'active'
+          AND valid_until IS NULL
+          AND search_vector @@ websearch_to_tsquery('english', $2)
+        ORDER BY raw_score DESC, valid_from DESC
+        LIMIT $3
+      `,
+      [namespaceId, queryText, candidateLimit]
+    ),
+    queryRows<SearchRow>(
+      `
+        SELECT
+          id AS memory_id,
+          'memory_candidate'::text AS memory_type,
+          content,
+          ts_rank(to_tsvector('english', coalesce(content, '')), websearch_to_tsquery('english', $2)) AS raw_score,
+          NULL::uuid AS artifact_id,
+          created_at AS occurred_at,
+          namespace_id,
+          jsonb_build_object(
+            'tier', 'candidate_memory',
+            'candidate_type', candidate_type,
+            'canonical_key', canonical_key,
+            'status', status,
+            'source_memory_id', source_memory_id,
+            'source_chunk_id', source_chunk_id,
+            'source_artifact_observation_id', source_artifact_observation_id,
+            'metadata', metadata
+          ) AS provenance
+        FROM memory_candidates
+        WHERE namespace_id = $1
+          AND status IN ('pending', 'accepted')
+          AND to_tsvector('english', coalesce(content, '')) @@ websearch_to_tsquery('english', $2)
+        ORDER BY raw_score DESC, created_at DESC
+        LIMIT $3
+      `,
+      [namespaceId, queryText, candidateLimit]
+    ),
+    temporalRowsPromise,
+    queryRows<SearchRow>(
+      `
+        SELECT
+          et.memory_id AS memory_id,
+          'episodic_memory'::text AS memory_type,
+          et.content,
+          ts_rank(et.search_vector, websearch_to_tsquery('english', $2)) AS raw_score,
+          et.artifact_id,
+          et.occurred_at,
+          et.namespace_id,
+          jsonb_build_object(
+            'tier', 'historical_episodic',
+            'artifact_observation_id', et.artifact_observation_id,
+            'source_chunk_id', et.source_chunk_id,
+            'source_offset', et.source_offset,
+            'source_uri', a.uri,
+            'metadata', et.metadata
+          ) AS provenance
+        FROM episodic_timeline et
+        LEFT JOIN artifacts a ON a.id = et.artifact_id
+        WHERE et.namespace_id = $1
+          AND et.search_vector @@ websearch_to_tsquery('english', $2)
+          AND ($4::timestamptz IS NULL OR et.occurred_at >= $4)
+          AND ($5::timestamptz IS NULL OR et.occurred_at <= $5)
+        ORDER BY raw_score DESC, et.occurred_at DESC
+        LIMIT $3
+      `,
+      [namespaceId, queryText, candidateLimit, timeStart, timeEnd]
+    ),
+    queryRows<SearchRow>(
+      `
+        SELECT
+          ad.id AS memory_id,
+          'artifact_derivation'::text AS memory_type,
+          ad.content_text AS content,
+          ts_rank(to_tsvector('english', coalesce(ad.content_text, '')), websearch_to_tsquery('english', $2)) AS raw_score,
+          ao.artifact_id,
+          ad.created_at AS occurred_at,
+          a.namespace_id,
+          jsonb_build_object(
+            'tier', 'artifact_derivation',
+            'derivation_type', ad.derivation_type,
+            'provider', ad.provider,
+            'model', ad.model,
+            'artifact_observation_id', ad.artifact_observation_id,
+            'source_chunk_id', ad.source_chunk_id,
+            'source_uri', a.uri,
+            'metadata', ad.metadata
+          ) AS provenance
+        FROM artifact_derivations ad
+        JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
+        JOIN artifacts a ON a.id = ao.artifact_id
+        WHERE a.namespace_id = $1
+          AND coalesce(ad.content_text, '') <> ''
+          AND to_tsvector('english', coalesce(ad.content_text, '')) @@ websearch_to_tsquery('english', $2)
+        ORDER BY raw_score DESC, ad.created_at DESC
+        LIMIT $3
+      `,
+      [namespaceId, queryText, candidateLimit]
+    )
+  ]);
+
+  return toRankedRows([
+    ...proceduralRows,
+    ...semanticRows,
+    ...candidateRows,
+    ...temporalRows,
+    ...episodicRows,
+    ...derivationRows
+  ])
+    .sort((left, right) => compareLexical(left, right, hasTimeWindow, planner.temporalFocus))
+    .slice(0, candidateLimit);
+}
+
+async function loadBm25LexicalRows(
+  namespaceId: string,
+  queryText: string,
+  candidateLimit: number,
+  timeStart: string | null,
+  timeEnd: string | null,
+  planner: ReturnType<typeof planRecallQuery>,
+  hasTimeWindow: boolean
+): Promise<RankedSearchRow[]> {
+  const matchTerms = extractBm25Terms(queryText);
+  const effectiveTerms = matchTerms.length > 0 ? matchTerms : [queryText];
+  const semanticMatch = buildBm25MustClause(["content_abstract", "canonical_key", "memory_kind"], effectiveTerms, 2);
+  const candidateMatch = buildBm25MustClause(["content", "candidate_type", "canonical_key"], effectiveTerms, 2);
+  const temporalMatch = buildBm25MustClause(["summary_text", "layer"], effectiveTerms, 2);
+  const episodicMatch = buildBm25MustClause(["e.content", "e.role"], effectiveTerms, 2);
+  const derivationMatch = buildBm25MustClause(["ad.content_text", "ad.derivation_type"], effectiveTerms, 2);
+
+  const [proceduralRows, semanticRows, candidateRows, temporalRows, episodicRows, derivationRows] = await Promise.all([
+    queryRows<SearchRow>(
+      `
+        SELECT
+          id AS memory_id,
+          'procedural_memory'::text AS memory_type,
+          CONCAT(state_type, ': ', state_key, ' = ', state_value::text) AS content,
+          ts_rank(
+            to_tsvector(
+              'english',
+              coalesce(state_type, '') || ' ' || coalesce(state_key, '') || ' ' || coalesce(state_value::text, '')
+            ),
+            websearch_to_tsquery('english', $2)
+          ) AS raw_score,
+          NULL::uuid AS artifact_id,
+          updated_at AS occurred_at,
+          namespace_id,
+          jsonb_build_object(
+            'tier', 'current_procedural',
+            'lexical_provider', 'fts_bridge',
+            'state_type', state_type,
+            'state_key', state_key,
+            'version', version,
+            'valid_from', valid_from,
+            'valid_until', valid_until,
+            'metadata', metadata
+          ) AS provenance
+        FROM procedural_memory
+        WHERE namespace_id = $1
+          AND valid_until IS NULL
+          AND to_tsvector(
+                'english',
+                coalesce(state_type, '') || ' ' || coalesce(state_key, '') || ' ' || coalesce(state_value::text, '')
+              ) @@ websearch_to_tsquery('english', $2)
+        ORDER BY raw_score DESC, updated_at DESC
+        LIMIT $3
+      `,
+      [namespaceId, queryText, candidateLimit]
+    ),
+    queryRows<SearchRow>(
+      `
+        SELECT
+          id AS memory_id,
+          'semantic_memory'::text AS memory_type,
+          content_abstract AS content,
+          pdb.score(id) AS raw_score,
+          NULL::uuid AS artifact_id,
+          valid_from AS occurred_at,
+          namespace_id,
+          jsonb_build_object(
+            'tier', 'current_semantic',
+            'lexical_provider', 'bm25',
+            'memory_kind', memory_kind,
+            'canonical_key', canonical_key,
+            'valid_from', valid_from,
+            'valid_until', valid_until,
+            'status', status,
+            'source_episodic_id', source_episodic_id,
+            'source_chunk_id', source_chunk_id,
+            'source_artifact_observation_id', source_artifact_observation_id,
+            'metadata', metadata
+          ) AS provenance
+        FROM semantic_memory
+        WHERE namespace_id = $1
+          AND status = 'active'
+          AND valid_until IS NULL
+          AND ${semanticMatch.clause}
+        ORDER BY raw_score DESC, valid_from DESC
+        LIMIT $${semanticMatch.nextIndex}
+      `,
+      [namespaceId, ...semanticMatch.values, candidateLimit]
+    ),
+    queryRows<SearchRow>(
+      `
+        SELECT
+          id AS memory_id,
+          'memory_candidate'::text AS memory_type,
+          content,
+          pdb.score(id) AS raw_score,
+          NULL::uuid AS artifact_id,
+          created_at AS occurred_at,
+          namespace_id,
+          jsonb_build_object(
+            'tier', 'candidate_memory',
+            'lexical_provider', 'bm25',
+            'candidate_type', candidate_type,
+            'canonical_key', canonical_key,
+            'status', status,
+            'source_memory_id', source_memory_id,
+            'source_chunk_id', source_chunk_id,
+            'source_artifact_observation_id', source_artifact_observation_id,
+            'metadata', metadata
+          ) AS provenance
+        FROM memory_candidates
+        WHERE namespace_id = $1
+          AND status IN ('pending', 'accepted')
+          AND ${candidateMatch.clause}
+        ORDER BY raw_score DESC, created_at DESC
+        LIMIT $${candidateMatch.nextIndex}
+      `,
+      [namespaceId, ...candidateMatch.values, candidateLimit]
+    ),
+    planner.temporalFocus || hasTimeWindow
+      ? queryRows<SearchRow>(
+          `
+            SELECT
+              id AS memory_id,
+              'temporal_nodes'::text AS memory_type,
+              summary_text AS content,
+              pdb.score(id) AS raw_score,
+              NULL::uuid AS artifact_id,
+              period_end AS occurred_at,
+              namespace_id,
+              jsonb_build_object(
+                'tier', 'temporal_summary',
+                'lexical_provider', 'bm25',
+                'layer', layer,
+                'period_start', period_start,
+                'period_end', period_end,
+                'summary_version', summary_version,
+                'source_count', source_count,
+                'generated_by', generated_by,
+                'metadata', metadata
+              ) AS provenance
+            FROM temporal_nodes
+            WHERE namespace_id = $1
+              AND summary_text <> ''
+              AND (
+                ($${temporalMatch.nextIndex}::timestamptz IS NULL OR period_end >= $${temporalMatch.nextIndex}::timestamptz)
+                AND ($${temporalMatch.nextIndex + 1}::timestamptz IS NULL OR period_start <= $${temporalMatch.nextIndex + 1}::timestamptz)
+              )
+              AND ${temporalMatch.clause}
+            ORDER BY raw_score DESC, period_end DESC
+            LIMIT $${temporalMatch.nextIndex + 2}
+          `,
+          [namespaceId, ...temporalMatch.values, timeStart, timeEnd, candidateLimit]
+        )
+      : Promise.resolve<SearchRow[]>([]),
+    queryRows<SearchRow>(
+      `
+        SELECT
+          e.id AS memory_id,
+          'episodic_memory'::text AS memory_type,
+          e.content,
+          pdb.score(e.id) AS raw_score,
+          e.artifact_id,
+          e.occurred_at,
+          e.namespace_id,
+          jsonb_build_object(
+            'tier', 'historical_episodic',
+            'lexical_provider', 'bm25',
+            'artifact_observation_id', e.artifact_observation_id,
+            'source_chunk_id', e.source_chunk_id,
+            'source_offset', e.source_offset,
+            'source_uri', a.uri,
+            'metadata', e.metadata
+          ) AS provenance
+        FROM episodic_memory e
+        LEFT JOIN artifacts a ON a.id = e.artifact_id
+        WHERE e.namespace_id = $1
+          AND ${episodicMatch.clause}
+          AND ($${episodicMatch.nextIndex}::timestamptz IS NULL OR e.occurred_at >= $${episodicMatch.nextIndex})
+          AND ($${episodicMatch.nextIndex + 1}::timestamptz IS NULL OR e.occurred_at <= $${episodicMatch.nextIndex + 1})
+        ORDER BY raw_score DESC, e.occurred_at DESC
+        LIMIT $${episodicMatch.nextIndex + 2}
+      `,
+      [namespaceId, ...episodicMatch.values, timeStart, timeEnd, candidateLimit]
+    ),
+    queryRows<SearchRow>(
+      `
+        SELECT
+          ad.id AS memory_id,
+          'artifact_derivation'::text AS memory_type,
+          ad.content_text AS content,
+          pdb.score(ad.id) AS raw_score,
+          ao.artifact_id,
+          ad.created_at AS occurred_at,
+          a.namespace_id,
+          jsonb_build_object(
+            'tier', 'artifact_derivation',
+            'lexical_provider', 'bm25',
+            'derivation_type', ad.derivation_type,
+            'provider', ad.provider,
+            'model', ad.model,
+            'artifact_observation_id', ad.artifact_observation_id,
+            'source_chunk_id', ad.source_chunk_id,
+            'source_uri', a.uri,
+            'metadata', ad.metadata
+          ) AS provenance
+        FROM artifact_derivations ad
+        JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
+        JOIN artifacts a ON a.id = ao.artifact_id
+        WHERE a.namespace_id = $1
+          AND coalesce(ad.content_text, '') <> ''
+          AND ${derivationMatch.clause}
+        ORDER BY raw_score DESC, ad.created_at DESC
+        LIMIT $${derivationMatch.nextIndex}
+      `,
+      [namespaceId, ...derivationMatch.values, candidateLimit]
+    )
+  ]);
+
+  return rankLexicalSources(
+    [
+      { branch: "procedural_memory", rows: toRankedRows(proceduralRows) },
+      { branch: "semantic_memory", rows: toRankedRows(semanticRows) },
+      { branch: "memory_candidate", rows: toRankedRows(candidateRows) },
+      { branch: "temporal_nodes", rows: toRankedRows(temporalRows) },
+      { branch: "episodic_memory", rows: toRankedRows(episodicRows) },
+      { branch: "artifact_derivation", rows: toRankedRows(derivationRows) }
+    ],
+    candidateLimit,
+    hasTimeWindow,
+    planner.temporalFocus,
+    planner
+  );
+}
+
 async function resolveQueryEmbedding(
   query: RecallQuery
 ): Promise<{
@@ -297,223 +894,48 @@ async function resolveQueryEmbedding(
 }
 
 export async function searchMemory(query: RecallQuery): Promise<RecallResponse> {
+  const config = readConfig();
   const limit = normalizeLimit(query.limit);
   const queryText = query.query.trim();
   const planner = planRecallQuery(query);
   const timeStart = query.timeStart ?? planner.inferredTimeStart ?? null;
   const timeEnd = query.timeEnd ?? planner.inferredTimeEnd ?? null;
   const hasTimeWindow = Boolean(timeStart || timeEnd);
-
   const candidateLimit = Math.max(limit * planner.candidateLimitMultiplier, 20);
-  const temporalRowsPromise = planner.temporalFocus || hasTimeWindow
-    ? queryRows<SearchRow>(
-        `
-          SELECT
-            id AS memory_id,
-            'temporal_nodes'::text AS memory_type,
-            summary_text AS content,
-            ts_rank(to_tsvector('english', coalesce(summary_text, '')), websearch_to_tsquery('english', $2)) AS raw_score,
-            NULL::uuid AS artifact_id,
-            period_end AS occurred_at,
-            namespace_id,
-            jsonb_build_object(
-              'tier', 'temporal_summary',
-              'layer', layer,
-              'period_start', period_start,
-              'period_end', period_end,
-              'summary_version', summary_version,
-              'source_count', source_count,
-              'generated_by', generated_by,
-              'metadata', metadata
-            ) AS provenance
-          FROM temporal_nodes
-          WHERE namespace_id = $1
-            AND summary_text <> ''
-            AND (
-              ($3::timestamptz IS NULL OR period_end >= $3::timestamptz)
-              AND ($4::timestamptz IS NULL OR period_start <= $4::timestamptz)
-            )
-            AND to_tsvector('english', coalesce(summary_text, '')) @@ websearch_to_tsquery('english', $2)
-          ORDER BY raw_score DESC, period_end DESC
-          LIMIT $5
-        `,
-        [query.namespaceId, queryText, timeStart, timeEnd, candidateLimit]
-      )
-    : Promise.resolve<SearchRow[]>([]);
+  const [queryEmbeddingResult, lexicalResult] = await Promise.all([
+    resolveQueryEmbedding(query),
+    (async () => {
+      if (config.lexicalProvider !== "bm25") {
+        return {
+          rows: await loadFtsLexicalRows(query.namespaceId, queryText, candidateLimit, timeStart, timeEnd, planner, hasTimeWindow),
+          provider: "fts" as LexicalProvider,
+          fallbackUsed: false,
+          fallbackReason: undefined as string | undefined
+        };
+      }
 
-  const [proceduralRows, semanticRows, candidateRows, temporalRows, episodicRows, derivationRows, queryEmbeddingResult] = await Promise.all([
-    queryRows<SearchRow>(
-      `
-        SELECT
-          id AS memory_id,
-          'procedural_memory'::text AS memory_type,
-          CONCAT(state_type, ': ', state_key, ' = ', state_value::text) AS content,
-          ts_rank(
-            to_tsvector(
-              'english',
-              coalesce(state_type, '') || ' ' || coalesce(state_key, '') || ' ' || coalesce(state_value::text, '')
-            ),
-            websearch_to_tsquery('english', $2)
-          ) AS raw_score,
-          NULL::uuid AS artifact_id,
-          updated_at AS occurred_at,
-          namespace_id,
-          jsonb_build_object(
-            'tier', 'current_procedural',
-            'state_type', state_type,
-            'state_key', state_key,
-            'version', version,
-            'valid_from', valid_from,
-            'valid_until', valid_until,
-            'metadata', metadata
-          ) AS provenance
-        FROM procedural_memory
-        WHERE namespace_id = $1
-          AND valid_until IS NULL
-          AND to_tsvector(
-                'english',
-                coalesce(state_type, '') || ' ' || coalesce(state_key, '') || ' ' || coalesce(state_value::text, '')
-              ) @@ websearch_to_tsquery('english', $2)
-        ORDER BY raw_score DESC, updated_at DESC
-        LIMIT $3
-      `,
-      [query.namespaceId, queryText, candidateLimit]
-    ),
-    queryRows<SearchRow>(
-      `
-        SELECT
-          id AS memory_id,
-          'semantic_memory'::text AS memory_type,
-          content_abstract AS content,
-          ts_rank(search_vector, websearch_to_tsquery('english', $2)) AS raw_score,
-          NULL::uuid AS artifact_id,
-          valid_from AS occurred_at,
-          namespace_id,
-          jsonb_build_object(
-            'tier', 'current_semantic',
-            'memory_kind', memory_kind,
-            'canonical_key', canonical_key,
-            'valid_from', valid_from,
-            'valid_until', valid_until,
-            'status', status,
-            'source_episodic_id', source_episodic_id,
-            'source_chunk_id', source_chunk_id,
-            'source_artifact_observation_id', source_artifact_observation_id,
-            'metadata', metadata
-          ) AS provenance
-        FROM semantic_memory
-        WHERE namespace_id = $1
-          AND status = 'active'
-          AND valid_until IS NULL
-          AND search_vector @@ websearch_to_tsquery('english', $2)
-        ORDER BY raw_score DESC, valid_from DESC
-        LIMIT $3
-      `,
-      [query.namespaceId, queryText, candidateLimit]
-    ),
-    queryRows<SearchRow>(
-      `
-        SELECT
-          id AS memory_id,
-          'memory_candidate'::text AS memory_type,
-          content,
-          ts_rank(to_tsvector('english', coalesce(content, '')), websearch_to_tsquery('english', $2)) AS raw_score,
-          NULL::uuid AS artifact_id,
-          created_at AS occurred_at,
-          namespace_id,
-          jsonb_build_object(
-            'tier', 'candidate_memory',
-            'candidate_type', candidate_type,
-            'canonical_key', canonical_key,
-            'status', status,
-            'source_memory_id', source_memory_id,
-            'source_chunk_id', source_chunk_id,
-            'source_artifact_observation_id', source_artifact_observation_id,
-            'metadata', metadata
-          ) AS provenance
-        FROM memory_candidates
-        WHERE namespace_id = $1
-          AND status IN ('pending', 'accepted')
-          AND to_tsvector('english', coalesce(content, '')) @@ websearch_to_tsquery('english', $2)
-        ORDER BY raw_score DESC, created_at DESC
-        LIMIT $3
-      `,
-      [query.namespaceId, queryText, candidateLimit]
-    ),
-    temporalRowsPromise,
-    queryRows<SearchRow>(
-      `
-        SELECT
-          et.memory_id AS memory_id,
-          'episodic_memory'::text AS memory_type,
-          et.content,
-          ts_rank(et.search_vector, websearch_to_tsquery('english', $2)) AS raw_score,
-          et.artifact_id,
-          et.occurred_at,
-          et.namespace_id,
-          jsonb_build_object(
-            'tier', 'historical_episodic',
-            'artifact_observation_id', et.artifact_observation_id,
-            'source_chunk_id', et.source_chunk_id,
-            'source_offset', et.source_offset,
-            'source_uri', a.uri,
-            'metadata', et.metadata
-          ) AS provenance
-        FROM episodic_timeline et
-        LEFT JOIN artifacts a ON a.id = et.artifact_id
-        WHERE et.namespace_id = $1
-          AND et.search_vector @@ websearch_to_tsquery('english', $2)
-          AND ($4::timestamptz IS NULL OR et.occurred_at >= $4)
-          AND ($5::timestamptz IS NULL OR et.occurred_at <= $5)
-        ORDER BY raw_score DESC, et.occurred_at DESC
-        LIMIT $3
-      `,
-      [query.namespaceId, queryText, candidateLimit, timeStart, timeEnd]
-    ),
-    queryRows<SearchRow>(
-      `
-        SELECT
-          ad.id AS memory_id,
-          'artifact_derivation'::text AS memory_type,
-          ad.content_text AS content,
-          ts_rank(to_tsvector('english', coalesce(ad.content_text, '')), websearch_to_tsquery('english', $2)) AS raw_score,
-          ao.artifact_id,
-          ad.created_at AS occurred_at,
-          a.namespace_id,
-          jsonb_build_object(
-            'tier', 'artifact_derivation',
-            'derivation_type', ad.derivation_type,
-            'provider', ad.provider,
-            'model', ad.model,
-            'artifact_observation_id', ad.artifact_observation_id,
-            'source_chunk_id', ad.source_chunk_id,
-            'source_uri', a.uri,
-            'metadata', ad.metadata
-          ) AS provenance
-        FROM artifact_derivations ad
-        JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
-        JOIN artifacts a ON a.id = ao.artifact_id
-        WHERE a.namespace_id = $1
-          AND coalesce(ad.content_text, '') <> ''
-          AND to_tsvector('english', coalesce(ad.content_text, '')) @@ websearch_to_tsquery('english', $2)
-        ORDER BY raw_score DESC, ad.created_at DESC
-        LIMIT $3
-      `,
-      [query.namespaceId, queryText, candidateLimit]
-    ),
-    resolveQueryEmbedding(query)
+      try {
+        return {
+          rows: await loadBm25LexicalRows(query.namespaceId, queryText, candidateLimit, timeStart, timeEnd, planner, hasTimeWindow),
+          provider: "bm25" as LexicalProvider,
+          fallbackUsed: false,
+          fallbackReason: undefined as string | undefined
+        };
+      } catch (error) {
+        if (!config.lexicalFallbackEnabled) {
+          throw error;
+        }
+
+        return {
+          rows: await loadFtsLexicalRows(query.namespaceId, queryText, candidateLimit, timeStart, timeEnd, planner, hasTimeWindow),
+          provider: "fts" as LexicalProvider,
+          fallbackUsed: true,
+          fallbackReason: error instanceof Error ? error.message : "unknown_bm25_failure"
+        };
+      }
+    })()
   ]);
-
-  const lexicalRows = toRankedRows([
-    ...proceduralRows,
-    ...semanticRows,
-    ...candidateRows,
-    ...temporalRows,
-    ...episodicRows,
-    ...derivationRows
-  ])
-    .sort((left, right) => compareLexical(left, right, hasTimeWindow, planner.temporalFocus))
-    .slice(0, candidateLimit);
+  const lexicalRows = lexicalResult.rows;
 
   let vectorRows: RankedSearchRow[] = [];
   if (queryEmbeddingResult.embedding) {
@@ -665,6 +1087,9 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
     results,
     meta: {
       retrievalMode: vectorRows.length > 0 ? "hybrid" : "lexical",
+      lexicalProvider: lexicalResult.provider,
+      lexicalFallbackUsed: lexicalResult.fallbackUsed,
+      lexicalFallbackReason: lexicalResult.fallbackReason,
       queryEmbeddingSource: queryEmbeddingResult.source,
       queryEmbeddingProvider: queryEmbeddingResult.provider,
       queryEmbeddingModel: queryEmbeddingResult.model,
