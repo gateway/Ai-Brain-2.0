@@ -29,6 +29,7 @@ export interface ArtifactRecord {
 
 export interface FragmentRecord {
   readonly fragmentIndex: number;
+  readonly sceneIndex: number;
   readonly text: string;
   readonly charStart?: number;
   readonly charEnd?: number;
@@ -36,6 +37,15 @@ export interface FragmentRecord {
   readonly occurredAt: string;
   readonly importanceScore?: number;
   readonly tags?: string[];
+}
+
+export interface SceneRecord {
+  readonly sceneIndex: number;
+  readonly text: string;
+  readonly charStart?: number;
+  readonly charEnd?: number;
+  readonly occurredAt: string;
+  readonly sceneKind: "paragraph";
 }
 
 export interface ProvenancePointer {

@@ -1,4 +1,4 @@
-import type { FragmentRecord } from "../types.js";
+import type { FragmentRecord, SceneRecord } from "../types.js";
 
 const SENTENCE_SPLIT = /(?<=[.!?])\s+/u;
 const MONTH_INDEX = new Map<string, number>([
@@ -18,6 +18,28 @@ const MONTH_INDEX = new Map<string, number>([
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
+}
+
+function isMetadataParagraph(paragraph: string): boolean {
+  const trimmed = paragraph.trim();
+  if (!trimmed) {
+    return true;
+  }
+
+  if (/^#\s+/u.test(trimmed)) {
+    return true;
+  }
+
+  const lines = trimmed
+    .split(/\n+/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    return true;
+  }
+
+  return lines.every((line) => /^(Captured|Namespace intent|Source channel)\s*:/iu.test(line));
 }
 
 function inferOccurredAt(text: string, fallbackOccurredAt: string): string {
@@ -46,22 +68,12 @@ function inferOccurredAt(text: string, fallbackOccurredAt: string): string {
 }
 
 export function splitIntoFragments(text: string, occurredAt: string): FragmentRecord[] {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
-  if (!normalized) {
-    return [];
-  }
-
-  const paragraphs = normalized
-    .split(/\n{2,}/u)
-    .map((paragraph) => normalizeWhitespace(paragraph))
-    .filter(Boolean);
-
+  const scenes = splitIntoScenes(text, occurredAt);
   const fragments: FragmentRecord[] = [];
-  let cursor = 0;
   let fragmentIndex = 0;
 
-  for (const paragraph of paragraphs) {
-    const sentences = paragraph
+  for (const scene of scenes) {
+    const sentences = scene.text
       .split(SENTENCE_SPLIT)
       .map((sentence) => normalizeWhitespace(sentence))
       .filter(Boolean);
@@ -70,22 +82,24 @@ export function splitIntoFragments(text: string, occurredAt: string): FragmentRe
       continue;
     }
 
+    let cursor = scene.charStart ?? 0;
     for (let i = 0; i < sentences.length; i += 3) {
       const fragmentText = sentences.slice(i, i + 3).join(" ").trim();
       if (!fragmentText) {
         continue;
       }
 
-      const charStart = normalized.indexOf(fragmentText, cursor);
+      const charStart = text.indexOf(fragmentText, cursor);
       const safeStart = charStart >= 0 ? charStart : cursor;
       const charEnd = safeStart + fragmentText.length;
 
       fragments.push({
         fragmentIndex,
+        sceneIndex: scene.sceneIndex,
         text: fragmentText,
         charStart: safeStart,
         charEnd,
-        occurredAt: inferOccurredAt(fragmentText, occurredAt),
+        occurredAt: inferOccurredAt(fragmentText, scene.occurredAt),
         importanceScore: inferImportance(fragmentText),
         tags: inferTags(fragmentText)
       });
@@ -96,6 +110,43 @@ export function splitIntoFragments(text: string, occurredAt: string): FragmentRe
   }
 
   return fragments;
+}
+
+export function splitIntoScenes(text: string, occurredAt: string): SceneRecord[] {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const paragraphs = normalized
+    .split(/\n{2,}/u)
+    .map((paragraph) => normalizeWhitespace(paragraph))
+    .filter((paragraph) => !isMetadataParagraph(paragraph))
+    .filter(Boolean);
+
+  const scenes: SceneRecord[] = [];
+  let cursor = 0;
+  let sceneIndex = 0;
+
+  for (const paragraph of paragraphs) {
+    const charStart = normalized.indexOf(paragraph, cursor);
+    const safeStart = charStart >= 0 ? charStart : cursor;
+    const charEnd = safeStart + paragraph.length;
+
+    scenes.push({
+      sceneIndex,
+      text: paragraph,
+      charStart: safeStart,
+      charEnd,
+      occurredAt: inferOccurredAt(paragraph, occurredAt),
+      sceneKind: "paragraph"
+    });
+
+    sceneIndex += 1;
+    cursor = charEnd;
+  }
+
+  return scenes;
 }
 
 function inferImportance(text: string): number {

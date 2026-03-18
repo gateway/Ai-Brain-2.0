@@ -32,15 +32,8 @@ export interface RelationshipAdjudicationRunSummary {
 
 function isExclusivePredicate(predicate: string): boolean {
   const normalized = predicate.toLowerCase();
-  if (
-    normalized.includes("with") ||
-    normalized.includes("met") ||
-    normalized.includes("knows") ||
-    normalized.includes("friend")
-  ) {
-    return false;
-  }
-  return true;
+  const exclusivePredicates = new Set<string>(["primary_contact", "married_to", "ceo_of"]);
+  return exclusivePredicates.has(normalized);
 }
 
 async function markRelationshipCandidate(

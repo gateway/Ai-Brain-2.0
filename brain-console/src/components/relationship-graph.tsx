@@ -64,6 +64,15 @@ function entityTone(entityType: string): {
     };
   }
 
+  if (normalized.includes("org") || normalized.includes("company") || normalized.includes("business")) {
+    return {
+      fill: "rgba(248,113,113,0.14)",
+      stroke: "rgba(220,38,38,0.70)",
+      glow: "rgba(248,113,113,0.24)",
+      chip: "bg-rose-100 text-rose-950 border-rose-300/70"
+    };
+  }
+
   if (normalized.includes("artifact") || normalized.includes("document") || normalized.includes("file")) {
     return {
       fill: "rgba(196,181,253,0.16)",
@@ -188,6 +197,7 @@ export function RelationshipGraph({
     { label: "People", tone: entityTone("person") },
     { label: "Places", tone: entityTone("place") },
     { label: "Projects", tone: entityTone("project") },
+    { label: "Orgs", tone: entityTone("org") },
     { label: "Artifacts", tone: entityTone("artifact") }
   ] as const;
 

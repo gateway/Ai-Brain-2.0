@@ -2,6 +2,12 @@
 
 ## 2026-03-18
 
+- Added a `scene + claim` narrative staging layer for freeform personal-story ingestion with new `narrative_scenes` and `claim_candidates` tables.
+- Added explicit `org` entities so companies like `Icelandic Air` no longer have to masquerade as people or projects.
+- Moved personal-story relationship extraction off the fragment-local heuristic path and into deterministic scene-aware claim extraction with abstention support.
+- Added cross-scene self carryover and alias carryover so `Steve` stays the self entity and aliases like `Ben` resolve back to `Benjamin Williams`.
+- Relaxed relationship supersession so valid multi-edge history and containment relationships no longer overwrite each other by default.
+- Verified the new path against a real freeform friend-story artifact and documented the loop in `brain-spec/local/43-freeform-story-ingestion-loop.md`.
 - Added `GET /ops/timeline` and `GET /ops/graph` so the operator console can inspect chronological episodic evidence, temporal rollups, and active relationship memory without duplicating backend logic.
 - Added themed operator console pages for `/console/timeline` and `/console/relationships`, including a clickable server-rendered relationship graph, timeline cards, and temporal summary inspection.
 - Deepened deterministic TMT descent so broad temporal queries now expand by layer (`month -> week -> day`) and stop early when sufficiency checks say the current evidence is already enough.

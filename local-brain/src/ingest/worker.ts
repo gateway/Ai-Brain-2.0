@@ -1,8 +1,8 @@
 import type { PoolClient } from "pg";
 import { withTransaction } from "../db/client.js";
 import { registerArtifactObservation, toArtifactRecord } from "../artifacts/registry.js";
-import { stageEntityGraph } from "../relationships/extract.js";
-import { splitIntoFragments } from "./fragment.js";
+import { stageNarrativeClaims } from "../relationships/narrative.js";
+import { splitIntoFragments, splitIntoScenes } from "./fragment.js";
 import type { CandidateMemoryWrite, IngestRequest, IngestResult } from "./types.js";
 
 function normalizeText(value: string): string {
@@ -67,7 +67,12 @@ async function insertFragment(
     readonly capturedAt: string;
     readonly metadata: Record<string, unknown>;
   }
-): Promise<{ episodicInserted: boolean; candidates: CandidateMemoryWrite[] }> {
+): Promise<{
+  episodicInserted: boolean;
+  candidates: CandidateMemoryWrite[];
+  sourceMemoryId?: string;
+  sourceChunkId: string;
+}> {
   const chunkResult = await client.query<{ id: string }>(
     `
       INSERT INTO artifact_chunks (
@@ -211,14 +216,6 @@ async function insertFragment(
   const candidateWrites = buildCandidateWrites(options.content, options.metadata);
 
   if (sourceMemoryId) {
-    await stageEntityGraph(client, {
-      namespaceId: options.namespaceId,
-      sourceMemoryId,
-      sourceChunkId,
-      occurredAt: options.occurredAt,
-      content: options.content
-    });
-
     for (const candidate of candidateWrites) {
       await client.query(
         `
@@ -252,7 +249,9 @@ async function insertFragment(
 
   return {
     episodicInserted: (episodicResult.rowCount ?? 0) > 0,
-    candidates: candidateWrites
+    candidates: candidateWrites,
+    sourceMemoryId: sourceMemoryId ?? undefined,
+    sourceChunkId
   };
 }
 
@@ -273,6 +272,7 @@ export async function ingestArtifact(request: IngestRequest): Promise<IngestResu
     });
 
     const normalizedText = normalizeText(observation.textContent);
+    const scenes = splitIntoScenes(normalizedText, request.capturedAt);
     const fragments = splitIntoFragments(normalizedText, request.capturedAt);
     const artifact = toArtifactRecord({
       namespaceId: request.namespaceId,
@@ -293,6 +293,7 @@ export async function ingestArtifact(request: IngestRequest): Promise<IngestResu
 
     let episodicInsertCount = 0;
     const candidateWrites: CandidateMemoryWrite[] = [];
+    const sceneSources = new Map<number, { sourceMemoryIds: string[]; sourceChunkIds: string[]; occurredAt: string }>();
 
     for (const fragment of fragments) {
       const metadata = {
@@ -320,7 +321,33 @@ export async function ingestArtifact(request: IngestRequest): Promise<IngestResu
       }
 
       candidateWrites.push(...inserted.candidates);
+
+      const bucket = sceneSources.get(fragment.sceneIndex) ?? {
+        sourceMemoryIds: [],
+        sourceChunkIds: [],
+        occurredAt: fragment.occurredAt
+      };
+
+      if (inserted.sourceMemoryId) {
+        bucket.sourceMemoryIds.push(inserted.sourceMemoryId);
+      }
+      bucket.sourceChunkIds.push(inserted.sourceChunkId);
+      sceneSources.set(fragment.sceneIndex, bucket);
     }
+
+    await stageNarrativeClaims(client, {
+      namespaceId: request.namespaceId,
+      artifactId: observation.artifactId,
+      observationId: observation.observationId,
+      capturedAt: request.capturedAt,
+      scenes,
+      sceneSources: scenes.map((scene) => ({
+        sceneIndex: scene.sceneIndex,
+        sourceMemoryIds: sceneSources.get(scene.sceneIndex)?.sourceMemoryIds ?? [],
+        sourceChunkIds: sceneSources.get(scene.sceneIndex)?.sourceChunkIds ?? [],
+        occurredAt: sceneSources.get(scene.sceneIndex)?.occurredAt ?? scene.occurredAt
+      }))
+    });
 
     return {
       artifact,

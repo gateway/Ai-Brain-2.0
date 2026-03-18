@@ -14,6 +14,7 @@ export * from "./retrieval/types.js";
 export * from "./retrieval/planner.js";
 export * from "./retrieval/service.js";
 export * from "./relationships/extract.js";
+export * from "./relationships/narrative.js";
 export * from "./jobs/consolidation.js";
 export * from "./jobs/derivation-queue.js";
 export * from "./jobs/relationship-adjudication.js";
