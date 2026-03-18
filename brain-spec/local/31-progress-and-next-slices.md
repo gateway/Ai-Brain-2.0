@@ -1,5 +1,7 @@
 # Local Brain Progress And Next Slices
 
+This document is historical context. For the newer state after the BM25 and mock multimodal slices, see [34-paradedb-bm25-run-log.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/brain-spec/local/34-paradedb-bm25-run-log.md) and [35-benchmark-and-multimodal-proof.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/brain-spec/local/35-benchmark-and-multimodal-proof.md).
+
 ## Current Estimate
 
 Current local-brain completion estimate: `~82%`

@@ -8,4 +8,6 @@
 /local-brain/dist/
 /local-brain/node_modules/
 /local-brain/eval-results/
+/local-brain/benchmark-results/lexical-benchmark-*.json
+/local-brain/benchmark-results/lexical-benchmark-*.md
 /local-brain/producer-inbox/

@@ -6,6 +6,9 @@
 - Added BM25 indexes for `episodic_memory`, `semantic_memory`, `memory_candidates`, `artifact_derivations`, and `temporal_nodes`.
 - Tightened BM25 query behavior to require must-match lexical terms instead of broad default query-string matching, fixing abstention and exact-term drift.
 - Kept `procedural_memory` on an FTS bridge during BM25 mode after verifying that active-truth state lookups were more reliable that way on the current schema/data.
+- Added a reproducible lexical benchmark harness that compares FTS and BM25 on the seeded local brain and writes reports under `benchmark-results/`.
+- Added a local mock external AI provider so multimodal derivation and provider-backed PDF/image/audio flows can be tested without a real OCR/STT backend.
+- Verified provider-backed derivation end to end on a real local PDF artifact using the mock external provider and the `/derive/provider` route.
 - Added a durable `derivation_jobs` queue for OCR, transcription, caption, summary, text, and embedding backfills so multimodal work can be deferred safely without a live provider.
 - Added `POST /derive/queue` and a matching CLI so artifacts can be routed into a replayable job queue instead of only synchronous provider calls.
 - Added a derivation worker CLI that drains the durable queue and writes finished text proxies back into `artifact_derivations`.

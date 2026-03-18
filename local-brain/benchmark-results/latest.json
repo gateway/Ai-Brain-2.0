@@ -1,0 +1,94 @@
+{
+  "generatedAt": "2026-03-18T04:41:52.508Z",
+  "namespaceId": "eval_1773808912240",
+  "baselineEvalPassed": true,
+  "baselineEvalFailures": [],
+  "cases": [
+    {
+      "name": "japan_exact_temporal",
+      "provider": "fts",
+      "passed": true,
+      "resultCount": 2,
+      "topMemoryType": "episodic_memory",
+      "topContent": "In June 2025 Steve was in Japan with Sarah and Ken. They spent time in Tokyo and Kyoto together. The trip included shared dinners, transit days, and travel notes worth preserving.",
+      "approxTokens": 62,
+      "failureReasons": []
+    },
+    {
+      "name": "japan_exact_temporal",
+      "provider": "bm25",
+      "passed": true,
+      "resultCount": 2,
+      "topMemoryType": "episodic_memory",
+      "topContent": "In June 2025 Steve was in Japan with Sarah and Ken. They spent time in Tokyo and Kyoto together. The trip included shared dinners, transit days, and travel notes worth preserving.",
+      "approxTokens": 62,
+      "failureReasons": []
+    },
+    {
+      "name": "spicy_active_truth",
+      "provider": "fts",
+      "passed": true,
+      "resultCount": 4,
+      "topMemoryType": "procedural_memory",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cff40-07ff-79ef-bf8e-2742c8543018\", \"semantic_memory_id\": \"019cff40-083d-7ad1-84aa-0e59cc083011\"}",
+      "approxTokens": 55,
+      "failureReasons": []
+    },
+    {
+      "name": "spicy_active_truth",
+      "provider": "bm25",
+      "passed": true,
+      "resultCount": 4,
+      "topMemoryType": "procedural_memory",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cff40-07ff-79ef-bf8e-2742c8543018\", \"semantic_memory_id\": \"019cff40-083d-7ad1-84aa-0e59cc083011\"}",
+      "approxTokens": 55,
+      "failureReasons": []
+    },
+    {
+      "name": "sweet_active_truth",
+      "provider": "fts",
+      "passed": true,
+      "resultCount": 4,
+      "topMemoryType": "procedural_memory",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cff40-07ff-79ef-bf8e-2742c8543018\", \"semantic_memory_id\": \"019cff40-083f-7e56-a6e2-e40136bdba34\"}",
+      "approxTokens": 55,
+      "failureReasons": []
+    },
+    {
+      "name": "sweet_active_truth",
+      "provider": "bm25",
+      "passed": true,
+      "resultCount": 4,
+      "topMemoryType": "procedural_memory",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cff40-07ff-79ef-bf8e-2742c8543018\", \"semantic_memory_id\": \"019cff40-083f-7e56-a6e2-e40136bdba34\"}",
+      "approxTokens": 55,
+      "failureReasons": []
+    },
+    {
+      "name": "abstention_unknown",
+      "provider": "fts",
+      "passed": true,
+      "resultCount": 0,
+      "topContent": "",
+      "approxTokens": 0,
+      "failureReasons": []
+    },
+    {
+      "name": "abstention_unknown",
+      "provider": "bm25",
+      "passed": true,
+      "resultCount": 0,
+      "topContent": "",
+      "approxTokens": 0,
+      "failureReasons": []
+    }
+  ],
+  "summary": {
+    "ftsPassed": 4,
+    "bm25Passed": 4,
+    "totalCases": 4,
+    "bm25TokenDelta": 0,
+    "recommendation": "candidate_for_default",
+    "reason": "BM25 matched or exceeded FTS on the current benchmark set without increasing token load."
+  }
+}

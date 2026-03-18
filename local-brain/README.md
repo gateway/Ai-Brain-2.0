@@ -56,6 +56,18 @@ proves the substrate, schema, and file ingestion loop without Docker.
 6. Apply migrations:
    - `npm run migrate`
 
+BM25 prerequisite:
+
+- ParadeDB `pg_search` must already be installed in `ai_brain_local`
+- migration `013_paradedb_bm25.sql` creates BM25 indexes, but the extension binary must exist locally first
+
+Lexical env switches:
+
+- `BRAIN_LEXICAL_PROVIDER=fts|bm25`
+- `BRAIN_LEXICAL_FALLBACK_ENABLED=true|false`
+- default lexical mode is `fts`
+- if BM25 is selected and fails, retrieval falls back to native FTS unless fallback is disabled
+
 ## Ingest A File
 
 ```bash
@@ -266,6 +278,26 @@ POST /derive/queue
 Use this when you want OCR, transcription, captioning, or summaries to stay durable and replayable even if no live external service is available.
 
 Queue jobs are namespace-locked to the artifact they resolve, and repeat requests for the same artifact/job combination reuse the same durable row instead of spawning duplicates.
+
+External derivation provider contract:
+
+- `POST /v1/artifacts/derive`
+- request fields:
+  - `model`
+  - `modality`
+  - `artifact_uri`
+  - `mime_type`
+  - `max_output_tokens`
+  - `metadata`
+- response fields:
+  - `contentAbstract`
+  - `confidenceScore`
+  - `entities`
+  - `provenance.artifactUri`
+  - optional provenance such as `pageNumber`, `timestampMs`, or byte offsets
+
+Only the `external` provider currently supports multimodal `deriveFromArtifact`.
+`OpenRouter` and `Gemini` are wired for embeddings here, not full local artifact derivation.
 
 Queue worker:
 

@@ -46,6 +46,7 @@ Latest verified run log:
 - [Progress, runtime proof, and next slices](brain-spec/local/31-progress-and-next-slices.md)
 - [MCP, temporal planner, and multimodal/vector-sync runtime proof](brain-spec/local/33-multimodal-vector-sync-runtime-log.md)
 - [ParadeDB BM25 rollout and benchmark notes](brain-spec/local/34-paradedb-bm25-run-log.md)
+- [Post-BM25 benchmark and mock multimodal proof](brain-spec/local/35-benchmark-and-multimodal-proof.md)
 
 ## Main Folders
 
@@ -78,6 +79,7 @@ Latest verified run log:
 - `pgvectorscale` is in use through DiskANN indexes, but the current corpus is still small and not yet benchmarked at larger scale
 - `pgai` is installed and evaluated, but the current production path still keeps Node as the write gateway and uses a SQL queue for controlled backfill
 - multimodal-native derivation is not fully wired; the safe current path is binary artifact + attached text proxy, or a provider-backed external derive endpoint
+- the `external` provider path is now testable locally with a mock server, but real OCR/STT/caption quality still depends on a real backend
 - provider adapters are wired, but live provider execution still requires API keys or a reachable external AI endpoint
 - relative-time understanding is still limited
 

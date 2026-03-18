@@ -37,6 +37,16 @@ This package currently provides:
 4. Apply migrations:
    - `npm run migrate`
 
+BM25 prerequisite:
+
+- ParadeDB `pg_search` must be installed in the local PostgreSQL 18 instance before BM25 mode will work
+- default lexical mode is still native FTS
+
+Lexical env controls:
+
+- `BRAIN_LEXICAL_PROVIDER=fts|bm25`
+- `BRAIN_LEXICAL_FALLBACK_ENABLED=true|false`
+
 ## Run A Reproducible Evaluation
 
 ```bash
@@ -50,6 +60,19 @@ BM25 / ParadeDB validation run:
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
 BRAIN_LEXICAL_PROVIDER=bm25 npm run eval
 ```
+
+BM25 lexical smoke:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+BRAIN_LEXICAL_PROVIDER=bm25 npm run search -- "Japan 2025 Sarah" --namespace personal --time-start 2025-01-01T00:00:00Z --time-end 2025-12-31T23:59:59Z
+```
+
+Expected behavior:
+
+- same top episodic result as default FTS on the current benchmark set
+- no results for clearly unknown lexical probes
+- active-truth preference lookups still resolve cleanly
 
 Outputs:
 
@@ -171,6 +194,41 @@ cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
 npm run vector-sync:enqueue -- --namespace personal --provider external --model text-embedding-default --limit 50
 npm run vector-sync:work -- --namespace personal --provider external --limit 50
 ```
+
+Run the local mock external provider for multimodal tests:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run mock:external -- --port 8090
+```
+
+Then point the brain at it:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+BRAIN_EXTERNAL_AI_BASE_URL=http://127.0.0.1:8090 npm run serve
+```
+
+External derive contract expected by the brain:
+
+- `POST /v1/artifacts/derive`
+- request:
+  - `model`
+  - `modality`
+  - `artifact_uri`
+  - `mime_type`
+  - `max_output_tokens`
+  - `metadata`
+- response:
+  - `contentAbstract`
+  - `confidenceScore`
+  - `entities`
+  - `provenance.artifactUri`
+  - optional provenance like `pageNumber`, `timestampMs`, `byteOffsetStart`, `byteOffsetEnd`
+
+Only the `external` provider supports multimodal derivation right now.
+If the provider is unreachable, queued derivation jobs retry with backoff instead of corrupting memory state.
+If the provider is misconfigured or returns terminal errors, the job is marked failed cleanly and the raw artifact remains intact.
 
 ## Verified Example Queries
 

@@ -1,5 +1,7 @@
 # 33 - Multimodal, Vector Sync, And Runtime Proof
 
+This document is historical context. BM25 progressed after this slice; see [34-paradedb-bm25-run-log.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/brain-spec/local/34-paradedb-bm25-run-log.md) and [35-benchmark-and-multimodal-proof.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/brain-spec/local/35-benchmark-and-multimodal-proof.md) for the later state.
+
 Date: 2026-03-18
 
 ## Scope
@@ -30,7 +32,7 @@ This was cross-checked against the current repo shape and against the existing
 NotebookLM was re-queried earlier in this phase and the conclusion still holds:
 
 - `pgai` stays a sidecar
-- BM25 / ParadeDB remains a later benchmark gate, not the next immediate slice
+- at the time of this slice, BM25 / ParadeDB still remained a later benchmark gate
 
 ## What Changed
 
