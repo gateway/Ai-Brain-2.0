@@ -1,59 +1,63 @@
 # Lexical Benchmark Report
 
-Generated: 2026-03-18T06:47:21.525Z
-Namespace: eval_1773816440953_7b0da10a
-Baseline Eval Passed: true
+Generated: 2026-03-18T08:40:25.117Z
+Namespace: eval_1773823224691_e2aa57fb
+Baseline Eval Passed: false
 
 ## Summary
 
-- FTS passed: 14/14
-- BM25 passed: 14/14
-- BM25 token delta: -17
+- FTS passed: 12/14
+- BM25 passed: 12/14
+- BM25 token delta: 15
 - BM25 fallback cases: 0
-- Recommendation: candidate_for_default
-- Reason: BM25 matched or exceeded FTS across the expanded lexical stress suite without increasing token load or triggering fallback.
+- Recommendation: keep_feature_gated
+- Reason: Keep BM25 behind a flag until it clears the expanded lexical stress suite, baseline eval remains clean, and BM25 fallback frequency reaches zero.
 
 ## Cases
 
 ### japan_exact_temporal (fts)
-- Passed: true
-- Result count: 3
+- Passed: false
+- Result count: 2
 - Effective lexical provider: fts
 - Lexical fallback used: false
 - Top memory type: temporal_nodes
-- Top overlap: 1.000
-- Approx tokens: 73
-- Top content: MONTH rollup Sun Jun 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Tue Jul 01 2025 00:00:00 GMT+0700 (Indochina Time). events=2. roles=import:2. top_entities=Ken:2, Kyoto:2, Sarah:2, Japan:1, Steve:1.
+- Top overlap: 0.999
+- Approx tokens: 53
+- Top content: YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.
+- Failures: top result missing term: Japan; top result missing term: Sarah
 
 ### japan_exact_temporal (bm25)
-- Passed: true
+- Passed: false
 - Result count: 3
 - Effective lexical provider: bm25
 - Lexical fallback used: false
 - Top memory type: temporal_nodes
 - Top overlap: 0.999
-- Approx tokens: 72
-- Top content: YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=Ken:2, Kyoto:2, Sarah:2, Japan:1, Steve:1.
+- Approx tokens: 68
+- Top content: YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.
+- Failures: top result missing term: Japan; top result missing term: Sarah
 
 ### japan_temporal_natural_language (fts)
-- Passed: true
-- Result count: 4
+- Passed: false
+- Result count: 3
 - Effective lexical provider: fts
 - Lexical fallback used: false
 - Top memory type: temporal_nodes
-- Top overlap: 1.000
-- Approx tokens: 85
-- Top content: MONTH rollup Sun Jun 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Tue Jul 01 2025 00:00:00 GMT+0700 (Indochina Time). events=2. roles=import:2. top_entities=Ken:2, Kyoto:2, Sarah:2, Japan:1, Steve:1.
+- Top overlap: 0.999
+- Approx tokens: 65
+- Top content: YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.
+- Failures: top result missing term: Japan
 
 ### japan_temporal_natural_language (bm25)
-- Passed: true
+- Passed: false
 - Result count: 3
 - Effective lexical provider: bm25
 - Lexical fallback used: false
 - Top memory type: temporal_nodes
 - Top overlap: 0.999
-- Approx tokens: 69
-- Top content: YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=Ken:2, Kyoto:2, Sarah:2, Japan:1, Steve:1.
+- Approx tokens: 65
+- Top content: YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.
+- Failures: top result missing term: Japan
 
 ### relationship_context_kyoto (fts)
 - Passed: true
@@ -82,7 +86,7 @@ Baseline Eval Passed: true
 - Lexical fallback used: false
 - Top memory type: episodic_memory
 - Top overlap: 1.000
-- Approx tokens: 48
+- Approx tokens: 44
 - Top content: On March 12 2025 the redesign notes focused on the dashboard timeline UX and the relationship graph layout for the AI brain.
 
 ### march_redesign_date (bm25)
@@ -92,7 +96,7 @@ Baseline Eval Passed: true
 - Lexical fallback used: false
 - Top memory type: episodic_memory
 - Top overlap: 1.000
-- Approx tokens: 48
+- Approx tokens: 44
 - Top content: On March 12 2025 the redesign notes focused on the dashboard timeline UX and the relationship graph layout for the AI brain.
 
 ### coffee_active_truth (fts)
@@ -123,7 +127,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019cffb2-e901-7b43-93d6-8c4c6bb7c468", "semantic_memory_id": "019cffb2-e977-7e82-beae-dba73aa21748"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d001a-6bb2-7073-b10f-5265f7ad2abd", "semantic_memory_id": "019d001a-6c06-7d60-86a8-bc5824e89744"}
 
 ### spicy_active_truth (bm25)
 - Passed: true
@@ -133,7 +137,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019cffb2-e901-7b43-93d6-8c4c6bb7c468", "semantic_memory_id": "019cffb2-e977-7e82-beae-dba73aa21748"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d001a-6bb2-7073-b10f-5265f7ad2abd", "semantic_memory_id": "019d001a-6c06-7d60-86a8-bc5824e89744"}
 
 ### sweet_active_truth (fts)
 - Passed: true
@@ -143,7 +147,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019cffb2-e901-7b43-93d6-8c4c6bb7c468", "semantic_memory_id": "019cffb2-e979-7e16-9d4f-a53444cec631"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d001a-6bb2-7073-b10f-5265f7ad2abd", "semantic_memory_id": "019d001a-6c08-7cc2-a8ac-5d2cfcbb049f"}
 
 ### sweet_active_truth (bm25)
 - Passed: true
@@ -153,7 +157,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019cffb2-e901-7b43-93d6-8c4c6bb7c468", "semantic_memory_id": "019cffb2-e979-7e16-9d4f-a53444cec631"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d001a-6bb2-7073-b10f-5265f7ad2abd", "semantic_memory_id": "019d001a-6c08-7cc2-a8ac-5d2cfcbb049f"}
 
 ### rare_entity_cve (fts)
 - Passed: true

@@ -1,0 +1,61 @@
+{
+  "generatedAt": "2026-03-18T08:40:04.251Z",
+  "totalCases": 4,
+  "passedCases": 4,
+  "failedCases": 0,
+  "cases": [
+    {
+      "name": "negative_control_no_people",
+      "namespaceId": "narrative_negative_control_no_people_mmvsjbnv",
+      "passed": true,
+      "scores": {
+        "entity_presence": 1,
+        "graph_recall": 1,
+        "graph_precision": 1,
+        "current_truth_accuracy": 1,
+        "search_recall": 1
+      },
+      "failures": []
+    },
+    {
+      "name": "personal_story_relationships",
+      "namespaceId": "narrative_personal_story_relationships_mmvsjbts",
+      "passed": true,
+      "scores": {
+        "entity_presence": 1,
+        "graph_recall": 1,
+        "graph_precision": 1,
+        "current_truth_accuracy": 1,
+        "search_recall": 1
+      },
+      "failures": []
+    },
+    {
+      "name": "preference_supersession",
+      "namespaceId": "narrative_preference_supersession_mmvsjbx9",
+      "passed": true,
+      "scores": {
+        "entity_presence": 1,
+        "graph_recall": 1,
+        "graph_precision": 1,
+        "current_truth_accuracy": 1,
+        "search_recall": 1
+      },
+      "failures": []
+    },
+    {
+      "name": "project_state_and_spec",
+      "namespaceId": "narrative_project_state_and_spec_mmvsjbz2",
+      "passed": true,
+      "scores": {
+        "entity_presence": 1,
+        "graph_recall": 1,
+        "graph_precision": 1,
+        "current_truth_accuracy": 1,
+        "search_recall": 1
+      },
+      "failures": []
+    }
+  ],
+  "recommendation": "ready_for_more_story_types"
+}

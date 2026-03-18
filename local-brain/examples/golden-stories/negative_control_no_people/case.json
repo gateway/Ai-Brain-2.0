@@ -1,0 +1,26 @@
+{
+  "name": "negative_control_no_people",
+  "namespace_seed": "negative_control_no_people",
+  "files": [
+    {
+      "path": "story.md",
+      "source_type": "markdown",
+      "source_channel": "golden-story:neutral",
+      "captured_at": "2026-03-18T10:00:00Z"
+    }
+  ],
+  "queries": [
+    {
+      "name": "architecture_query",
+      "query": "PostgreSQL 18 pgvector BM25",
+      "expect_top_types": ["episodic_memory"],
+      "expect_top_includes": ["PostgreSQL 18", "BM25"]
+    }
+  ],
+  "expected": {
+    "entities_present": [],
+    "entities_absent": ["The", "Markdown"],
+    "graph_edges_present": [],
+    "graph_edges_absent": []
+  }
+}

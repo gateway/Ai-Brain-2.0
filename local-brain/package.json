@@ -27,6 +27,7 @@
     "eval": "npm run build && node dist/cli/eval.js",
     "test:planner": "npm run build && node --test ./test/planner-temporal-depth.mjs",
     "benchmark:lexical": "npm run build && node dist/cli/benchmark-lexical.js",
+    "benchmark:narrative": "npm run build && node dist/cli/benchmark-narrative.js",
     "mock:external": "npm run build && node dist/cli/mock-external-provider.js",
     "serve": "npm run build && node dist/cli/serve.js"
   },

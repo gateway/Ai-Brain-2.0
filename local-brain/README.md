@@ -261,6 +261,21 @@ cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
 npm run benchmark:lexical
 ```
 
+Golden-story narrative benchmark:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run benchmark:narrative
+```
+
+This validates:
+
+- freeform personal-story entity extraction
+- relationship graph promotion
+- project/spec current-truth promotion
+- preference supersession
+- negative-control abstention on junk entities
+
 Apply forgetting/decay on inactive non-anchor semantic memories:
 
 ```bash

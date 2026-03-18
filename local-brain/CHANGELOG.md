@@ -2,6 +2,11 @@
 
 ## 2026-03-18
 
+- Added lightweight relation-prior scoring to `claim_candidates` and `relationship_candidates`, so relationship adjudication now uses scene/event grounding as a prior instead of raw extractor confidence alone.
+- Added conservative multi-scene narrative event clustering, so adjacent scenes can roll up into one logical event without losing per-scene provenance.
+- Extended deterministic consolidation to promote project/spec claims into `procedural_memory` as `project_status`, `project_spec`, `project_deadline`, and `project_role`.
+- Added a golden-story narrative benchmark harness with fixtures for personal relationships, project/spec updates, preference supersession, and negative controls.
+- Re-ran the freeform Steve/Lauren/Gumi/Ben story after the relation-prior pass and verified materially correct event rows, relationship edges, and project-role state outputs.
 - Added explicit event-aware relationship priors with `narrative_events` and `narrative_event_members`, so freeform personal stories can now represent people, places, orgs/projects, times, and events without forcing structured input.
 - Added scene- and claim-level time anchor fields, including preserved relative-time expressions, basic relative-duration anchoring, and event-level temporal metadata.
 - Updated scene-aware narrative ingestion to build event containers, event memberships, and event-linked relationship candidates from the same raw source evidence.

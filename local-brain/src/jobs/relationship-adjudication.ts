@@ -10,6 +10,8 @@ interface RelationshipCandidateRow {
   readonly predicate: string;
   readonly object_entity_id: string;
   readonly confidence: number;
+  readonly prior_score: number;
+  readonly prior_reason: string | null;
   readonly valid_from: string | null;
   readonly created_at: string;
   readonly source_memory_id: string | null;
@@ -115,13 +117,15 @@ export async function runRelationshipAdjudication(
           rc.predicate,
           rc.object_entity_id,
           rc.confidence,
+          rc.prior_score,
+          rc.prior_reason,
           rc.valid_from,
           rc.created_at,
           rc.source_memory_id
         FROM relationship_candidates rc
         WHERE rc.namespace_id = $1
           AND rc.status = 'pending'
-        ORDER BY rc.confidence DESC, COALESCE(rc.valid_from, rc.created_at) ASC
+        ORDER BY ((rc.confidence * 0.72) + (rc.prior_score * 0.28)) DESC, COALESCE(rc.valid_from, rc.created_at) ASC
         LIMIT $2
       `,
       [namespaceId, limit]
@@ -133,8 +137,13 @@ export async function runRelationshipAdjudication(
     let rejected = 0;
 
     for (const candidate of candidates.rows) {
-      if (candidate.confidence < rejectThreshold) {
-        const reason = `Rejected deterministic adjudication: confidence ${candidate.confidence.toFixed(2)} < ${rejectThreshold.toFixed(2)}.`;
+      const effectiveConfidence = Math.max(
+        candidate.confidence,
+        Math.round(((candidate.confidence * 0.72) + (candidate.prior_score * 0.28)) * 1000) / 1000
+      );
+
+      if (effectiveConfidence < rejectThreshold) {
+        const reason = `Rejected deterministic adjudication: effective confidence ${effectiveConfidence.toFixed(2)} < ${rejectThreshold.toFixed(2)} (raw ${candidate.confidence.toFixed(2)}, prior ${candidate.prior_score.toFixed(2)}).`;
         await markRelationshipCandidate(client, candidate.id, "rejected", reason);
         await logEvent(client, {
           namespaceId,
@@ -144,15 +153,18 @@ export async function runRelationshipAdjudication(
           reason,
           metadata: {
             run_id: context.runId,
-            confidence: candidate.confidence
+            confidence: candidate.confidence,
+            prior_score: candidate.prior_score,
+            effective_confidence: effectiveConfidence,
+            prior_reason: candidate.prior_reason
           }
         });
         rejected += 1;
         continue;
       }
 
-      if (candidate.confidence < acceptThreshold) {
-        const reason = `Rejected deterministic adjudication: confidence ${candidate.confidence.toFixed(2)} below accept threshold ${acceptThreshold.toFixed(2)}.`;
+      if (effectiveConfidence < acceptThreshold) {
+        const reason = `Rejected deterministic adjudication: effective confidence ${effectiveConfidence.toFixed(2)} below accept threshold ${acceptThreshold.toFixed(2)} (raw ${candidate.confidence.toFixed(2)}, prior ${candidate.prior_score.toFixed(2)}).`;
         await markRelationshipCandidate(client, candidate.id, "rejected", reason);
         await logEvent(client, {
           namespaceId,
@@ -162,7 +174,10 @@ export async function runRelationshipAdjudication(
           reason,
           metadata: {
             run_id: context.runId,
-            confidence: candidate.confidence
+            confidence: candidate.confidence,
+            prior_score: candidate.prior_score,
+            effective_confidence: effectiveConfidence,
+            prior_reason: candidate.prior_reason
           }
         });
         rejected += 1;
@@ -198,10 +213,12 @@ export async function runRelationshipAdjudication(
           `,
           [
             exactMatch.id,
-            candidate.confidence,
+            effectiveConfidence,
             JSON.stringify({
               last_candidate_id: candidate.id,
-              last_reinforced_at: occurredAt
+              last_reinforced_at: occurredAt,
+              last_prior_score: candidate.prior_score,
+              last_effective_confidence: effectiveConfidence
             })
           ]
         );
@@ -215,7 +232,10 @@ export async function runRelationshipAdjudication(
           reason: "Reinforced existing active relationship edge.",
           metadata: {
             run_id: context.runId,
-            confidence: candidate.confidence
+            confidence: candidate.confidence,
+            prior_score: candidate.prior_score,
+            effective_confidence: effectiveConfidence,
+            prior_reason: candidate.prior_reason
           }
         });
         reinforced += 1;
@@ -261,12 +281,15 @@ export async function runRelationshipAdjudication(
           candidate.subject_entity_id,
           candidate.predicate,
           candidate.object_entity_id,
-          candidate.confidence,
+          effectiveConfidence,
           occurredAt,
           candidate.id,
           JSON.stringify({
             run_id: context.runId,
-            source_memory_id: candidate.source_memory_id
+            source_memory_id: candidate.source_memory_id,
+            prior_score: candidate.prior_score,
+            effective_confidence: effectiveConfidence,
+            prior_reason: candidate.prior_reason
           })
         ]
       );
@@ -303,6 +326,9 @@ export async function runRelationshipAdjudication(
         metadata: {
           run_id: context.runId,
           confidence: candidate.confidence,
+          prior_score: candidate.prior_score,
+          effective_confidence: effectiveConfidence,
+          prior_reason: candidate.prior_reason,
           superseded_count: activeConflicts.length
         }
       });

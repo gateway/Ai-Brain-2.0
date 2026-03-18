@@ -43,6 +43,22 @@ interface NarrativeEventDraft {
   readonly metadata: Record<string, unknown>;
 }
 
+interface EventClusterState {
+  readonly eventIndex: number;
+  readonly eventKind: string;
+  readonly primarySubjectEntityId?: string | null;
+  readonly primaryLocationEntityId?: string | null;
+  readonly orgProjectEntityIds: readonly string[];
+  readonly timeStart?: string;
+  readonly timeEnd?: string;
+  readonly timeGranularity: TimeGranularity;
+}
+
+interface PriorScore {
+  readonly score: number;
+  readonly reason: string;
+}
+
 interface StageNarrativeClaimsInput {
   readonly namespaceId: string;
   readonly artifactId: string;
@@ -607,6 +623,135 @@ function extractClaimsFromScene(
       }
     }
 
+    const explicitProjectStatusMatch = sentenceText.match(
+      /\b([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4})\s+status\s+is\s+(active|on hold|paused|blocked|archived|in progress)\b/iu
+    );
+    if (explicitProjectStatusMatch) {
+      const projectName = normalizeWhitespace(explicitProjectStatusMatch[1] ?? "");
+      const statusValue = normalizeWhitespace(explicitProjectStatusMatch[2] ?? "").toLowerCase();
+      if (projectName && statusValue) {
+        lastProject = projectName;
+        claims.push({
+          claimType: "project_status_changed",
+          subjectName: projectName,
+          subjectType: "project",
+          predicate: "project_status",
+          objectName: statusValue,
+          objectType: "concept",
+          confidence: 0.94,
+          status: "accepted",
+          metadata: {
+            project_key: normalizeName(projectName),
+            status_value: statusValue
+          }
+        });
+      }
+    }
+
+    const projectDeadlineMatch = sentenceText.match(
+      /\b([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4})\s+(?:deadline|launch)\s+(?:moved to|is)\s+([A-Z][a-z]+\s+\d{4}|\d{4}-\d{2}-\d{2})\b/iu
+    );
+    if (projectDeadlineMatch) {
+      const projectName = normalizeWhitespace(projectDeadlineMatch[1] ?? "");
+      const deadlineText = normalizeWhitespace(projectDeadlineMatch[2] ?? "");
+      if (projectName && deadlineText) {
+        lastProject = projectName;
+        claims.push({
+          claimType: "deadline_changed",
+          subjectName: projectName,
+          subjectType: "project",
+          predicate: "project_deadline",
+          objectName: deadlineText,
+          objectType: "concept",
+          confidence: 0.88,
+          status: "accepted",
+          metadata: {
+            project_key: normalizeName(projectName),
+            deadline_text: deadlineText
+          }
+        });
+      }
+    }
+
+    const projectTechMatch = sentenceText.match(
+      /\b([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4})\s+(?:uses|use|runs on|moved to|switched to)\s+(.+?)$/iu
+    );
+    if (projectTechMatch) {
+      const projectName = normalizeWhitespace(projectTechMatch[1] ?? "");
+      const summary = normalizeWhitespace(projectTechMatch[2] ?? "").replace(/[.]+$/u, "");
+      if (
+        projectName &&
+        summary &&
+        /\b(?:PostgreSQL|pgvector|BM25|ParadeDB|Next\.js|Node\.js|TypeScript|React|Tailwind|shadcn)\b/iu.test(summary)
+      ) {
+        lastProject = projectName;
+        claims.push({
+          claimType: "project_spec_changed",
+          subjectName: projectName,
+          subjectType: "project",
+          predicate: "project_focus",
+          objectName: summary,
+          objectType: "concept",
+          confidence: 0.82,
+          status: "accepted",
+          metadata: {
+            project_key: normalizeName(projectName),
+            spec_summary: summary
+          }
+        });
+      }
+    }
+
+    if (resolvedSelfName && lastProject) {
+      const roleMatch = sentenceText.match(/\bas\s+(?:the\s+)?([A-Za-z][A-Za-z0-9 /-]{1,60}?)(?:\s+just recently|\s+as well|\.|,|$)/iu);
+      const extractedRole = normalizeWhitespace(roleMatch?.[1] ?? "");
+      if (
+        extractedRole &&
+        /\b(?:cto|fractional cto|engineer|founder|owner|lead|designer|pm)\b/iu.test(extractedRole) &&
+        /\b(?:working|worked|hired|joined|as)\b/iu.test(sentenceText)
+      ) {
+        claims.push({
+          claimType: "role_assigned",
+          subjectName: resolvedSelfName,
+          subjectType: "self",
+          predicate: "project_role",
+          objectName: lastProject,
+          objectType: "project",
+          confidence: 0.84,
+          status: "accepted",
+          metadata: {
+            project_key: normalizeName(lastProject),
+            role: extractedRole
+          }
+        });
+      }
+    }
+
+    const explicitProjectRoleMatch = sentenceText.match(
+      /\b(?:I|We)\s+(?:joined|join|work(?:ing)?\s+on|am|are)\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4})\s+as\s+(?:the\s+)?([A-Za-z][A-Za-z0-9 /-]{1,60}?)(?:\.|,|$)/iu
+    );
+    if (resolvedSelfName && explicitProjectRoleMatch) {
+      const projectName = normalizeWhitespace(explicitProjectRoleMatch[1] ?? "");
+      const role = normalizeWhitespace(explicitProjectRoleMatch[2] ?? "");
+      if (projectName && role) {
+        lastProject = projectName;
+        claims.push({
+          claimType: "role_assigned",
+          subjectName: resolvedSelfName,
+          subjectType: "self",
+          predicate: "project_role",
+          objectName: projectName,
+          objectType: "project",
+          confidence: 0.9,
+          status: "accepted",
+          metadata: {
+            project_key: normalizeName(projectName),
+            role
+          }
+        });
+      }
+    }
+
     const livedPlacesMatch = sentenceText.match(/\b((?!(?:He|She|They)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+has\s+lived\s+in\s+([A-Z][A-Za-z]+)(?:\s+and\s+([A-Z][A-Za-z]+))?\b/u);
     if (livedPlacesMatch) {
       const person = resolvePersonName(livedPlacesMatch[1], aliasMap, resolvedSelfName, explicitPeople);
@@ -700,6 +845,10 @@ function inferEventKind(sceneText: string, claims: readonly ResolvedNarrativeCla
   if (
     predicates.has("works_at") ||
     predicates.has("works_with") ||
+    predicates.has("project_status") ||
+    predicates.has("project_deadline") ||
+    predicates.has("project_focus") ||
+    predicates.has("project_role") ||
     predicates.has("runs") ||
     /\b(?:cto|fractional cto|company|memoir engine|zoom|application)\b/u.test(lowered)
   ) {
@@ -719,7 +868,22 @@ function inferEventKind(sceneText: string, claims: readonly ResolvedNarrativeCla
 }
 
 function buildEventLabel(sceneText: string, claims: readonly ResolvedNarrativeClaim[]): string {
-  const predicatePriority = ["works_at", "works_with", "runs", "lives_in", "lived_in", "currently_in", "friend_of", "with", "hikes_with", "from"];
+  const predicatePriority = [
+    "project_status",
+    "project_deadline",
+    "project_focus",
+    "project_role",
+    "works_at",
+    "works_with",
+    "runs",
+    "lives_in",
+    "lived_in",
+    "currently_in",
+    "friend_of",
+    "with",
+    "hikes_with",
+    "from"
+  ];
   const acceptedClaims = claims.filter(
     (claim) => claim.status === "accepted" && claim.subjectName && claim.objectName && claim.predicate !== "self_name"
   );
@@ -765,9 +929,261 @@ function buildNarrativeEventDraft(scene: SceneRecord, claims: readonly ResolvedN
     metadata: {
       scene_kind: scene.sceneKind,
       accepted_claim_count: claims.filter((claim) => claim.status === "accepted").length,
-      total_claim_count: claims.length
+      total_claim_count: claims.length,
+      org_project_entity_ids: collectOrgProjectEntityIds(claims)
     }
   };
+}
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(1, Math.round(value * 1000) / 1000));
+}
+
+function predicateMatchesObjectType(
+  predicate: string,
+  objectType: EntityType | undefined,
+  metadata?: Record<string, unknown>
+): boolean {
+  if (predicate === "from" || predicate === "lives_in" || predicate === "lived_in" || predicate === "currently_in") {
+    return objectType === "place";
+  }
+
+  if (predicate === "works_at") {
+    return objectType === "org" || objectType === "project";
+  }
+
+  if (predicate === "runs") {
+    return objectType === "project" || objectType === "org";
+  }
+
+  if (predicate === "works_with" || predicate === "friend_of" || predicate === "with" || predicate === "hikes_with") {
+    return objectType === "person" || objectType === "self";
+  }
+
+  if (predicate === "project_status" || predicate === "project_deadline" || predicate === "project_focus") {
+    return typeof metadata?.project_key === "string";
+  }
+
+  return Boolean(objectType);
+}
+
+function computeClaimPrior(
+  claim: ResolvedNarrativeClaim,
+  scene: SceneRecord,
+  event: NarrativeEventDraft
+): PriorScore {
+  let score = 0.15;
+  const reasons: string[] = [];
+
+  if (claim.status === "accepted") {
+    score += 0.2;
+    reasons.push("accepted_claim");
+  } else if (claim.status === "pending") {
+    score += 0.05;
+    reasons.push("pending_claim");
+  } else {
+    score -= 0.15;
+    reasons.push("abstained_or_rejected");
+  }
+
+  if (claim.subjectEntityId) {
+    score += 0.15;
+    reasons.push("resolved_subject");
+  }
+
+  if (claim.objectEntityId || claim.objectName) {
+    score += 0.15;
+    reasons.push("resolved_or_explicit_object");
+  }
+
+  if (predicateMatchesObjectType(claim.predicate, claim.resolvedObjectType, claim.metadata)) {
+    score += 0.18;
+    reasons.push("predicate_role_compatible");
+  } else {
+    score -= 0.08;
+    reasons.push("predicate_role_weak");
+  }
+
+  if (scene.timeGranularity && scene.timeGranularity !== "unknown") {
+    score += 0.07;
+    reasons.push("scene_time_anchor");
+  }
+
+  if (event.timeGranularity !== "unknown") {
+    score += 0.05;
+    reasons.push("event_time_anchor");
+  }
+
+  if (claim.confidence >= 0.85) {
+    score += 0.1;
+    reasons.push("high_extractor_confidence");
+  }
+
+  if (!claim.subjectEntityId || (!claim.objectEntityId && !claim.objectName)) {
+    score -= 0.05;
+    reasons.push("partial_entity_resolution");
+  }
+
+  return {
+    score: clampScore(score),
+    reason: reasons.join(",")
+  };
+}
+
+function computeRelationshipPrior(
+  claim: ResolvedNarrativeClaim,
+  scene: SceneRecord,
+  event: NarrativeEventDraft,
+  mergedIntoCluster: boolean
+): PriorScore {
+  const claimPrior = computeClaimPrior(claim, scene, event);
+  let score = claimPrior.score * 0.7;
+  const reasons = [claimPrior.reason, "event_co_membership"];
+
+  if (mergedIntoCluster) {
+    score += 0.08;
+    reasons.push("cluster_continuity");
+  }
+
+  if (claim.subjectEntityId && claim.objectEntityId) {
+    score += 0.12;
+    reasons.push("resolved_edge_endpoints");
+  }
+
+  if (claim.resolvedSubjectType === "self" || claim.resolvedSubjectType === "person") {
+    score += 0.05;
+    reasons.push("human_subject");
+  }
+
+  if (scene.isRelativeTime && (scene.timeConfidence ?? 0) < 0.5) {
+    score -= 0.05;
+    reasons.push("weak_relative_time");
+  }
+
+  return {
+    score: clampScore(score),
+    reason: reasons.filter(Boolean).join(",")
+  };
+}
+
+function sameTimeBucket(left: NarrativeEventDraft, right: NarrativeEventDraft): boolean {
+  if (
+    left.timeGranularity === "unknown" ||
+    right.timeGranularity === "unknown" ||
+    !left.timeStart ||
+    !right.timeStart
+  ) {
+    return false;
+  }
+
+  if (left.timeGranularity === "year" && right.timeGranularity === "year") {
+    return left.timeStart.slice(0, 4) === right.timeStart.slice(0, 4);
+  }
+
+  if (left.timeGranularity === "month" && right.timeGranularity === "month") {
+    return left.timeStart.slice(0, 7) === right.timeStart.slice(0, 7);
+  }
+
+  if (left.timeGranularity === "day" && right.timeGranularity === "day") {
+    return left.timeStart.slice(0, 10) === right.timeStart.slice(0, 10);
+  }
+
+  return false;
+}
+
+function timesConflict(left: NarrativeEventDraft, right: NarrativeEventDraft): boolean {
+  if (!left.timeStart || !right.timeStart) {
+    return false;
+  }
+
+  if (left.timeGranularity === "unknown" || right.timeGranularity === "unknown") {
+    return false;
+  }
+
+  if (sameTimeBucket(left, right)) {
+    return false;
+  }
+
+  return !left.isRelativeTime && !right.isRelativeTime;
+}
+
+function collectOrgProjectEntityIds(claims: readonly ResolvedNarrativeClaim[]): string[] {
+  return unique(
+    claims
+      .filter(
+        (claim) =>
+          claim.status === "accepted" &&
+          claim.objectEntityId &&
+          (claim.resolvedObjectType === "org" || claim.resolvedObjectType === "project")
+      )
+      .map((claim) => claim.objectEntityId as string)
+  );
+}
+
+function buildClusterState(eventIndex: number, event: NarrativeEventDraft, claims: readonly ResolvedNarrativeClaim[]): EventClusterState {
+  return {
+    eventIndex,
+    eventKind: event.eventKind,
+    primarySubjectEntityId: event.primarySubjectEntityId ?? null,
+    primaryLocationEntityId: event.primaryLocationEntityId ?? null,
+    orgProjectEntityIds: collectOrgProjectEntityIds(claims),
+    timeStart: event.timeStart,
+    timeEnd: event.timeEnd,
+    timeGranularity: event.timeGranularity
+  };
+}
+
+function shouldMergeIntoCluster(cluster: EventClusterState | null, event: NarrativeEventDraft): boolean {
+  if (!cluster) {
+    return false;
+  }
+
+  if (cluster.eventKind !== event.eventKind) {
+    return false;
+  }
+
+  const syntheticClusterEvent: NarrativeEventDraft = {
+    eventKind: cluster.eventKind,
+    eventLabel: "",
+    timeStart: cluster.timeStart,
+    timeEnd: cluster.timeEnd,
+    timeGranularity: cluster.timeGranularity,
+    timeConfidence: 0.5,
+    isRelativeTime: cluster.timeGranularity === "relative_duration" || cluster.timeGranularity === "relative_recent",
+    primarySubjectEntityId: cluster.primarySubjectEntityId ?? null,
+    primaryLocationEntityId: cluster.primaryLocationEntityId ?? null,
+    metadata: {}
+  };
+
+  if (timesConflict(syntheticClusterEvent, event)) {
+    return false;
+  }
+
+  let anchorMatches = 0;
+
+  if (cluster.primarySubjectEntityId && event.primarySubjectEntityId && cluster.primarySubjectEntityId === event.primarySubjectEntityId) {
+    anchorMatches += 1;
+  }
+
+  if (cluster.primaryLocationEntityId && event.primaryLocationEntityId && cluster.primaryLocationEntityId === event.primaryLocationEntityId) {
+    anchorMatches += 1;
+  }
+
+  const eventOrgProjectIds = new Set<string>(
+    ((event.metadata.org_project_entity_ids as string[] | undefined) ?? []).filter(Boolean)
+  );
+
+  if (
+    cluster.orgProjectEntityIds.some((entityId) => eventOrgProjectIds.has(entityId))
+  ) {
+    anchorMatches += 1;
+  }
+
+  if (sameTimeBucket(syntheticClusterEvent, event)) {
+    anchorMatches += 1;
+  }
+
+  return anchorMatches >= 2;
 }
 
 function eventMemberRoleForEntityType(entityType: EntityType | undefined, position: "subject" | "object"): string {
@@ -974,6 +1390,8 @@ export async function stageNarrativeClaims(
   let knownSelfName = selfName;
   let claimCount = 0;
   let relationshipCount = 0;
+  let activeCluster: EventClusterState | null = null;
+  let nextEventIndex = 0;
 
   for (const scene of input.scenes) {
     const sceneSource = input.sceneSources.find((entry) => entry.sceneIndex === scene.sceneIndex);
@@ -1101,14 +1519,34 @@ export async function stageNarrativeClaims(
     }
 
     const narrativeEvent = buildNarrativeEventDraft(scene, resolvedClaims);
+    const mergeIntoCluster = shouldMergeIntoCluster(activeCluster, narrativeEvent);
+    const eventIndex: number = mergeIntoCluster && activeCluster ? activeCluster.eventIndex : nextEventIndex++;
     const eventId = await upsertNarrativeEvent(client, {
       namespaceId: input.namespaceId,
       artifactId: input.artifactId,
       observationId: input.observationId,
-      eventIndex: scene.sceneIndex,
+      eventIndex,
       sourceSceneId: sceneId,
       event: narrativeEvent
     });
+
+    const nextClusterState = buildClusterState(eventIndex, narrativeEvent, resolvedClaims);
+    activeCluster =
+      mergeIntoCluster && activeCluster
+        ? {
+            eventIndex,
+            eventKind: nextClusterState.eventKind,
+            primarySubjectEntityId: nextClusterState.primarySubjectEntityId ?? activeCluster.primarySubjectEntityId,
+            primaryLocationEntityId: nextClusterState.primaryLocationEntityId ?? activeCluster.primaryLocationEntityId,
+            orgProjectEntityIds: unique([...activeCluster.orgProjectEntityIds, ...nextClusterState.orgProjectEntityIds]),
+            timeStart: nextClusterState.timeStart ?? activeCluster.timeStart,
+            timeEnd: nextClusterState.timeEnd ?? activeCluster.timeEnd,
+            timeGranularity:
+              nextClusterState.timeGranularity !== "unknown"
+                ? nextClusterState.timeGranularity
+                : activeCluster.timeGranularity
+          }
+        : nextClusterState;
 
     await client.query(
       `
@@ -1124,6 +1562,8 @@ export async function stageNarrativeClaims(
       const objectEntityId = claim.objectEntityId;
       const subjectType = claim.resolvedSubjectType;
       const objectType = claim.resolvedObjectType;
+
+      const claimPrior = computeClaimPrior(claim, scene, narrativeEvent);
 
       await client.query(
         `
@@ -1143,6 +1583,8 @@ export async function stageNarrativeClaims(
             object_entity_type,
             normalized_text,
             confidence,
+            prior_score,
+            prior_reason,
             status,
             occurred_at,
             time_expression_text,
@@ -1154,7 +1596,7 @@ export async function stageNarrativeClaims(
             extraction_method,
             metadata
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'deterministic_scene_claims', $24::jsonb)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, 'deterministic_scene_claims', $26::jsonb)
         `,
         [
           input.namespaceId,
@@ -1174,6 +1616,8 @@ export async function stageNarrativeClaims(
             [claim.subjectName ?? "", claim.predicate, claim.objectName ?? ""].filter(Boolean).join(" ")
           ),
           claim.confidence,
+          claimPrior.score,
+          claimPrior.reason,
           claim.status,
           scene.occurredAt,
           scene.timeExpressionText ?? null,
@@ -1182,7 +1626,13 @@ export async function stageNarrativeClaims(
           scene.timeGranularity ?? "unknown",
           scene.timeConfidence ?? 0.2,
           scene.isRelativeTime ?? false,
-          JSON.stringify(claim.metadata ?? {})
+          JSON.stringify({
+            ...(claim.metadata ?? {}),
+            prior_score: claimPrior.score,
+            prior_reason: claimPrior.reason,
+            source_event_id: eventId,
+            cluster_event_index: eventIndex
+          })
         ]
       );
       claimCount += 1;
@@ -1295,6 +1745,7 @@ export async function stageNarrativeClaims(
           claim.predicate
         )
       ) {
+        const relationshipPrior = computeRelationshipPrior(claim, scene, narrativeEvent, mergeIntoCluster);
         await client.query(
           `
             INSERT INTO relationship_candidates (
@@ -1307,14 +1758,18 @@ export async function stageNarrativeClaims(
               source_memory_id,
               source_chunk_id,
               confidence,
+              prior_score,
+              prior_reason,
               status,
               valid_from,
               metadata
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11::jsonb)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending', $12, $13::jsonb)
             ON CONFLICT (subject_entity_id, predicate, object_entity_id, source_memory_id, source_chunk_id)
             DO UPDATE SET
               confidence = GREATEST(relationship_candidates.confidence, EXCLUDED.confidence),
+              prior_score = GREATEST(relationship_candidates.prior_score, EXCLUDED.prior_score),
+              prior_reason = COALESCE(relationship_candidates.prior_reason, EXCLUDED.prior_reason),
               metadata = relationship_candidates.metadata || EXCLUDED.metadata
           `,
           [
@@ -1327,11 +1782,16 @@ export async function stageNarrativeClaims(
             sceneSource?.sourceMemoryIds[0] ?? null,
             sceneSource?.sourceChunkIds[0] ?? null,
             claim.confidence,
+            relationshipPrior.score,
+            relationshipPrior.reason,
             scene.occurredAt,
             JSON.stringify({
               extractor: "deterministic_scene_claims",
               claim_type: claim.claimType,
               source_event_id: eventId,
+              prior_score: relationshipPrior.score,
+              prior_reason: relationshipPrior.reason,
+              cluster_event_index: eventIndex,
               event_kind: narrativeEvent.eventKind,
               event_label: narrativeEvent.eventLabel,
               ...claim.metadata

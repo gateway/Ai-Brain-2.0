@@ -1,0 +1,38 @@
+{
+  "name": "project_state_and_spec",
+  "namespace_seed": "project_state_and_spec",
+  "files": [
+    {
+      "path": "01-update.md",
+      "source_type": "project_note",
+      "source_channel": "golden-story:project",
+      "captured_at": "2026-03-17T09:00:00Z"
+    },
+    {
+      "path": "02-update.md",
+      "source_type": "project_note",
+      "source_channel": "golden-story:project",
+      "captured_at": "2026-03-18T09:00:00Z"
+    }
+  ],
+  "queries": [
+    {
+      "name": "project_status_query",
+      "query": "current Project Atlas status",
+      "expect_top_types": ["procedural_memory"],
+      "expect_top_includes": ["on hold"]
+    }
+  ],
+  "expected": {
+    "entities_present": [
+      { "name": "Project Atlas", "type": "project" }
+    ],
+    "graph_edges_present": [],
+    "graph_edges_absent": [],
+    "procedural_states": [
+      { "state_type": "project_status", "state_key": "project_atlas", "field": "status", "equals": "on hold" },
+      { "state_type": "project_spec", "state_key": "project_atlas", "field": "summary", "equals": "PostgreSQL 18 and pgvector for retrieval" },
+      { "state_type": "project_role", "state_key": "project_atlas:steve", "field": "role", "equals": "CTO" }
+    ]
+  }
+}

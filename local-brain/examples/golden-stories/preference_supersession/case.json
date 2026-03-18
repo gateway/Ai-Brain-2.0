@@ -1,0 +1,35 @@
+{
+  "name": "preference_supersession",
+  "namespace_seed": "preference_supersession",
+  "files": [
+    {
+      "path": "01-note.md",
+      "source_type": "markdown_session",
+      "source_channel": "golden-story:personal",
+      "captured_at": "2026-01-01T12:00:00Z"
+    },
+    {
+      "path": "02-note.md",
+      "source_type": "markdown_session",
+      "source_channel": "golden-story:personal",
+      "captured_at": "2026-03-18T12:00:00Z"
+    }
+  ],
+  "queries": [
+    {
+      "name": "preference_query",
+      "query": "spicy food",
+      "expect_top_types": ["procedural_memory"],
+      "expect_top_includes": ["dislike"]
+    }
+  ],
+  "expected": {
+    "entities_present": [],
+    "graph_edges_present": [],
+    "graph_edges_absent": [],
+    "procedural_states": [
+      { "state_type": "preference", "state_key": "preference:spicy food", "field": "polarity", "equals": "dislike" },
+      { "state_type": "preference", "state_key": "preference:sweet food", "field": "polarity", "equals": "like" }
+    ]
+  }
+}

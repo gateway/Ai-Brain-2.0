@@ -16,6 +16,19 @@ interface CandidateRow {
   readonly occurred_at: string | null;
 }
 
+interface ClaimCandidateRow {
+  readonly candidate_id: string;
+  readonly namespace_id: string;
+  readonly claim_type: string;
+  readonly subject_text: string | null;
+  readonly predicate: string;
+  readonly object_text: string | null;
+  readonly confidence: number;
+  readonly occurred_at: string;
+  readonly metadata: Record<string, unknown>;
+  readonly created_at: string;
+}
+
 interface PreferenceStatement {
   readonly polarity: "like" | "dislike";
   readonly target: string;
@@ -47,6 +60,10 @@ function normalizePreferenceTarget(value: string): string {
 
 function buildCanonicalPreferenceKey(target: string): string {
   return `preference:${target}`;
+}
+
+function normalizeProjectKey(value: string): string {
+  return normalizeWhitespace(value).toLowerCase().replace(/[^\p{L}\p{N}\s:-]+/gu, "").replace(/\s+/gu, "_");
 }
 
 function extractPreferenceStatements(content: string): PreferenceStatement[] {
@@ -149,6 +166,113 @@ async function markCandidate(
       options.normalizedValue ? JSON.stringify(options.normalizedValue) : null
     ]
   );
+}
+
+async function markClaimCandidate(
+  client: PoolClient,
+  options: {
+    readonly candidateId: string;
+    readonly status: "accepted" | "rejected" | "promoted";
+    readonly reason: string;
+  }
+): Promise<void> {
+  await client.query(
+    `
+      UPDATE claim_candidates
+      SET
+        status = $2,
+        metadata = claim_candidates.metadata || $3::jsonb
+      WHERE id = $1
+    `,
+    [
+      options.candidateId,
+      options.status,
+      JSON.stringify({
+        promotion_reason: options.reason,
+        promoted_at: new Date().toISOString()
+      })
+    ]
+  );
+}
+
+async function upsertProceduralState(
+  client: PoolClient,
+  options: {
+    readonly namespaceId: string;
+    readonly stateType: string;
+    readonly stateKey: string;
+    readonly stateValue: Record<string, unknown>;
+    readonly occurredAt: string;
+    readonly metadata: Record<string, unknown>;
+  }
+): Promise<{ promoted: boolean; superseded: boolean }> {
+  const activeState = await client.query<{ id: string; version: number; state_value: Record<string, unknown> }>(
+    `
+      SELECT id, version, state_value
+      FROM procedural_memory
+      WHERE namespace_id = $1
+        AND state_type = $2
+        AND state_key = $3
+        AND valid_until IS NULL
+      ORDER BY version DESC
+      LIMIT 1
+    `,
+    [options.namespaceId, options.stateType, options.stateKey]
+  );
+
+  const activeRow = activeState.rows[0];
+  if (activeRow && JSON.stringify(activeRow.state_value) === JSON.stringify(options.stateValue)) {
+    await client.query(
+      `
+        UPDATE procedural_memory
+        SET metadata = procedural_memory.metadata || $2::jsonb
+        WHERE id = $1
+      `,
+      [activeRow.id, JSON.stringify(options.metadata)]
+    );
+    return { promoted: false, superseded: false };
+  }
+
+  if (activeRow) {
+    await client.query(
+      `
+        UPDATE procedural_memory
+        SET valid_until = $2
+        WHERE id = $1
+      `,
+      [activeRow.id, options.occurredAt]
+    );
+  }
+
+  await client.query(
+    `
+      INSERT INTO procedural_memory (
+        namespace_id,
+        state_type,
+        state_key,
+        state_value,
+        version,
+        updated_at,
+        valid_from,
+        valid_until,
+        supersedes_id,
+        metadata
+      )
+      VALUES ($1, $2, $3, $4::jsonb, $5, $6, $6, NULL, $7, $8::jsonb)
+    `,
+    [
+      options.namespaceId,
+      options.stateType,
+      options.stateKey,
+      JSON.stringify(options.stateValue),
+      (activeRow?.version ?? 0) + 1,
+      options.occurredAt,
+      activeRow?.id ?? null,
+      JSON.stringify(options.metadata)
+    ]
+  );
+
+  return { promoted: true, superseded: Boolean(activeRow) };
 }
 
 async function upsertProceduralPreference(
@@ -400,6 +524,129 @@ async function promotePreferenceCandidate(
   };
 }
 
+async function promoteProjectClaimCandidate(
+  client: PoolClient,
+  candidate: ClaimCandidateRow
+): Promise<{
+  readonly decisions: ConsolidationDecision[];
+  readonly promotedCount: number;
+  readonly supersededCount: number;
+}> {
+  const decisions: ConsolidationDecision[] = [];
+  const occurredAt = candidate.occurred_at ?? candidate.created_at;
+  const metadata = candidate.metadata ?? {};
+  const projectName =
+    typeof metadata.project_name === "string"
+      ? metadata.project_name
+      : candidate.claim_type === "employment"
+        ? candidate.object_text
+        : candidate.predicate === "project_role"
+        ? candidate.object_text
+        : candidate.subject_text;
+  const projectKeyRaw =
+    typeof metadata.project_key === "string" && metadata.project_key
+      ? metadata.project_key
+      : projectName;
+
+  if (!projectName || !projectKeyRaw) {
+    await markClaimCandidate(client, {
+      candidateId: candidate.candidate_id,
+      status: "rejected",
+      reason: "Project claim missing project identity."
+    });
+    return {
+      decisions: [buildDecision("IGNORE", "Project claim missing project identity.", 0.2)],
+      promotedCount: 0,
+      supersededCount: 0
+    };
+  }
+
+  let stateType: string | null = null;
+  let stateKey = normalizeProjectKey(projectKeyRaw);
+  let stateValue: Record<string, unknown> | null = null;
+
+  if (candidate.claim_type === "project_status_changed" || candidate.predicate === "project_status") {
+    stateType = "project_status";
+    stateValue = {
+      project: projectName,
+      status: typeof metadata.status_value === "string" ? metadata.status_value : candidate.object_text
+    };
+  } else if (candidate.claim_type === "deadline_changed" || candidate.predicate === "project_deadline") {
+    stateType = "project_deadline";
+    stateValue = {
+      project: projectName,
+      deadline: typeof metadata.deadline_text === "string" ? metadata.deadline_text : candidate.object_text
+    };
+  } else if (candidate.claim_type === "project_spec_changed" || candidate.predicate === "project_focus") {
+    stateType = "project_spec";
+    stateValue = {
+      project: projectName,
+      summary: typeof metadata.spec_summary === "string" ? metadata.spec_summary : candidate.object_text
+    };
+  } else if (
+    candidate.claim_type === "role_assigned" ||
+    (candidate.claim_type === "employment" && typeof metadata.role === "string" && metadata.role)
+  ) {
+    const personName = candidate.subject_text;
+    const role = typeof metadata.role === "string" ? metadata.role : null;
+    if (personName && role) {
+      stateType = "project_role";
+      stateKey = `${normalizeProjectKey(projectKeyRaw)}:${normalizeProjectKey(personName)}`;
+      stateValue = {
+        project: projectName,
+        person: personName,
+        role
+      };
+    }
+  }
+
+  if (!stateType || !stateValue) {
+    await markClaimCandidate(client, {
+      candidateId: candidate.candidate_id,
+      status: "rejected",
+      reason: "No supported deterministic project promotion rule."
+    });
+    return {
+      decisions: [buildDecision("IGNORE", "No supported deterministic project promotion rule.", 0.2)],
+      promotedCount: 0,
+      supersededCount: 0
+    };
+  }
+
+  const result = await upsertProceduralState(client, {
+    namespaceId: candidate.namespace_id,
+    stateType,
+    stateKey,
+    stateValue,
+    occurredAt,
+    metadata: {
+      source: "claim_candidate_promotion",
+      claim_candidate_id: candidate.candidate_id,
+      claim_type: candidate.claim_type
+    }
+  });
+
+  await markClaimCandidate(client, {
+    candidateId: candidate.candidate_id,
+    status: "promoted",
+    reason: `Promoted ${candidate.claim_type} into ${stateType}.`
+  });
+
+  decisions.push(
+    buildDecision(
+      result.superseded ? "SUPERSEDE" : "ADD",
+      `Promoted ${candidate.claim_type} into ${stateType}.`,
+      Math.max(0.65, candidate.confidence)
+    )
+  );
+
+  return {
+    decisions,
+    promotedCount: result.promoted ? 1 : 0,
+    supersededCount: result.superseded ? 1 : 0
+  };
+}
+
 export async function runCandidateConsolidation(
   namespaceId: string,
   limit = 50
@@ -447,9 +694,40 @@ export async function runCandidateConsolidation(
       decisions.push(...result.decisions);
     }
 
+    const projectClaims = await client.query<ClaimCandidateRow>(
+      `
+        SELECT
+          cc.id AS candidate_id,
+          cc.namespace_id,
+          cc.claim_type,
+          cc.subject_text,
+          cc.predicate,
+          cc.object_text,
+          cc.confidence,
+          COALESCE(cc.occurred_at, cc.created_at) AS occurred_at,
+          cc.metadata,
+          cc.created_at
+        FROM claim_candidates cc
+        WHERE cc.namespace_id = $1
+          AND cc.status = 'accepted'
+          AND cc.claim_type IN ('employment', 'role_assigned', 'project_status_changed', 'deadline_changed', 'project_spec_changed')
+        ORDER BY COALESCE(cc.occurred_at, cc.created_at) ASC, cc.created_at ASC
+        LIMIT $2
+      `,
+      [namespaceId, Math.max(1, limit)]
+    );
+
+    for (const claim of projectClaims.rows) {
+      const result = await promoteProjectClaimCandidate(client, claim);
+      processedCandidates += 1;
+      promotedMemories += result.promotedCount;
+      supersededMemories += result.supersededCount;
+      decisions.push(...result.decisions);
+    }
+
     return {
       context,
-      scannedCandidates: candidates.rowCount ?? 0,
+      scannedCandidates: (candidates.rowCount ?? 0) + (projectClaims.rowCount ?? 0),
       processedCandidates,
       promotedMemories,
       supersededMemories,

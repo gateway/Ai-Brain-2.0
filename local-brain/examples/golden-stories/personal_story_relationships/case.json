@@ -1,0 +1,38 @@
+{
+  "name": "personal_story_relationships",
+  "namespace_seed": "personal_story_relationships",
+  "files": [
+    {
+      "path": "story.md",
+      "source_type": "markdown_session",
+      "source_channel": "golden-story:personal",
+      "captured_at": "2026-03-18T12:00:00Z"
+    }
+  ],
+  "queries": [
+    {
+      "name": "friends_query",
+      "query": "Who are my friends in Chiang Mai?",
+      "expect_top_types": ["episodic_memory", "temporal_nodes"],
+      "expect_top_includes": ["Chiang Mai", "Lauren"]
+    }
+  ],
+  "expected": {
+    "entities_present": [
+      { "name": "Steve", "type": "self" },
+      { "name": "Lauren", "type": "person" },
+      { "name": "Gumi", "type": "person" },
+      { "name": "Chiang Mai", "type": "place" },
+      { "name": "Two Way", "type": "project" }
+    ],
+    "entities_absent": ["I've", "We"],
+    "graph_edges_present": [
+      { "subject": "Steve", "predicate": "friend_of", "object": "Lauren" },
+      { "subject": "Steve", "predicate": "friend_of", "object": "Gumi" },
+      { "subject": "Steve", "predicate": "works_at", "object": "Two Way" }
+    ],
+    "graph_edges_absent": [
+      { "subject": "We", "predicate": "friend_of", "object": "Lauren" }
+    ]
+  }
+}

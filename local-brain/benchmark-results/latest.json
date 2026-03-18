@@ -1,60 +1,76 @@
 {
-  "generatedAt": "2026-03-18T06:47:21.525Z",
-  "namespaceId": "eval_1773816440953_7b0da10a",
-  "baselineEvalPassed": true,
-  "baselineEvalFailures": [],
+  "generatedAt": "2026-03-18T08:40:25.117Z",
+  "namespaceId": "eval_1773823224691_e2aa57fb",
+  "baselineEvalPassed": false,
+  "baselineEvalFailures": [
+    "ingest.fragments",
+    "relationships.japan",
+    "relationships.adjudication",
+    "temporal.descendant_support",
+    "temporal.layer_gating"
+  ],
   "cases": [
     {
       "name": "japan_exact_temporal",
       "provider": "fts",
-      "passed": true,
-      "resultCount": 3,
+      "passed": false,
+      "resultCount": 2,
       "effectiveLexicalProvider": "fts",
       "lexicalFallbackUsed": false,
       "topMemoryType": "temporal_nodes",
-      "topContent": "MONTH rollup Sun Jun 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Tue Jul 01 2025 00:00:00 GMT+0700 (Indochina Time). events=2. roles=import:2. top_entities=Ken:2, Kyoto:2, Sarah:2, Japan:1, Steve:1.",
-      "topOverlap": 1,
-      "approxTokens": 73,
-      "failureReasons": []
+      "topContent": "YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.",
+      "topOverlap": 0.9992009132420091,
+      "approxTokens": 53,
+      "failureReasons": [
+        "top result missing term: Japan",
+        "top result missing term: Sarah"
+      ]
     },
     {
       "name": "japan_exact_temporal",
       "provider": "bm25",
-      "passed": true,
+      "passed": false,
       "resultCount": 3,
       "effectiveLexicalProvider": "bm25",
       "lexicalFallbackUsed": false,
       "topMemoryType": "temporal_nodes",
-      "topContent": "YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=Ken:2, Kyoto:2, Sarah:2, Japan:1, Steve:1.",
+      "topContent": "YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.",
       "topOverlap": 0.9992009132420091,
-      "approxTokens": 72,
-      "failureReasons": []
+      "approxTokens": 68,
+      "failureReasons": [
+        "top result missing term: Japan",
+        "top result missing term: Sarah"
+      ]
     },
     {
       "name": "japan_temporal_natural_language",
       "provider": "fts",
-      "passed": true,
-      "resultCount": 4,
+      "passed": false,
+      "resultCount": 3,
       "effectiveLexicalProvider": "fts",
       "lexicalFallbackUsed": false,
       "topMemoryType": "temporal_nodes",
-      "topContent": "MONTH rollup Sun Jun 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Tue Jul 01 2025 00:00:00 GMT+0700 (Indochina Time). events=2. roles=import:2. top_entities=Ken:2, Kyoto:2, Sarah:2, Japan:1, Steve:1.",
-      "topOverlap": 1,
-      "approxTokens": 85,
-      "failureReasons": []
+      "topContent": "YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.",
+      "topOverlap": 0.9992009132420091,
+      "approxTokens": 65,
+      "failureReasons": [
+        "top result missing term: Japan"
+      ]
     },
     {
       "name": "japan_temporal_natural_language",
       "provider": "bm25",
-      "passed": true,
+      "passed": false,
       "resultCount": 3,
       "effectiveLexicalProvider": "bm25",
       "lexicalFallbackUsed": false,
       "topMemoryType": "temporal_nodes",
-      "topContent": "YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=Ken:2, Kyoto:2, Sarah:2, Japan:1, Steve:1.",
+      "topContent": "YEAR rollup Wed Jan 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time). events=4. roles=import:4. top_entities=none.",
       "topOverlap": 0.9992009132420091,
-      "approxTokens": 69,
-      "failureReasons": []
+      "approxTokens": 65,
+      "failureReasons": [
+        "top result missing term: Japan"
+      ]
     },
     {
       "name": "relationship_context_kyoto",
@@ -90,7 +106,7 @@
       "topMemoryType": "episodic_memory",
       "topContent": "On March 12 2025 the redesign notes focused on the dashboard timeline UX and the relationship graph layout for the AI brain.",
       "topOverlap": 1,
-      "approxTokens": 48,
+      "approxTokens": 44,
       "failureReasons": []
     },
     {
@@ -103,7 +119,7 @@
       "topMemoryType": "episodic_memory",
       "topContent": "On March 12 2025 the redesign notes focused on the dashboard timeline UX and the relationship graph layout for the AI brain.",
       "topOverlap": 1,
-      "approxTokens": 48,
+      "approxTokens": 44,
       "failureReasons": []
     },
     {
@@ -138,7 +154,7 @@
       "effectiveLexicalProvider": "fts",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cffb2-e901-7b43-93d6-8c4c6bb7c468\", \"semantic_memory_id\": \"019cffb2-e977-7e82-beae-dba73aa21748\"}",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019d001a-6bb2-7073-b10f-5265f7ad2abd\", \"semantic_memory_id\": \"019d001a-6c06-7d60-86a8-bc5824e89744\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -150,7 +166,7 @@
       "effectiveLexicalProvider": "bm25",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cffb2-e901-7b43-93d6-8c4c6bb7c468\", \"semantic_memory_id\": \"019cffb2-e977-7e82-beae-dba73aa21748\"}",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019d001a-6bb2-7073-b10f-5265f7ad2abd\", \"semantic_memory_id\": \"019d001a-6c06-7d60-86a8-bc5824e89744\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -162,7 +178,7 @@
       "effectiveLexicalProvider": "fts",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cffb2-e901-7b43-93d6-8c4c6bb7c468\", \"semantic_memory_id\": \"019cffb2-e979-7e16-9d4f-a53444cec631\"}",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019d001a-6bb2-7073-b10f-5265f7ad2abd\", \"semantic_memory_id\": \"019d001a-6c08-7cc2-a8ac-5d2cfcbb049f\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -174,7 +190,7 @@
       "effectiveLexicalProvider": "bm25",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cffb2-e901-7b43-93d6-8c4c6bb7c468\", \"semantic_memory_id\": \"019cffb2-e979-7e16-9d4f-a53444cec631\"}",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019d001a-6bb2-7073-b10f-5265f7ad2abd\", \"semantic_memory_id\": \"019d001a-6c08-7cc2-a8ac-5d2cfcbb049f\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -346,12 +362,12 @@
     }
   ],
   "summary": {
-    "ftsPassed": 14,
-    "bm25Passed": 14,
+    "ftsPassed": 12,
+    "bm25Passed": 12,
     "totalCases": 14,
-    "bm25TokenDelta": -17,
+    "bm25TokenDelta": 15,
     "bm25FallbackCases": 0,
-    "recommendation": "candidate_for_default",
-    "reason": "BM25 matched or exceeded FTS across the expanded lexical stress suite without increasing token load or triggering fallback."
+    "recommendation": "keep_feature_gated",
+    "reason": "Keep BM25 behind a flag until it clears the expanded lexical stress suite, baseline eval remains clean, and BM25 fallback frequency reaches zero."
   }
 }
