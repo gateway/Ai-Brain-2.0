@@ -1,0 +1,11 @@
+/.venv-brain/
+/.venv-brain-py39-backup/
+/.venv-notebooklm/
+/.notebooklm/
+/notebooklm-py/
+/external/
+/artifacts/
+/local-brain/dist/
+/local-brain/node_modules/
+/local-brain/eval-results/
+/local-brain/producer-inbox/

@@ -1,0 +1,13 @@
+{
+  "event_id": "Ev-2026-03-17-001",
+  "event_time": "2026-03-17T22:10:00Z",
+  "event": {
+    "type": "message",
+    "channel": "C-TRAVEL",
+    "user": "U-STEVE",
+    "username": "steve",
+    "text": "In June 2025 I was in Kyoto with Sarah and Ken for the AI retreat.",
+    "ts": "2026-03-17T22:10:00Z"
+  }
+}
+

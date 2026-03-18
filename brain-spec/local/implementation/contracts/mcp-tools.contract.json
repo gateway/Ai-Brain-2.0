@@ -1,0 +1,133 @@
+{
+  "name": "local-brain-mcp-tools",
+  "version": "0.1.0",
+  "tools": [
+    {
+      "name": "memory.search",
+      "input": {
+        "required": [
+          "query",
+          "namespace_id"
+        ],
+        "optional": [
+          "time_start",
+          "time_end",
+          "limit"
+        ]
+      },
+      "output": [
+        "memory_id",
+        "memory_type",
+        "content",
+        "score",
+        "artifact_id",
+        "occurred_at",
+        "namespace_id",
+        "provenance"
+      ]
+    },
+    {
+      "name": "memory.timeline",
+      "input": {
+        "required": [
+          "namespace_id",
+          "time_start",
+          "time_end"
+        ],
+        "optional": [
+          "limit"
+        ]
+      },
+      "output": [
+        "memory_id",
+        "memory_type",
+        "content",
+        "occurred_at",
+        "artifact_id",
+        "provenance"
+      ]
+    },
+    {
+      "name": "memory.get_artifact",
+      "input": {
+        "required": [
+          "artifact_id"
+        ],
+        "optional": []
+      },
+      "output": [
+        "artifact_id",
+        "uri",
+        "mime_type",
+        "metadata"
+      ]
+    },
+    {
+      "name": "memory.get_relationships",
+      "input": {
+        "required": [
+          "entity_name",
+          "namespace_id"
+        ],
+        "optional": [
+          "predicate",
+          "time_start",
+          "time_end"
+        ]
+      },
+      "output": [
+        "subject",
+        "predicate",
+        "object",
+        "strength",
+        "valid_from",
+        "valid_until",
+        "support_count"
+      ]
+    },
+    {
+      "name": "memory.save_candidate",
+      "input": {
+        "required": [
+          "namespace_id",
+          "content",
+          "candidate_type"
+        ],
+        "optional": [
+          "source_memory_id",
+          "confidence",
+          "metadata"
+        ]
+      },
+      "output": [
+        "candidate_id",
+        "status"
+      ]
+    },
+    {
+      "name": "memory.upsert_state",
+      "input": {
+        "required": [
+          "namespace_id",
+          "state_type",
+          "state_key",
+          "state_value"
+        ],
+        "optional": [
+          "metadata"
+        ]
+      },
+      "output": [
+        "state_id",
+        "version",
+        "updated_at"
+      ]
+    }
+  ],
+  "rules": [
+    "namespace scope must be explicit",
+    "responses must include provenance when available",
+    "tool outputs should be minimal sufficient context",
+    "cross-namespace reads must not be implicit"
+  ]
+}

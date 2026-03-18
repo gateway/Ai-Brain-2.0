@@ -1,0 +1,34 @@
+{
+  "name": "local-brain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "migrate": "npm run build && node dist/cli/migrate.js",
+    "ingest:file": "npm run build && node dist/cli/ingest-file.js",
+    "ingest:webhook": "npm run build && node dist/cli/ingest-webhook.js",
+    "derive:attach-text": "npm run build && node dist/cli/derive-attach-text.js",
+    "reconcile:dir": "npm run build && node dist/cli/reconcile-dir.js",
+    "search": "npm run build && node dist/cli/search.js",
+    "timeline": "npm run build && node dist/cli/timeline.js",
+    "relationships": "npm run build && node dist/cli/relationships.js",
+    "consolidate": "npm run build && node dist/cli/consolidate.js",
+    "summarize:temporal": "npm run build && node dist/cli/summarize-temporal.js",
+    "adjudicate:relationships": "npm run build && node dist/cli/adjudicate-relationships.js",
+    "decay:semantic": "npm run build && node dist/cli/decay-semantic.js",
+    "provider:smoke": "npm run build && node dist/cli/provider-smoke.js",
+    "vector-sync:enqueue": "npm run build && node dist/cli/enqueue-vector-sync.js",
+    "eval": "npm run build && node dist/cli/eval.js",
+    "serve": "npm run build && node dist/cli/serve.js"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.18.0",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "pg": "^8.20.0"
+  }
+}

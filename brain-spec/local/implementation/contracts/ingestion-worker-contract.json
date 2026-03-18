@@ -1,0 +1,81 @@
+{
+  "name": "local-ingestion-worker-contract",
+  "version": "0.1.0",
+  "inputs": {
+    "required": [
+      "source_type",
+      "namespace_id",
+      "captured_at"
+    ],
+    "optional": [
+      "input_uri",
+      "raw_text",
+      "binary_path",
+      "source_channel",
+      "metadata"
+    ]
+  },
+  "supported_source_types": [
+    "markdown",
+    "text",
+    "audio",
+    "transcript",
+    "pdf",
+    "image",
+    "project_note",
+    "chat_turn"
+  ],
+  "outputs": {
+    "artifact": [
+      "artifact_id",
+      "uri",
+      "checksum_sha256",
+      "mime_type",
+      "namespace_id"
+    ],
+    "fragments": [
+      "fragment_index",
+      "text",
+      "char_start",
+      "char_end",
+      "speaker",
+      "occurred_at",
+      "importance_score",
+      "tags"
+    ],
+    "writes": [
+      "episodic_memory",
+      "memory_candidates"
+    ]
+  },
+  "provenance_fields": [
+    "artifact_id",
+    "source_chunk_id",
+    "source_offset",
+    "source_channel",
+    "metadata"
+  ],
+  "embedding_request": {
+    "required": [
+      "fragment_id",
+      "text",
+      "provider",
+      "model"
+    ],
+    "response": [
+      "embedding",
+      "dimension",
+      "provider_metadata"
+    ]
+  },
+  "idempotency": {
+    "dedupe_key": "namespace_id + checksum_sha256",
+    "rule": "retries must not create duplicate artifact rows or duplicate fragment writes"
+  },
+  "failure_handling": {
+    "rule": "preserve raw artifact first",
+    "partial_success": true,
+    "retry_strategy": "exponential_backoff",
+    "dead_letter_required": true
+  }
+}

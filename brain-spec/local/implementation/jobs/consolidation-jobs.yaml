@@ -1,0 +1,63 @@
+jobs:
+  - name: candidate_consolidation
+    purpose: adjudicate pending memory candidates against existing semantic and procedural memory
+    trigger: session_end_or_short_interval
+    inputs:
+      - memory_candidates
+      - semantic_memory
+      - procedural_memory
+    actions:
+      - ADD
+      - UPDATE
+      - SUPERSEDE
+      - IGNORE
+    outputs:
+      - semantic_memory_updates
+      - procedural_memory_updates
+      - supersession_links
+      - consolidation_runs_log
+
+  - name: daily_summary
+    purpose: generate day-level temporal nodes
+    trigger: daily
+    inputs:
+      - episodic_memory
+      - entity_relationships
+    outputs:
+      - temporal_nodes
+      - temporal_node_members
+
+  - name: weekly_summary
+    purpose: roll daily nodes into weekly patterns
+    trigger: weekly
+    inputs:
+      - temporal_nodes
+      - semantic_memory
+    outputs:
+      - temporal_nodes
+      - temporal_node_members
+
+  - name: monthly_profile_refresh
+    purpose: maintain longer-horizon summaries and profile nodes
+    trigger: monthly
+    inputs:
+      - temporal_nodes
+      - semantic_memory
+      - procedural_memory
+    outputs:
+      - temporal_nodes
+      - semantic_memory_updates
+
+  - name: semantic_decay
+    purpose: demote or archive low-value derived memory while preserving anchors and evidence
+    trigger: daily
+    inputs:
+      - semantic_memory
+      - semantic_cache
+    rules:
+      - anchors_are_exempt
+      - active_truth_is_not_deleted
+      - raw_artifacts_are_not_touched
+    outputs:
+      - semantic_memory_updates
+      - consolidation_runs_log
