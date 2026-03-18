@@ -2,11 +2,15 @@
 
 ## 2026-03-18
 
+- Improved the TMT recall planner to infer year, month, and day-granularity temporal windows from queries before retrieval, increasing temporal grounding without changing the retrieval service contract.
+- Added parent-linked `temporal_nodes` depth metadata and ancestor expansion so temporal queries now retrieve real TMT-style context instead of only flat summaries.
+- Extended deterministic temporal rollups to support `year` nodes in addition to `day` / `week` / `month`.
 - Added a feature-gated ParadeDB BM25 lexical branch with `BRAIN_LEXICAL_PROVIDER=bm25`, keeping native PostgreSQL FTS as the safe fallback/default path.
 - Added BM25 indexes for `episodic_memory`, `semantic_memory`, `memory_candidates`, `artifact_derivations`, and `temporal_nodes`.
 - Tightened BM25 query behavior to require must-match lexical terms instead of broad default query-string matching, fixing abstention and exact-term drift.
 - Kept `procedural_memory` on an FTS bridge during BM25 mode after verifying that active-truth state lookups were more reliable that way on the current schema/data.
-- Added a reproducible lexical benchmark harness that compares FTS and BM25 on the seeded local brain and writes reports under `benchmark-results/`.
+- Added an expanded lexical benchmark harness that compares FTS and BM25 across 13 stress cases and writes reports under `benchmark-results/`.
+- Added a planner regression test for year/month/day temporal inference.
 - Added a local mock external AI provider so multimodal derivation and provider-backed PDF/image/audio flows can be tested without a real OCR/STT backend.
 - Verified provider-backed derivation end to end on a real local PDF artifact using the mock external provider and the `/derive/provider` route.
 - Added a durable `derivation_jobs` queue for OCR, transcription, caption, summary, text, and embedding backfills so multimodal work can be deferred safely without a live provider.

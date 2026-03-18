@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { queryRows } from "../db/client.js";
 import { attachTextDerivation } from "../derivations/service.js";
@@ -42,6 +43,7 @@ interface EvalReport {
     readonly hybridVectorCandidateCount: number;
     readonly adjudicatedRelationshipCount: number;
     readonly temporalNodeCount: number;
+    readonly temporalLinkedNodeCount: number;
     readonly semanticDecayEventCount: number;
     readonly episodicTimelineCount: number;
   };
@@ -64,7 +66,7 @@ function defaultWebhookSampleFile(): string {
 }
 
 function buildNamespaceId(): string {
-  return `eval_${Date.now()}`;
+  return `eval_${Date.now()}_${randomUUID().slice(0, 8)}`;
 }
 
 function approxTokenCount(texts: readonly string[]): number {
@@ -144,9 +146,24 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
     acceptThreshold: 0.6,
     rejectThreshold: 0.4
   });
-  const temporalSummary = await runTemporalSummaryScaffold(namespaceId, {
+  const temporalDaySummary = await runTemporalSummaryScaffold(namespaceId, {
+    layer: "day",
+    lookbackDays: 120,
+    maxMembersPerNode: 500
+  });
+  const temporalWeekSummary = await runTemporalSummaryScaffold(namespaceId, {
     layer: "week",
     lookbackDays: 120,
+    maxMembersPerNode: 500
+  });
+  const temporalMonthSummary = await runTemporalSummaryScaffold(namespaceId, {
+    layer: "month",
+    lookbackDays: 400,
+    maxMembersPerNode: 500
+  });
+  const temporalYearSummary = await runTemporalSummaryScaffold(namespaceId, {
+    layer: "year",
+    lookbackDays: 800,
     maxMembersPerNode: 500
   });
   const spicySearch = await searchMemory({
@@ -176,6 +193,11 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
     namespaceId,
     query: "Kyoto Sarah Ken AI retreat",
     limit: 5
+  });
+  const japanTemporalContext = await searchMemory({
+    namespaceId,
+    query: "What was I doing in Japan in 2025?",
+    limit: 6
   });
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "local-brain-eval-"));
   const imagePath = path.join(tempDir, "pixel.png");
@@ -329,6 +351,15 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
     `,
     [namespaceId]
   );
+  const [temporalLinkedNodeCountRow] = await queryRows<{ count: string }>(
+    `
+      SELECT count(*)::text AS count
+      FROM temporal_nodes
+      WHERE namespace_id = $1
+        AND parent_id IS NOT NULL
+    `,
+    [namespaceId]
+  );
   const [semanticDecayCountRow] = await queryRows<{ count: string }>(
     `
       SELECT count(*)::text AS count
@@ -402,8 +433,20 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
     ),
     assert(
       "temporal.weekly_summary",
-      temporalSummary.upsertedNodes >= 1 && Number(temporalNodeCountRow?.count ?? "0") >= 1,
-      `Expected weekly temporal summary nodes, got upserted=${temporalSummary.upsertedNodes}, stored=${temporalNodeCountRow?.count ?? "0"}.`
+      temporalWeekSummary.upsertedNodes >= 1 && Number(temporalNodeCountRow?.count ?? "0") >= 3,
+      `Expected multi-layer temporal summary nodes, got day=${temporalDaySummary.upsertedNodes}, week=${temporalWeekSummary.upsertedNodes}, month=${temporalMonthSummary.upsertedNodes}, year=${temporalYearSummary.upsertedNodes}, stored=${temporalNodeCountRow?.count ?? "0"}.`
+    ),
+    assert(
+      "temporal.hierarchy_links",
+      Number(temporalLinkedNodeCountRow?.count ?? "0") >= 1,
+      `Expected parent-linked temporal nodes, got linked=${temporalLinkedNodeCountRow?.count ?? "0"}.`
+    ),
+    assert(
+      "temporal.ancestor_context",
+      japanTemporalContext.results.some(
+        (result) => result.memoryType === "temporal_nodes" && typeof result.provenance.tier === "string"
+      ),
+      "Expected temporal recall to include temporal summary or ancestor context for a Japan 2025 query."
     ),
     assert(
       "timescale.timeline_parity",
@@ -507,6 +550,7 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
       hybridVectorCandidateCount: vectorOnlySearch.meta.vectorCandidateCount,
       adjudicatedRelationshipCount: Number(relationshipMemoryCountRow?.count ?? "0"),
       temporalNodeCount: Number(temporalNodeCountRow?.count ?? "0"),
+      temporalLinkedNodeCount: Number(temporalLinkedNodeCountRow?.count ?? "0"),
       semanticDecayEventCount: Number(semanticDecayCountRow?.count ?? "0"),
       episodicTimelineCount: Number(episodicTimelineCountRow?.count ?? "0")
     }
@@ -548,6 +592,7 @@ export async function writeEvalReport(report: EvalReport): Promise<{
     `- hybrid_vector_candidate_count: ${report.metrics.hybridVectorCandidateCount}`,
     `- adjudicated_relationship_count: ${report.metrics.adjudicatedRelationshipCount}`,
     `- temporal_node_count: ${report.metrics.temporalNodeCount}`,
+    `- temporal_linked_node_count: ${report.metrics.temporalLinkedNodeCount}`,
     `- semantic_decay_event_count: ${report.metrics.semanticDecayEventCount}`,
     `- episodic_timeline_count: ${report.metrics.episodicTimelineCount}`
   ].join("\n");

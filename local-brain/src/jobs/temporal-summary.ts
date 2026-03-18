@@ -3,7 +3,7 @@ import type { PoolClient } from "pg";
 import { withTransaction } from "../db/client.js";
 import type { JobRunContext } from "./types.js";
 
-export type TemporalLayer = "day" | "week" | "month";
+export type TemporalLayer = "day" | "week" | "month" | "year";
 
 interface TemporalBucketRow {
   readonly bucket_start: string;
@@ -38,7 +38,10 @@ function intervalForLayer(layer: TemporalLayer): string {
   if (layer === "week") {
     return "1 week";
   }
-  return "1 month";
+  if (layer === "month") {
+    return "1 month";
+  }
+  return "1 year";
 }
 
 function buildBucketExpression(layer: TemporalLayer): string {
@@ -48,7 +51,72 @@ function buildBucketExpression(layer: TemporalLayer): string {
   if (layer === "week") {
     return "date_trunc('week', et.occurred_at)";
   }
-  return "date_trunc('month', et.occurred_at)";
+  if (layer === "month") {
+    return "date_trunc('month', et.occurred_at)";
+  }
+  return "date_trunc('year', et.occurred_at)";
+}
+
+function depthForLayer(layer: TemporalLayer): number {
+  switch (layer) {
+    case "day":
+      return 2;
+    case "week":
+      return 3;
+    case "month":
+      return 4;
+    case "year":
+      return 5;
+    default:
+      return 0;
+  }
+}
+
+async function linkTemporalHierarchy(client: PoolClient, namespaceId: string): Promise<void> {
+  const linkSpecs: ReadonlyArray<{ readonly child: TemporalLayer; readonly parent: TemporalLayer }> = [
+    { child: "day", parent: "week" },
+    { child: "week", parent: "month" },
+    { child: "month", parent: "year" }
+  ];
+
+  for (const spec of linkSpecs) {
+    await client.query(
+      `
+        UPDATE temporal_nodes child
+        SET
+          parent_id = resolved.parent_id,
+          depth = resolved.child_depth
+        FROM (
+          SELECT
+            c.id AS child_id,
+            parent.id AS parent_id,
+            CASE c.layer
+              WHEN 'day' THEN 2
+              WHEN 'week' THEN 3
+              WHEN 'month' THEN 4
+              WHEN 'year' THEN 5
+              ELSE 0
+            END AS child_depth
+          FROM temporal_nodes c
+          JOIN LATERAL (
+            SELECT p.id
+            FROM temporal_nodes p
+            WHERE p.namespace_id = c.namespace_id
+              AND p.layer = $2
+              AND p.period_start <= c.period_start
+              AND p.period_end >= c.period_end
+            ORDER BY p.period_start DESC, p.period_end ASC
+            LIMIT 1
+          ) parent ON TRUE
+          WHERE c.namespace_id = $1
+            AND c.layer = $3
+        ) AS resolved
+        WHERE child.id = resolved.child_id
+          AND child.parent_id IS DISTINCT FROM resolved.parent_id
+      `,
+      [namespaceId, spec.parent, spec.child]
+    );
+  }
 }
 
 async function loadRoleCounts(
@@ -171,6 +239,7 @@ export async function runTemporalSummaryScaffold(
           INSERT INTO temporal_nodes (
             namespace_id,
             layer,
+            depth,
             period_start,
             period_end,
             summary_text,
@@ -180,9 +249,10 @@ export async function runTemporalSummaryScaffold(
             metadata,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, 1, 'deterministic_rollup', $7::jsonb, now())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, 1, 'deterministic_rollup', $8::jsonb, now())
           ON CONFLICT (namespace_id, layer, period_start, period_end, summary_version)
           DO UPDATE SET
+            depth = EXCLUDED.depth,
             summary_text = EXCLUDED.summary_text,
             source_count = EXCLUDED.source_count,
             generated_by = EXCLUDED.generated_by,
@@ -193,6 +263,7 @@ export async function runTemporalSummaryScaffold(
         [
           namespaceId,
           options.layer,
+          depthForLayer(options.layer),
           periodStart,
           periodEnd,
           summaryText,
@@ -255,6 +326,8 @@ export async function runTemporalSummaryScaffold(
 
       linkedMembers += insertedMembers.rowCount ?? 0;
     }
+
+    await linkTemporalHierarchy(client, namespaceId);
 
     return {
       context,

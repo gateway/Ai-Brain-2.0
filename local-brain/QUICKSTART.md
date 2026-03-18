@@ -16,7 +16,7 @@ This package currently provides:
 - timeline queries
 - deterministic preference supersession
 - deterministic relationship adjudication
-- deterministic temporal summary scaffolding (`day`/`week`/`month`)
+- deterministic temporal summary scaffolding (`day`/`week`/`month`/`year`)
 - deterministic semantic decay/forgetting pass
 - a simple HTTP runtime surface
 - a reproducible evaluation harness
@@ -70,9 +70,10 @@ BRAIN_LEXICAL_PROVIDER=bm25 npm run search -- "Japan 2025 Sarah" --namespace per
 
 Expected behavior:
 
-- same top episodic result as default FTS on the current benchmark set
+- same or better exact lexical precision than default FTS on the current benchmark set
 - no results for clearly unknown lexical probes
 - active-truth preference lookups still resolve cleanly
+- BM25 remains feature-gated until it clears the full expanded lexical suite
 
 Outputs:
 
@@ -251,7 +252,8 @@ npm run decay:semantic -- --namespace personal_refined2 --inactivity-hours 24 --
 - raw binary artifacts are stored, and the new derivation queue is the safe path for OCR/transcription/caption work when no live external service is connected
 - the current safe multimodal path is artifact registration plus queued derivation jobs, with embeddings handled as a second queued stage
 - relative-time resolution is still limited
-- time-bounded queries now infer year windows and include temporal summaries when useful, but explicit parent-child TMT links are still the next structural step
+- time-bounded queries now infer year/month/day windows and can pull parent-linked temporal ancestor context
+- the current expanded lexical suite passes `12/13` for both FTS and BM25; the remaining failure is a relationship-style exact query where `memory_candidate` still outranks the raw episodic leaf
 
 ## Live Producer Security
 

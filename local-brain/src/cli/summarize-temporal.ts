@@ -9,10 +9,10 @@ interface ParsedArgs {
 }
 
 function parseLayer(value: string): TemporalLayer {
-  if (value === "day" || value === "week" || value === "month") {
+  if (value === "day" || value === "week" || value === "month" || value === "year") {
     return value;
   }
-  throw new Error(`Invalid --layer value: ${value}. Expected day|week|month.`);
+  throw new Error(`Invalid --layer value: ${value}. Expected day|week|month|year.`);
 }
 
 function parseArgs(argv: string[]): ParsedArgs {

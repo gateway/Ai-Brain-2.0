@@ -352,6 +352,18 @@ function buildBm25MustClause(
   };
 }
 
+function proceduralLexicalDocument(): string {
+  return `
+    coalesce(state_type, '') || ' ' ||
+    coalesce(state_key, '') || ' ' ||
+    coalesce(state_value::text, '') || ' ' ||
+    CASE
+      WHEN valid_until IS NULL THEN 'current active latest authoritative'
+      ELSE 'historical inactive superseded'
+    END
+  `;
+}
+
 function lexicalBranchWeight(branch: string, planner: ReturnType<typeof planRecallQuery>): number {
   switch (branch) {
     case "episodic_memory":
@@ -391,6 +403,112 @@ function rankLexicalSources(
     }))
     .sort((left, right) => compareLexical(left, right, hasTimeWindow, temporalFocus))
     .slice(0, candidateLimit);
+}
+
+async function loadTemporalHierarchyRows(
+  namespaceId: string,
+  seedRows: readonly RankedSearchRow[],
+  candidateLimit: number,
+  timeStart: string | null,
+  timeEnd: string | null,
+  maxTemporalDepth: number
+): Promise<RankedSearchRow[]> {
+  const episodicIds = seedRows
+    .filter((row) => row.memory_type === "episodic_memory")
+    .map((row) => row.memory_id)
+    .slice(0, Math.min(candidateLimit, 12));
+  const temporalIds = seedRows
+    .filter((row) => row.memory_type === "temporal_nodes")
+    .map((row) => row.memory_id)
+    .slice(0, Math.min(candidateLimit, 12));
+
+  if (episodicIds.length === 0 && temporalIds.length === 0) {
+    return [];
+  }
+
+  const rows = await queryRows<SearchRow>(
+    `
+      WITH RECURSIVE seed_nodes AS (
+        SELECT DISTINCT tnm.temporal_node_id AS id
+        FROM temporal_node_members tnm
+        WHERE tnm.namespace_id = $1
+          AND coalesce(array_length($2::uuid[], 1), 0) > 0
+          AND tnm.source_memory_id = ANY($2::uuid[])
+
+        UNION
+
+        SELECT DISTINCT seed_id AS id
+        FROM unnest(coalesce($3::uuid[], ARRAY[]::uuid[])) AS seed_id
+      ),
+      ancestry AS (
+        SELECT
+          tn.id,
+          tn.parent_id,
+          tn.depth,
+          tn.layer,
+          tn.period_start,
+          tn.period_end,
+          tn.summary_text,
+          tn.namespace_id,
+          tn.source_count,
+          tn.generated_by,
+          tn.metadata,
+          0 AS hops
+        FROM temporal_nodes tn
+        JOIN seed_nodes sn ON sn.id = tn.id
+        WHERE tn.namespace_id = $1
+          AND tn.summary_text <> ''
+          AND ($4::timestamptz IS NULL OR tn.period_end >= $4::timestamptz)
+          AND ($5::timestamptz IS NULL OR tn.period_start <= $5::timestamptz)
+
+        UNION ALL
+
+        SELECT
+          parent.id,
+          parent.parent_id,
+          parent.depth,
+          parent.layer,
+          parent.period_start,
+          parent.period_end,
+          parent.summary_text,
+          parent.namespace_id,
+          parent.source_count,
+          parent.generated_by,
+          parent.metadata,
+          ancestry.hops + 1
+        FROM temporal_nodes parent
+        JOIN ancestry ON ancestry.parent_id = parent.id
+        WHERE parent.namespace_id = $1
+          AND ancestry.hops < $6
+      )
+      SELECT DISTINCT ON (id)
+        id AS memory_id,
+        'temporal_nodes'::text AS memory_type,
+        summary_text AS content,
+        ((depth + 1)::double precision / (25 + hops + 1)) AS raw_score,
+        NULL::uuid AS artifact_id,
+        period_end AS occurred_at,
+        namespace_id,
+        jsonb_build_object(
+          'tier', 'temporal_ancestor',
+          'layer', layer,
+          'period_start', period_start,
+          'period_end', period_end,
+          'depth', depth,
+          'hops', hops,
+          'parent_id', parent_id,
+          'source_count', source_count,
+          'generated_by', generated_by,
+          'metadata', metadata
+        ) AS provenance
+      FROM ancestry
+      ORDER BY id, hops ASC, depth DESC, period_end DESC
+      LIMIT $7
+    `,
+    [namespaceId, episodicIds, temporalIds, timeStart, timeEnd, Math.max(maxTemporalDepth, 1), candidateLimit]
+  );
+
+  return toRankedRows(rows).sort((left, right) => compareLexical(left, right, Boolean(timeStart || timeEnd), true));
 }
 
 async function loadFtsLexicalRows(
@@ -448,7 +566,7 @@ async function loadFtsLexicalRows(
           ts_rank(
             to_tsvector(
               'english',
-              coalesce(state_type, '') || ' ' || coalesce(state_key, '') || ' ' || coalesce(state_value::text, '')
+              ${proceduralLexicalDocument()}
             ),
             websearch_to_tsquery('english', $2)
           ) AS raw_score,
@@ -469,7 +587,7 @@ async function loadFtsLexicalRows(
           AND valid_until IS NULL
           AND to_tsvector(
                 'english',
-                coalesce(state_type, '') || ' ' || coalesce(state_key, '') || ' ' || coalesce(state_value::text, '')
+                ${proceduralLexicalDocument()}
               ) @@ websearch_to_tsquery('english', $2)
         ORDER BY raw_score DESC, updated_at DESC
         LIMIT $3
@@ -639,7 +757,7 @@ async function loadBm25LexicalRows(
           ts_rank(
             to_tsvector(
               'english',
-              coalesce(state_type, '') || ' ' || coalesce(state_key, '') || ' ' || coalesce(state_value::text, '')
+              ${proceduralLexicalDocument()}
             ),
             websearch_to_tsquery('english', $2)
           ) AS raw_score,
@@ -661,7 +779,7 @@ async function loadBm25LexicalRows(
           AND valid_until IS NULL
           AND to_tsvector(
                 'english',
-                coalesce(state_type, '') || ' ' || coalesce(state_key, '') || ' ' || coalesce(state_value::text, '')
+                ${proceduralLexicalDocument()}
               ) @@ websearch_to_tsquery('english', $2)
         ORDER BY raw_score DESC, updated_at DESC
         LIMIT $3
@@ -935,7 +1053,31 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       }
     })()
   ]);
-  const lexicalRows = lexicalResult.rows;
+  let lexicalRows = lexicalResult.rows;
+  if (planner.temporalFocus || hasTimeWindow) {
+    const ancestryRows = await loadTemporalHierarchyRows(
+      query.namespaceId,
+      lexicalRows,
+      candidateLimit,
+      timeStart,
+      timeEnd,
+      planner.maxTemporalDepth
+    );
+    if (ancestryRows.length > 0) {
+      const seen = new Set(lexicalRows.map((row) => resultKey(row)));
+      lexicalRows = [
+        ...lexicalRows,
+        ...ancestryRows.filter((row) => {
+          const key = resultKey(row);
+          if (seen.has(key)) {
+            return false;
+          }
+          seen.add(key);
+          return true;
+        })
+      ].slice(0, candidateLimit);
+    }
+  }
 
   let vectorRows: RankedSearchRow[] = [];
   if (queryEmbeddingResult.embedding) {

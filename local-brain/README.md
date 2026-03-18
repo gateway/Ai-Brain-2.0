@@ -18,7 +18,7 @@ Current working slice:
 - staged semantic/procedural candidate writes
 - entity and relationship staging
 - hybrid retrieval service with lexical fallback
-- small TMT planner helper with query classification and year hint expansion
+- small TMT planner helper with query classification plus year/month/day window expansion
 - preference supersession into semantic and procedural memory
 - timeline and relationship CLI queries
 - webhook producer ingestion (generic/slack/discord payload adapters)
@@ -31,7 +31,8 @@ Current working slice:
 - durable derivation job queue for OCR / transcription / caption / summary work
 - provider-backed derivation route (`POST /derive/provider`)
 - queue-first derivation route (`POST /derive/queue`)
-- deterministic temporal summary scaffolding (`day`/`week`/`month`)
+- deterministic temporal summary scaffolding (`day`/`week`/`month`/`year`)
+- parent-linked temporal nodes for the first real TMT ancestry chain
 - deterministic relationship adjudication into `relationship_memory`
 - deterministic semantic forgetting/decay loop with archival thresholds
 - feature-gated ParadeDB BM25 lexical branch with guarded fallback to native PostgreSQL FTS
@@ -177,9 +178,12 @@ Current retrieval behavior:
 - RRF fusion runs in the app today
 - if no embedding provider or query embedding is available, search degrades safely to lexical-only
 - time-bounded queries infer a temporal planning window and bias episodic plus temporal summaries ahead of flatter lexical hits
+- the planner now distinguishes year, month, and day-granularity temporal windows before retrieval
+- parent-linked `temporal_nodes` plus ancestor expansion now add real TMT-style context instead of only flat summary scans
 - time-windowed queries bias historical episodic evidence above speculative candidate rows
 - BM25 currently covers `episodic_memory`, `semantic_memory`, `memory_candidates`, `artifact_derivations`, and `temporal_nodes`
 - `procedural_memory` stays on an FTS bridge inside BM25 mode for now, because that path is still more trustworthy for active-truth preference/state lookups
+- the expanded lexical benchmark currently keeps BM25 feature-gated: `12/13` pass for both FTS and BM25, with one remaining relationship-style ranking issue where `memory_candidate` outranks the raw episodic leaf
 
 Example BM25 search:
 
@@ -221,6 +225,21 @@ Build deterministic temporal rollups:
 ```bash
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
 npm run summarize:temporal -- --namespace personal --layer day --lookback-days 30 --max-members 500
+npm run summarize:temporal -- --namespace personal --layer year --lookback-days 800 --max-members 500
+```
+
+Planner regression test:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run test:planner
+```
+
+Expanded lexical benchmark:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run benchmark:lexical
 ```
 
 Apply forgetting/decay on inactive non-anchor semantic memories:
@@ -388,12 +407,11 @@ curl -s -X POST http://127.0.0.1:8787/derive/provider \
 
 ## Deferred
 
-- ParadeDB / BM25-native indexing
 - SQL-first fused hybrid retrieval kernel
 - automatic OCR / caption / transcription jobs for binary artifacts
 - fully automated `pgai` vectorizer ownership beyond controlled sidecar evaluation
 - provider-backed multimodal derivation execution against a real external AI endpoint remains targeted first through the `external` adapter
 - signed Slack/Discord production deployments with allowlists, attachment auth, and retry hardening
-- ParadeDB BM25 remains the next lexical upgrade; today the honest branch is native PostgreSQL FTS plus vector RRF
+- ParadeDB BM25 remains feature-gated until it clears the expanded lexical suite and the remaining relationship-style ranking issue is resolved
 - LLM adjudication for relationship and conflict refinement
-- full parent-child TMT linkage and ancestor traversal
+- deeper TMT descent with per-level budgets, profile/session layers, and recall gating

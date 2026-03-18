@@ -14,6 +14,7 @@ export interface RecallQuery {
 
 export type RecallIntent = "simple" | "hybrid" | "complex";
 export type RecallBranchPreference = "lexical_first" | "episodic_then_temporal";
+export type TemporalQueryLayer = "session" | "day" | "week" | "month" | "year" | "profile";
 
 export interface RecallPlan {
   readonly intent: RecallIntent;
@@ -21,6 +22,8 @@ export interface RecallPlan {
   readonly inferredTimeStart?: string;
   readonly inferredTimeEnd?: string;
   readonly yearHints: readonly string[];
+  readonly targetLayers: readonly TemporalQueryLayer[];
+  readonly maxTemporalDepth: number;
   readonly branchPreference: RecallBranchPreference;
   readonly candidateLimitMultiplier: number;
   readonly episodicWeight: number;

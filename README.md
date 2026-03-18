@@ -47,6 +47,7 @@ Latest verified run log:
 - [MCP, temporal planner, and multimodal/vector-sync runtime proof](brain-spec/local/33-multimodal-vector-sync-runtime-log.md)
 - [ParadeDB BM25 rollout and benchmark notes](brain-spec/local/34-paradedb-bm25-run-log.md)
 - [Post-BM25 benchmark and mock multimodal proof](brain-spec/local/35-benchmark-and-multimodal-proof.md)
+- [Expanded lexical benchmark and TMT hardening](brain-spec/local/36-benchmark-and-tmt-hardening.md)
 
 ## Main Folders
 
@@ -73,6 +74,7 @@ Latest verified run log:
 
 - the default lexical branch is still native PostgreSQL full-text search
 - ParadeDB BM25 is now implemented behind a feature flag, but not promoted to the default yet
+- the expanded lexical suite now passes `12/13` for both FTS and BM25, so BM25 remains feature-gated until the remaining relationship-style ranking issue is resolved
 - the `procedural_memory` branch still uses native FTS inside BM25 mode because that path currently preserves active-truth lookups better on live data
 - the hybrid fusion kernel is still app-side, not the final SQL-first kernel
 - Timescale is implemented as a sidecar hypertable mirror for episodic time-scans, not as an in-place conversion of the authoritative `episodic_memory` table
@@ -82,6 +84,7 @@ Latest verified run log:
 - the `external` provider path is now testable locally with a mock server, but real OCR/STT/caption quality still depends on a real backend
 - provider adapters are wired, but live provider execution still requires API keys or a reachable external AI endpoint
 - relative-time understanding is still limited
+- TMT is stronger now through parent-linked temporal nodes and ancestor expansion, but it is still not a full best-effort hierarchical descent stack
 
 ## Next High-Value Moves
 
