@@ -85,9 +85,9 @@ export async function postJson<T>(
 
     throw new ProviderError({
       message: error instanceof Error ? error.message : "Provider request failed",
-      code: "PROVIDER_UNKNOWN",
+      code: "PROVIDER_UNAVAILABLE",
       provider,
-      retryable: false
+      retryable: true
     });
   } finally {
     clearTimeout(timer);

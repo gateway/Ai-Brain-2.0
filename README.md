@@ -39,6 +39,7 @@ Verified local runtime slice in [local-brain/README.md](local-brain/README.md):
 Latest verified run log:
 
 - [Timescale, pgvectorscale, pgai, and live producers run log](brain-spec/local/30-timescale-vectorscale-pgai-live-producers-run-log.md)
+- [Progress, runtime proof, and next slices](brain-spec/local/31-progress-and-next-slices.md)
 
 ## Main Folders
 
@@ -73,9 +74,8 @@ Latest verified run log:
 
 ## Next High-Value Moves
 
+- finish real OCR / transcription / caption workers against the external/local AI endpoint
+- implement the MCP server so assistants can actively use the brain
+- strengthen temporal/TMT retrieval behavior for long-horizon recall
 - move hybrid retrieval from transitional app-side RRF to a SQL-first fused kernel
-- benchmark DiskANN retrieval against larger local corpora
-- decide whether `pgai` vectorizers should own any table directly or remain a sidecar evaluation path
-- connect real Slack/Discord producers with secrets and channel allowlists
-- connect the external AI endpoint for derivation and embedding tasks
-- add OCR/transcription jobs so binary media becomes searchable without manual proxy text
+- benchmark BM25 / ParadeDB against the current lexical branch before switching

@@ -2,8 +2,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readConfig } from "../config.js";
 import { attachTextDerivation, deriveArtifactViaProvider } from "../derivations/service.js";
 import { ingestArtifact } from "../ingest/worker.js";
+import { enqueueDerivationJob } from "../jobs/derivation-queue.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
-import { ingestDiscordRelayRequest, ingestSlackEventsRequest } from "../producers/live.js";
+import { ProducerRequestError, ingestDiscordRelayRequest, ingestSlackEventsRequest } from "../producers/live.js";
 import { ingestWebhookPayload } from "../producers/webhook.js";
 import { getArtifactDetail, getRelationships, searchMemory, timelineMemory } from "../retrieval/service.js";
 
@@ -289,6 +290,28 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
     };
   }
 
+  if (request.method === "POST" && url.pathname === "/derive/queue") {
+    const body = await readJsonBody(request);
+    const result = await enqueueDerivationJob({
+      namespaceId: requireString(body.namespace_id, "namespace_id"),
+      artifactId: requireString(body.artifact_id, "artifact_id"),
+      artifactObservationId: optionalString(body.artifact_observation_id),
+      sourceChunkId: optionalString(body.source_chunk_id),
+      jobKind: optionalString(body.job_kind) as never,
+      modality: optionalString(body.modality) as never,
+      provider: optionalString(body.provider),
+      model: optionalString(body.model),
+      outputDimensionality: optionalNumber(body.output_dimensionality),
+      maxOutputTokens: optionalNumber(body.max_output_tokens),
+      metadata: typeof body.metadata === "object" && body.metadata ? (body.metadata as Record<string, unknown>) : {}
+    });
+
+    return {
+      statusCode: 200,
+      body: result
+    };
+  }
+
   return {
     statusCode: 404,
     body: {
@@ -304,8 +327,9 @@ export function startHttpServer(): void {
       const payload = await handleRequest(request);
       writeJson(response, payload);
     } catch (error) {
+      const statusCode = error instanceof ProducerRequestError ? error.statusCode : 400;
       writeJson(response, {
-        statusCode: 400,
+        statusCode,
         body: {
           error: error instanceof Error ? error.message : String(error)
         }

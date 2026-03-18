@@ -10,6 +10,8 @@
     "ingest:file": "npm run build && node dist/cli/ingest-file.js",
     "ingest:webhook": "npm run build && node dist/cli/ingest-webhook.js",
     "derive:attach-text": "npm run build && node dist/cli/derive-attach-text.js",
+    "derive:queue": "npm run build && node dist/cli/enqueue-derivation-job.js",
+    "derive:work": "npm run build && node dist/cli/process-derivation-jobs.js",
     "reconcile:dir": "npm run build && node dist/cli/reconcile-dir.js",
     "search": "npm run build && node dist/cli/search.js",
     "timeline": "npm run build && node dist/cli/timeline.js",

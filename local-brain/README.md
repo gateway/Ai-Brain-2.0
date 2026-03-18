@@ -27,7 +27,9 @@ Current working slice:
 - provider adapter scaffolding for a generic external AI endpoint
 - binary artifact registration for image / pdf / audio evidence
 - text-proxy derivations for searchable captions / OCR / manual extraction notes
+- durable derivation job queue for OCR / transcription / caption / summary work
 - provider-backed derivation route (`POST /derive/provider`)
+- queue-first derivation route (`POST /derive/queue`)
 - deterministic temporal summary scaffolding (`day`/`week`/`month`)
 - deterministic relationship adjudication into `relationship_memory`
 - deterministic semantic forgetting/decay loop with archival thresholds
@@ -120,6 +122,7 @@ infers a conservative `occurred_at` value. Relative expressions like
 - `artifact_observations`
 - `artifact_chunks`
 - `artifact_derivations`
+- `derivation_jobs`
 - `episodic_memory`
 - `episodic_timeline`
 - `memory_candidates`
@@ -235,6 +238,52 @@ POST /derive/provider
 This currently expects a reachable external service at `BRAIN_EXTERNAL_AI_BASE_URL`.
 If none is configured, the route fails cleanly and preserves the raw artifact.
 
+Queue-first derivation endpoint:
+
+```bash
+POST /derive/queue
+{
+  "namespace_id": "personal",
+  "artifact_id": "<artifact_uuid>",
+  "artifact_observation_id": "<artifact_observation_uuid>",
+  "job_kind": "ocr"
+}
+```
+
+Use this when you want OCR, transcription, captioning, or summaries to stay durable and replayable even if no live external service is available.
+
+Queue jobs are namespace-locked to the artifact they resolve, and repeat requests for the same artifact/job combination reuse the same durable row instead of spawning duplicates.
+
+Queue worker:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run derive:work -- --namespace personal --provider external --limit 25
+```
+
+Current worker behavior:
+
+- claims jobs with `FOR UPDATE SKIP LOCKED`
+- retries provider outages, timeouts, and transient transport failures with backoff
+- fails terminal on auth and invalid-request errors
+- writes finished derivations into `artifact_derivations` with provenance preserved
+
+Live producer security knobs:
+
+- `SLACK_SIGNING_SECRET`
+- `SLACK_BOT_TOKEN`
+- `BRAIN_SLACK_ALLOWED_TEAMS`
+- `BRAIN_SLACK_ALLOWED_CHANNELS`
+- `BRAIN_SLACK_ALLOWED_USERS`
+- `DISCORD_BOT_TOKEN`
+- `BRAIN_DISCORD_ALLOWED_GUILDS`
+- `BRAIN_DISCORD_ALLOWED_CHANNELS`
+- `BRAIN_DISCORD_ALLOWED_USERS`
+- `BRAIN_PRODUCER_SHARED_SECRET`
+
+Allowlists are comma-separated IDs. Leave them empty to allow all channels/users.
+Slack requests also enforce a 5 minute replay window when signing validation is enabled.
+
 This is the current safe path for images and PDFs:
 
 - register the binary as durable evidence
@@ -265,4 +314,5 @@ curl -s -X POST http://127.0.0.1:8787/derive/provider \
 - fully automated `pgai` vectorizer ownership beyond controlled sidecar evaluation
 - provider-backed multimodal derivation execution against a real external AI endpoint
 - signed Slack/Discord production deployments with allowlists, attachment auth, and retry hardening
+- ParadeDB BM25 remains the next lexical upgrade; today the honest branch is native PostgreSQL FTS plus vector RRF
 - LLM adjudication for relationship and conflict refinement

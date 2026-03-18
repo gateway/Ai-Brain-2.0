@@ -22,6 +22,8 @@ This package currently provides:
 - provider adapter scaffolding (OpenRouter/Gemini) with a smoke test CLI
 - external AI provider scaffolding for derivation and embeddings
 - text-proxy derivations for captions / OCR / extracted notes
+- durable derivation job queue for OCR / transcription / caption / summary work
+- live Slack/Discord receivers with env-gated signatures and allowlists
 
 ## One-Time Setup
 
@@ -67,6 +69,7 @@ Useful endpoints:
 - `POST /consolidate`
 - `POST /derive/text`
 - `POST /derive/provider`
+- `POST /derive/queue`
 
 ## Smoke Test Provider Wiring
 
@@ -128,6 +131,14 @@ cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
 npm run derive:attach-text -- --artifact-id <artifact_uuid> --type caption --text "Architecture diagram showing three memory tiers"
 ```
 
+Queue a durable multimodal derivation job:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run derive:queue -- --namespace personal --artifact-id <artifact_uuid> --provider external
+npm run derive:work -- --namespace personal --provider external --limit 25
+```
+
 ## Verified Example Queries
 
 ```bash
@@ -144,6 +155,23 @@ npm run decay:semantic -- --namespace personal_refined2 --inactivity-hours 24 --
 
 - retrieval is hybrid today, but the fusion kernel is still app-side and the lexical branch is native PostgreSQL FTS rather than ParadeDB BM25
 - relationship extraction is still heuristic; adjudication is deterministic threshold/rule-based (no LLM judge yet)
-- raw binary artifacts are stored, but provider-backed multimodal extraction is only a route boundary until a real external service is connected
-- the current safe multimodal path is artifact registration plus attached text proxies
+- raw binary artifacts are stored, and the new derivation queue is the safe path for OCR/transcription/caption work when no live external service is connected
+- the current safe multimodal path is artifact registration plus attached text proxies or queued derivation jobs
 - relative-time resolution is still limited
+
+## Live Producer Security
+
+Set these env vars before using the live Slack/Discord receivers:
+
+- `SLACK_SIGNING_SECRET`
+- `SLACK_BOT_TOKEN`
+- `BRAIN_SLACK_ALLOWED_TEAMS`
+- `BRAIN_SLACK_ALLOWED_CHANNELS`
+- `BRAIN_SLACK_ALLOWED_USERS`
+- `DISCORD_BOT_TOKEN`
+- `BRAIN_DISCORD_ALLOWED_GUILDS`
+- `BRAIN_DISCORD_ALLOWED_CHANNELS`
+- `BRAIN_DISCORD_ALLOWED_USERS`
+- `BRAIN_PRODUCER_SHARED_SECRET`
+
+Allowlists are comma-separated IDs. Leave them empty to allow all teams/guilds/channels/users.

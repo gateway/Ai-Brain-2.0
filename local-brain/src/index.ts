@@ -13,6 +13,7 @@ export * from "./retrieval/types.js";
 export * from "./retrieval/service.js";
 export * from "./relationships/extract.js";
 export * from "./jobs/consolidation.js";
+export * from "./jobs/derivation-queue.js";
 export * from "./jobs/relationship-adjudication.js";
 export * from "./jobs/temporal-summary.js";
 export * from "./jobs/semantic-decay.js";

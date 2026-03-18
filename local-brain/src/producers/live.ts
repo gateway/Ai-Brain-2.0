@@ -20,6 +20,16 @@ export interface LiveProducerResponse {
   readonly attachmentArtifacts: readonly AttachmentResult[];
 }
 
+export class ProducerRequestError extends Error {
+  readonly statusCode: number;
+
+  constructor(message: string, statusCode: number) {
+    super(message);
+    this.name = "ProducerRequestError";
+    this.statusCode = statusCode;
+  }
+}
+
 function safeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left, "utf8");
   const rightBuffer = Buffer.from(right, "utf8");
@@ -31,6 +41,20 @@ function safeEqual(left: string, right: string): boolean {
 
 function sanitize(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120) || "item";
+}
+
+function parseId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isAllowed(value: string | undefined, allowlist: readonly string[]): boolean {
+  return allowlist.length === 0 || (typeof value === "string" && allowlist.includes(value));
+}
+
+function requireAllowed(value: string | undefined, allowlist: readonly string[], label: string): void {
+  if (!isAllowed(value, allowlist)) {
+    throw new ProducerRequestError(`Rejected ${label}: not in allowlist.`, 202);
+  }
 }
 
 function inferSourceType(filename: string, mimeType?: string): "image" | "pdf" | "audio" | "text" {
@@ -112,10 +136,15 @@ function verifySlackSignature(rawBody: string, timestamp: string, signature: str
     return;
   }
 
+  const timestampSeconds = Number(timestamp);
+  if (!Number.isFinite(timestampSeconds) || Math.abs(Date.now() / 1000 - timestampSeconds) > 300) {
+    throw new ProducerRequestError("Rejected Slack request: timestamp is outside the allowed replay window.", 401);
+  }
+
   const base = `v0:${timestamp}:${rawBody}`;
   const expected = `v0=${createHmac("sha256", config.slackSigningSecret).update(base).digest("hex")}`;
   if (!safeEqual(expected, signature)) {
-    throw new Error("Invalid Slack signature");
+    throw new ProducerRequestError("Invalid Slack signature", 401);
   }
 }
 
@@ -148,6 +177,14 @@ export async function ingestSlackEventsRequest(
     };
   }
 
+  const config = readConfig();
+  const teamId = parseId(payload.team_id) ?? parseId(event.team);
+  const channelId = parseId(event.channel);
+  const actorId = parseId(event.user);
+  requireAllowed(teamId, config.slackAllowedTeams, "Slack team");
+  requireAllowed(channelId, config.slackAllowedChannels, "Slack channel");
+  requireAllowed(actorId, config.slackAllowedUsers, "Slack user");
+
   const ingestResult = await ingestWebhookPayload({
     namespaceId,
     provider: "slack",
@@ -157,7 +194,6 @@ export async function ingestSlackEventsRequest(
   });
 
   const files = Array.isArray(event.files) ? event.files : [];
-  const config = readConfig();
   const attachments = files
     .map((file) => (file && typeof file === "object" ? (file as Record<string, unknown>) : null))
     .filter((file): file is Record<string, unknown> => Boolean(file))
@@ -198,7 +234,7 @@ function verifySharedSecret(headers: Record<string, string>): void {
 
   const provided = headers["x-brain-ingress-secret"] ?? "";
   if (!provided || !safeEqual(provided, config.producerSharedSecret)) {
-    throw new Error("Invalid producer shared secret");
+    throw new ProducerRequestError("Invalid producer shared secret", 401);
   }
 }
 
@@ -210,6 +246,15 @@ export async function ingestDiscordRelayRequest(
 ): Promise<LiveProducerResponse> {
   verifySharedSecret(headers);
   const payload = JSON.parse(rawBody) as Record<string, unknown>;
+  const config = readConfig();
+  const guildId = parseId(payload.guild_id);
+  const channelId = parseId(payload.channel_id);
+  const actorId = parseId(
+    payload.author && typeof payload.author === "object" ? (payload.author as Record<string, unknown>).id : undefined
+  );
+  requireAllowed(guildId, config.discordAllowedGuilds, "Discord guild");
+  requireAllowed(channelId, config.discordAllowedChannels, "Discord channel");
+  requireAllowed(actorId, config.discordAllowedUsers, "Discord user");
   const ingestResult = await ingestWebhookPayload({
     namespaceId,
     provider: "discord",
@@ -219,7 +264,6 @@ export async function ingestDiscordRelayRequest(
   });
 
   const attachmentsRaw = Array.isArray(payload.attachments) ? payload.attachments : [];
-  const config = readConfig();
   const attachments = attachmentsRaw
     .map((attachment) => (attachment && typeof attachment === "object" ? (attachment as Record<string, unknown>) : null))
     .filter((attachment): attachment is Record<string, unknown> => Boolean(attachment))

@@ -21,11 +21,28 @@ export interface BrainConfig {
   readonly externalAiDeriveModel: string;
   readonly slackSigningSecret?: string;
   readonly slackBotToken?: string;
+  readonly slackAllowedTeams: readonly string[];
+  readonly slackAllowedChannels: readonly string[];
+  readonly slackAllowedUsers: readonly string[];
   readonly discordBotToken?: string;
+  readonly discordAllowedGuilds: readonly string[];
+  readonly discordAllowedChannels: readonly string[];
+  readonly discordAllowedUsers: readonly string[];
   readonly producerSharedSecret?: string;
   readonly migrationsDir: string;
   readonly httpHost: string;
   readonly httpPort: number;
+}
+
+function parseList(value: string | undefined): readonly string[] {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
 }
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
@@ -59,7 +76,13 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     externalAiDeriveModel: env.BRAIN_EXTERNAL_AI_DERIVE_MODEL ?? "artifact-derive-default",
     slackSigningSecret: env.SLACK_SIGNING_SECRET ?? undefined,
     slackBotToken: env.SLACK_BOT_TOKEN ?? undefined,
+    slackAllowedTeams: parseList(env.BRAIN_SLACK_ALLOWED_TEAMS),
+    slackAllowedChannels: parseList(env.BRAIN_SLACK_ALLOWED_CHANNELS),
+    slackAllowedUsers: parseList(env.BRAIN_SLACK_ALLOWED_USERS),
     discordBotToken: env.DISCORD_BOT_TOKEN ?? undefined,
+    discordAllowedGuilds: parseList(env.BRAIN_DISCORD_ALLOWED_GUILDS),
+    discordAllowedChannels: parseList(env.BRAIN_DISCORD_ALLOWED_CHANNELS),
+    discordAllowedUsers: parseList(env.BRAIN_DISCORD_ALLOWED_USERS),
     producerSharedSecret: env.BRAIN_PRODUCER_SHARED_SECRET ?? undefined,
     migrationsDir: env.BRAIN_MIGRATIONS_DIR ?? "",
     httpHost: env.BRAIN_HTTP_HOST ?? "127.0.0.1",
