@@ -50,10 +50,14 @@ const BM25_STOP_WORDS = new Set([
   "be",
   "by",
   "did",
+  "doing",
   "do",
   "does",
+  "find",
   "for",
   "from",
+  "happen",
+  "happened",
   "had",
   "has",
   "have",
@@ -71,9 +75,11 @@ const BM25_STOP_WORDS = new Set([
   "on",
   "or",
   "our",
+  "show",
   "she",
   "that",
   "the",
+  "tell",
   "their",
   "them",
   "then",
@@ -248,11 +254,11 @@ function memoryTypePriority(memoryType: RecallResult["memoryType"], hasTimeWindo
       return 0;
     case "semantic_memory":
       return 1;
-    case "memory_candidate":
+    case "episodic_memory":
       return 2;
     case "artifact_derivation":
       return 3;
-    case "episodic_memory":
+    case "memory_candidate":
       return 4;
     case "temporal_nodes":
       return 5;

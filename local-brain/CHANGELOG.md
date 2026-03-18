@@ -5,7 +5,8 @@
 - Improved the TMT recall planner to infer year, month, and day-granularity temporal windows from queries before retrieval, increasing temporal grounding without changing the retrieval service contract.
 - Added parent-linked `temporal_nodes` depth metadata and ancestor expansion so temporal queries now retrieve real TMT-style context instead of only flat summaries.
 - Extended deterministic temporal rollups to support `year` nodes in addition to `day` / `week` / `month`.
-- Added a feature-gated ParadeDB BM25 lexical branch with `BRAIN_LEXICAL_PROVIDER=bm25`, keeping native PostgreSQL FTS as the safe fallback/default path.
+- Promoted ParadeDB BM25 to the default lexical branch after the expanded lexical stress suite cleared `13/13`, while keeping native FTS as automatic fallback.
+- Added a ParadeDB BM25 lexical branch with `BRAIN_LEXICAL_PROVIDER=bm25`, keeping native PostgreSQL FTS as the safe fallback path and explicit override.
 - Added BM25 indexes for `episodic_memory`, `semantic_memory`, `memory_candidates`, `artifact_derivations`, and `temporal_nodes`.
 - Tightened BM25 query behavior to require must-match lexical terms instead of broad default query-string matching, fixing abstention and exact-term drift.
 - Kept `procedural_memory` on an FTS bridge during BM25 mode after verifying that active-truth state lookups were more reliable that way on the current schema/data.

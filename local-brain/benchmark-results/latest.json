@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-03-18T05:22:42.513Z",
-  "namespaceId": "eval_1773811362221_c4d0d053",
+  "generatedAt": "2026-03-18T05:31:48.907Z",
+  "namespaceId": "eval_1773811908587_92182b81",
   "baselineEvalPassed": true,
   "baselineEvalFailures": [],
   "cases": [
@@ -27,26 +27,22 @@
     {
       "name": "relationship_context_kyoto",
       "provider": "fts",
-      "passed": false,
+      "passed": true,
       "resultCount": 2,
-      "topMemoryType": "memory_candidate",
+      "topMemoryType": "episodic_memory",
       "topContent": "In June 2025 Steve was in Japan with Sarah and Ken. They spent time in Tokyo and Kyoto together. The trip included shared dinners, transit days, and travel notes worth preserving.",
       "approxTokens": 62,
-      "failureReasons": [
-        "expected top memory type episodic_memory, got memory_candidate"
-      ]
+      "failureReasons": []
     },
     {
       "name": "relationship_context_kyoto",
       "provider": "bm25",
-      "passed": false,
+      "passed": true,
       "resultCount": 2,
-      "topMemoryType": "memory_candidate",
+      "topMemoryType": "episodic_memory",
       "topContent": "In June 2025 Steve was in Japan with Sarah and Ken. They spent time in Tokyo and Kyoto together. The trip included shared dinners, transit days, and travel notes worth preserving.",
       "approxTokens": 62,
-      "failureReasons": [
-        "expected top memory type episodic_memory, got memory_candidate"
-      ]
+      "failureReasons": []
     },
     {
       "name": "march_redesign_date",
@@ -94,7 +90,7 @@
       "passed": true,
       "resultCount": 4,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cff65-6a23-743c-893a-a8d89d74b252\", \"semantic_memory_id\": \"019cff65-6a63-7140-9f4f-2178c0e6087b\"}",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cff6d-c020-7fef-8bba-7b5e2950be4f\", \"semantic_memory_id\": \"019cff6d-c061-7f10-996f-a8c27cf2830d\"}",
       "approxTokens": 55,
       "failureReasons": []
     },
@@ -104,7 +100,7 @@
       "passed": true,
       "resultCount": 4,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cff65-6a23-743c-893a-a8d89d74b252\", \"semantic_memory_id\": \"019cff65-6a63-7140-9f4f-2178c0e6087b\"}",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cff6d-c020-7fef-8bba-7b5e2950be4f\", \"semantic_memory_id\": \"019cff6d-c061-7f10-996f-a8c27cf2830d\"}",
       "approxTokens": 55,
       "failureReasons": []
     },
@@ -114,7 +110,7 @@
       "passed": true,
       "resultCount": 4,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cff65-6a23-743c-893a-a8d89d74b252\", \"semantic_memory_id\": \"019cff65-6a65-7143-8651-5b88dff4af2c\"}",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cff6d-c020-7fef-8bba-7b5e2950be4f\", \"semantic_memory_id\": \"019cff6d-c063-77de-a2ed-257e9d1eae8b\"}",
       "approxTokens": 55,
       "failureReasons": []
     },
@@ -124,7 +120,7 @@
       "passed": true,
       "resultCount": 4,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cff65-6a23-743c-893a-a8d89d74b252\", \"semantic_memory_id\": \"019cff65-6a65-7143-8651-5b88dff4af2c\"}",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cff6d-c020-7fef-8bba-7b5e2950be4f\", \"semantic_memory_id\": \"019cff6d-c063-77de-a2ed-257e9d1eae8b\"}",
       "approxTokens": 55,
       "failureReasons": []
     },
@@ -268,11 +264,11 @@
     }
   ],
   "summary": {
-    "ftsPassed": 12,
-    "bm25Passed": 12,
+    "ftsPassed": 13,
+    "bm25Passed": 13,
     "totalCases": 13,
     "bm25TokenDelta": 0,
-    "recommendation": "keep_feature_gated",
-    "reason": "Keep BM25 behind a flag until it clears the expanded lexical stress suite and baseline eval remains clean."
+    "recommendation": "candidate_for_default",
+    "reason": "BM25 matched or exceeded FTS across the expanded lexical stress suite without increasing token load."
   }
 }

@@ -35,7 +35,7 @@ Current working slice:
 - parent-linked temporal nodes for the first real TMT ancestry chain
 - deterministic relationship adjudication into `relationship_memory`
 - deterministic semantic forgetting/decay loop with archival thresholds
-- feature-gated ParadeDB BM25 lexical branch with guarded fallback to native PostgreSQL FTS
+- ParadeDB BM25 lexical branch enabled by default with guarded fallback to native PostgreSQL FTS
 
 This is not the full brain yet. It is the first implementation slice that
 proves the substrate, schema, and file ingestion loop without Docker.
@@ -66,7 +66,7 @@ Lexical env switches:
 
 - `BRAIN_LEXICAL_PROVIDER=fts|bm25`
 - `BRAIN_LEXICAL_FALLBACK_ENABLED=true|false`
-- default lexical mode is `fts`
+- default lexical mode is `bm25`
 - if BM25 is selected and fails, retrieval falls back to native FTS unless fallback is disabled
 
 ## Ingest A File
@@ -172,8 +172,8 @@ OPENROUTER_API_KEY=... npm run search -- "Kyoto shrine companion notes" --namesp
 
 Current retrieval behavior:
 
-- native PostgreSQL full-text search remains the safe default lexical branch
-- ParadeDB BM25 can be enabled with `BRAIN_LEXICAL_PROVIDER=bm25`
+- ParadeDB BM25 is now the default lexical branch
+- native PostgreSQL full-text search remains the fallback and can be forced with `BRAIN_LEXICAL_PROVIDER=fts`
 - `semantic_memory` and embedded `artifact_derivations` drive the vector branch
 - RRF fusion runs in the app today
 - if no embedding provider or query embedding is available, search degrades safely to lexical-only
@@ -183,7 +183,7 @@ Current retrieval behavior:
 - time-windowed queries bias historical episodic evidence above speculative candidate rows
 - BM25 currently covers `episodic_memory`, `semantic_memory`, `memory_candidates`, `artifact_derivations`, and `temporal_nodes`
 - `procedural_memory` stays on an FTS bridge inside BM25 mode for now, because that path is still more trustworthy for active-truth preference/state lookups
-- the expanded lexical benchmark currently keeps BM25 feature-gated: `12/13` pass for both FTS and BM25, with one remaining relationship-style ranking issue where `memory_candidate` outranks the raw episodic leaf
+- the expanded lexical benchmark now passes `13/13` for both FTS and BM25, so BM25 is promoted to the default lexical branch while FTS remains the safety fallback
 
 Example BM25 search:
 
@@ -412,6 +412,6 @@ curl -s -X POST http://127.0.0.1:8787/derive/provider \
 - fully automated `pgai` vectorizer ownership beyond controlled sidecar evaluation
 - provider-backed multimodal derivation execution against a real external AI endpoint remains targeted first through the `external` adapter
 - signed Slack/Discord production deployments with allowlists, attachment auth, and retry hardening
-- ParadeDB BM25 remains feature-gated until it clears the expanded lexical suite and the remaining relationship-style ranking issue is resolved
+- lexical defaulting now assumes ParadeDB BM25 is present locally; if it is missing or fails, the runtime falls back to native FTS
 - LLM adjudication for relationship and conflict refinement
 - deeper TMT descent with per-level budgets, profile/session layers, and recall gating

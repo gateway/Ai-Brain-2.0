@@ -44,7 +44,7 @@ The lexical benchmark now seeds a richer corpus and compares FTS vs BM25 across 
 - entity collision (`Sara` vs `Sarah`)
 - abstention
 
-Current result:
+Initial result in this slice:
 
 - `FTS`: `12/13`
 - `BM25`: `12/13`
@@ -110,22 +110,28 @@ What went well:
 - the TMT slice is structural, not cosmetic
 - the local runtime is still coherent: Postgres remains the center, workers orbit it, raw evidence stays on disk
 
+Follow-up result after the relationship-ranking fix and BM25 stop-word hardening:
+
+- `FTS`: `13/13`
+- `BM25`: `13/13`
+- recommendation: `candidate_for_default`
+- operational note: some natural-language temporal questions may still fall back to FTS when ParadeDB rejects the query shape, which is acceptable because guarded fallback remains enabled
+
 What is still not solved:
 
-- BM25 is still not ready to become the default lexical provider
-- one relationship-style exact query still prefers `memory_candidate` over raw episodic evidence
+- BM25 still relies on guarded FTS fallback for some natural-language query shapes
 - TMT is stronger, but still not full recursive best-effort descent with per-level budgets and true recall gating
 
 Current confidence after this slice:
 
 - local runtime direction: `~93%`
-- BM25 default-readiness: `not ready`
+- BM25 default-readiness: `ready with fallback`
 - TMT maturity: `real groundwork, not full completion`
 
 ## Next Move
 
 The next highest-value local slice is:
 
-1. fix the remaining relationship-style lexical ranking issue
-2. decide whether that is done by ranking policy, query classification, or candidate/episodic routing
-3. only then reconsider flipping BM25 on by default
+1. reduce BM25 fallback frequency on natural-language temporal queries
+2. deepen TMT descent with per-level budgets and richer recall gating
+3. optionally start the no-JS Next.js dev console for observability and testing

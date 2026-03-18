@@ -1,16 +1,16 @@
 # Lexical Benchmark Report
 
-Generated: 2026-03-18T05:22:42.513Z
-Namespace: eval_1773811362221_c4d0d053
+Generated: 2026-03-18T05:31:48.907Z
+Namespace: eval_1773811908587_92182b81
 Baseline Eval Passed: true
 
 ## Summary
 
-- FTS passed: 12/13
-- BM25 passed: 12/13
+- FTS passed: 13/13
+- BM25 passed: 13/13
 - BM25 token delta: 0
-- Recommendation: keep_feature_gated
-- Reason: Keep BM25 behind a flag until it clears the expanded lexical stress suite and baseline eval remains clean.
+- Recommendation: candidate_for_default
+- Reason: BM25 matched or exceeded FTS across the expanded lexical stress suite without increasing token load.
 
 ## Cases
 
@@ -29,20 +29,18 @@ Baseline Eval Passed: true
 - Top content: MONTH rollup Sun Jun 01 2025 00:00:00 GMT+0700 (Indochina Time) -> Tue Jul 01 2025 00:00:00 GMT+0700 (Indochina Time). events=2. roles=import:2. top_entities=Ken:2, Kyoto:2, Sarah:2, Japan:1, Steve:1.
 
 ### relationship_context_kyoto (fts)
-- Passed: false
+- Passed: true
 - Result count: 2
-- Top memory type: memory_candidate
+- Top memory type: episodic_memory
 - Approx tokens: 62
 - Top content: In June 2025 Steve was in Japan with Sarah and Ken. They spent time in Tokyo and Kyoto together. The trip included shared dinners, transit days, and travel notes worth preserving.
-- Failures: expected top memory type episodic_memory, got memory_candidate
 
 ### relationship_context_kyoto (bm25)
-- Passed: false
+- Passed: true
 - Result count: 2
-- Top memory type: memory_candidate
+- Top memory type: episodic_memory
 - Approx tokens: 62
 - Top content: In June 2025 Steve was in Japan with Sarah and Ken. They spent time in Tokyo and Kyoto together. The trip included shared dinners, transit days, and travel notes worth preserving.
-- Failures: expected top memory type episodic_memory, got memory_candidate
 
 ### march_redesign_date (fts)
 - Passed: true
@@ -77,28 +75,28 @@ Baseline Eval Passed: true
 - Result count: 4
 - Top memory type: procedural_memory
 - Approx tokens: 55
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019cff65-6a23-743c-893a-a8d89d74b252", "semantic_memory_id": "019cff65-6a63-7140-9f4f-2178c0e6087b"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019cff6d-c020-7fef-8bba-7b5e2950be4f", "semantic_memory_id": "019cff6d-c061-7f10-996f-a8c27cf2830d"}
 
 ### spicy_active_truth (bm25)
 - Passed: true
 - Result count: 4
 - Top memory type: procedural_memory
 - Approx tokens: 55
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019cff65-6a23-743c-893a-a8d89d74b252", "semantic_memory_id": "019cff65-6a63-7140-9f4f-2178c0e6087b"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019cff6d-c020-7fef-8bba-7b5e2950be4f", "semantic_memory_id": "019cff6d-c061-7f10-996f-a8c27cf2830d"}
 
 ### sweet_active_truth (fts)
 - Passed: true
 - Result count: 4
 - Top memory type: procedural_memory
 - Approx tokens: 55
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019cff65-6a23-743c-893a-a8d89d74b252", "semantic_memory_id": "019cff65-6a65-7143-8651-5b88dff4af2c"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019cff6d-c020-7fef-8bba-7b5e2950be4f", "semantic_memory_id": "019cff6d-c063-77de-a2ed-257e9d1eae8b"}
 
 ### sweet_active_truth (bm25)
 - Passed: true
 - Result count: 4
 - Top memory type: procedural_memory
 - Approx tokens: 55
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019cff65-6a23-743c-893a-a8d89d74b252", "semantic_memory_id": "019cff65-6a65-7143-8651-5b88dff4af2c"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019cff6d-c020-7fef-8bba-7b5e2950be4f", "semantic_memory_id": "019cff6d-c063-77de-a2ed-257e9d1eae8b"}
 
 ### rare_entity_cve (fts)
 - Passed: true

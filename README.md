@@ -32,7 +32,7 @@ Verified local runtime slice in [local-brain/README.md](local-brain/README.md):
 - second-stage vector sync worker for replayable embedding backfill
 - stdio MCP server for local assistant/tool integration
 - hybrid retrieval with lexical fallback
-- feature-gated ParadeDB BM25 lexical upgrade path
+- ParadeDB BM25 lexical branch as the default local lexical path with guarded FTS fallback
 - TMT-style temporal planner for historical recall
 - preference supersession
 - deterministic relationship adjudication
@@ -48,6 +48,7 @@ Latest verified run log:
 - [ParadeDB BM25 rollout and benchmark notes](brain-spec/local/34-paradedb-bm25-run-log.md)
 - [Post-BM25 benchmark and mock multimodal proof](brain-spec/local/35-benchmark-and-multimodal-proof.md)
 - [Expanded lexical benchmark and TMT hardening](brain-spec/local/36-benchmark-and-tmt-hardening.md)
+- [Next.js dev console proposal](brain-spec/local/37-nextjs-dev-console-proposal.md)
 
 ## Main Folders
 
@@ -74,7 +75,7 @@ Latest verified run log:
 
 - the default lexical branch is still native PostgreSQL full-text search
 - ParadeDB BM25 is now implemented behind a feature flag, but not promoted to the default yet
-- the expanded lexical suite now passes `12/13` for both FTS and BM25, so BM25 remains feature-gated until the remaining relationship-style ranking issue is resolved
+- the expanded lexical suite now passes `13/13` for both FTS and BM25 on the seeded local corpus, so BM25 is promoted to the default lexical branch with guarded FTS fallback
 - the `procedural_memory` branch still uses native FTS inside BM25 mode because that path currently preserves active-truth lookups better on live data
 - the hybrid fusion kernel is still app-side, not the final SQL-first kernel
 - Timescale is implemented as a sidecar hypertable mirror for episodic time-scans, not as an in-place conversion of the authoritative `episodic_memory` table
