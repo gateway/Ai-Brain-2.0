@@ -2,6 +2,9 @@
 
 ## 2026-03-18
 
+- Added the first `brain-console` operator dashboard using `Next.js`, `Tailwind CSS`, and `shadcn/ui`, with overview, query, eval, benchmark, jobs, and artifact detail pages.
+- Added `GET /ops/overview` so the console can read queue and memory-health counts without duplicating backend logic.
+- Returned the runtime lexical default to native FTS after BM25 tuning proved correct but still slightly heavier on token tail than the current FTS baseline; BM25 remains implemented and benchmarked behind `BRAIN_LEXICAL_PROVIDER=bm25`.
 - Tightened BM25 query shaping so natural-language temporal questions now route through planner-reduced lexical terms instead of raw question strings, while time stays in SQL filters.
 - Added bounded descendant episodic support under matched temporal summary nodes so TMT recall can descend back into supporting leaves without exploding token burn.
 - Fixed false temporal year detection on non-date numeric queries like `port 3000 screenshot`.

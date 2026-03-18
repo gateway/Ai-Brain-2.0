@@ -32,7 +32,7 @@ Verified local runtime slice in [local-brain/README.md](local-brain/README.md):
 - second-stage vector sync worker for replayable embedding backfill
 - stdio MCP server for local assistant/tool integration
 - hybrid retrieval with lexical fallback
-- ParadeDB BM25 lexical branch as the default local lexical path with guarded FTS fallback
+- ParadeDB BM25 lexical branch implemented, benchmarked, and available as an opt-in lexical provider
 - TMT-style temporal planner for historical recall
 - preference supersession
 - deterministic relationship adjudication
@@ -49,11 +49,14 @@ Latest verified run log:
 - [Post-BM25 benchmark and mock multimodal proof](brain-spec/local/35-benchmark-and-multimodal-proof.md)
 - [Expanded lexical benchmark and TMT hardening](brain-spec/local/36-benchmark-and-tmt-hardening.md)
 - [Next.js dev console proposal](brain-spec/local/37-nextjs-dev-console-proposal.md)
+- [Operator console implementation and proof](brain-spec/local/39-operator-console-run-log.md)
 
 ## Main Folders
 
 - [local-brain](local-brain)
   Runtime code, migrations, CLI tools, eval harness, and local README/changelog.
+- [brain-console](brain-console)
+  Local Next.js + Tailwind + shadcn operator console for query/debug/benchmark visibility.
 - [brain-spec/local](brain-spec/local)
   The detailed local-first architecture, run logs, self-critique passes, and NotebookLM-grounded design docs.
 - `artifacts/the-digital-brain`
@@ -70,6 +73,7 @@ Latest verified run log:
 - [brain-spec/local/30-timescale-vectorscale-pgai-live-producers-run-log.md](brain-spec/local/30-timescale-vectorscale-pgai-live-producers-run-log.md)
 - [brain-spec/local/33-multimodal-vector-sync-runtime-log.md](brain-spec/local/33-multimodal-vector-sync-runtime-log.md)
 - [brain-spec/local/38-bm25-tmt-optimization-run-log.md](brain-spec/local/38-bm25-tmt-optimization-run-log.md)
+- [brain-spec/local/39-operator-console-run-log.md](brain-spec/local/39-operator-console-run-log.md)
 - [local-brain/CHANGELOG.md](local-brain/CHANGELOG.md)
 
 ## Honest Current Limits
@@ -95,3 +99,4 @@ Latest verified run log:
 - strengthen temporal/TMT retrieval behavior for long-horizon recall
 - move hybrid retrieval from transitional app-side RRF to a SQL-first fused kernel
 - benchmark BM25 / ParadeDB against the current lexical branch before switching
+- deepen the operator console with timeline, relationships, and a later graph view once relationship semantics stabilize

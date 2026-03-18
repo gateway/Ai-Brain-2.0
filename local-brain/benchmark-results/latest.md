@@ -1,7 +1,7 @@
 # Lexical Benchmark Report
 
-Generated: 2026-03-18T05:57:39.172Z
-Namespace: eval_1773813458765_997c113d
+Generated: 2026-03-18T06:17:48.532Z
+Namespace: eval_1773814668212_8d8ca1b3
 Baseline Eval Passed: true
 
 ## Summary
@@ -112,7 +112,7 @@ Baseline Eval Passed: true
 - Lexical fallback used: false
 - Top memory type: procedural_memory
 - Approx tokens: 13
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019cff85-6792-7a44-b5ae-d2a0d6b11591", "semantic_memory_id": "019cff85-67ef-70f2-b92d-29e411450c09"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019cff97-dc3e-79ae-a2ce-6a8b264ca209", "semantic_memory_id": "019cff97-dc7d-70eb-8253-6dc6beefe29d"}
 
 ### spicy_active_truth (bm25)
 - Passed: true
@@ -121,7 +121,7 @@ Baseline Eval Passed: true
 - Lexical fallback used: false
 - Top memory type: procedural_memory
 - Approx tokens: 13
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019cff85-6792-7a44-b5ae-d2a0d6b11591", "semantic_memory_id": "019cff85-67ef-70f2-b92d-29e411450c09"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019cff97-dc3e-79ae-a2ce-6a8b264ca209", "semantic_memory_id": "019cff97-dc7d-70eb-8253-6dc6beefe29d"}
 
 ### sweet_active_truth (fts)
 - Passed: true
@@ -130,7 +130,7 @@ Baseline Eval Passed: true
 - Lexical fallback used: false
 - Top memory type: procedural_memory
 - Approx tokens: 13
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019cff85-6792-7a44-b5ae-d2a0d6b11591", "semantic_memory_id": "019cff85-67f0-7f2e-8448-18410dcc3422"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019cff97-dc3e-79ae-a2ce-6a8b264ca209", "semantic_memory_id": "019cff97-dc7e-7f58-90dd-cbabe963f19e"}
 
 ### sweet_active_truth (bm25)
 - Passed: true
@@ -139,7 +139,7 @@ Baseline Eval Passed: true
 - Lexical fallback used: false
 - Top memory type: procedural_memory
 - Approx tokens: 13
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019cff85-6792-7a44-b5ae-d2a0d6b11591", "semantic_memory_id": "019cff85-67f0-7f2e-8448-18410dcc3422"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019cff97-dc3e-79ae-a2ce-6a8b264ca209", "semantic_memory_id": "019cff97-dc7e-7f58-90dd-cbabe963f19e"}
 
 ### rare_entity_cve (fts)
 - Passed: true

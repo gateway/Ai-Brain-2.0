@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-03-18T05:57:39.172Z",
-  "namespaceId": "eval_1773813458765_997c113d",
+  "generatedAt": "2026-03-18T06:17:48.532Z",
+  "namespaceId": "eval_1773814668212_8d8ca1b3",
   "baselineEvalPassed": true,
   "baselineEvalFailures": [],
   "cases": [
@@ -132,7 +132,7 @@
       "effectiveLexicalProvider": "fts",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cff85-6792-7a44-b5ae-d2a0d6b11591\", \"semantic_memory_id\": \"019cff85-67ef-70f2-b92d-29e411450c09\"}",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cff97-dc3e-79ae-a2ce-6a8b264ca209\", \"semantic_memory_id\": \"019cff97-dc7d-70eb-8253-6dc6beefe29d\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -144,7 +144,7 @@
       "effectiveLexicalProvider": "bm25",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cff85-6792-7a44-b5ae-d2a0d6b11591\", \"semantic_memory_id\": \"019cff85-67ef-70f2-b92d-29e411450c09\"}",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019cff97-dc3e-79ae-a2ce-6a8b264ca209\", \"semantic_memory_id\": \"019cff97-dc7d-70eb-8253-6dc6beefe29d\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -156,7 +156,7 @@
       "effectiveLexicalProvider": "fts",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cff85-6792-7a44-b5ae-d2a0d6b11591\", \"semantic_memory_id\": \"019cff85-67f0-7f2e-8448-18410dcc3422\"}",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cff97-dc3e-79ae-a2ce-6a8b264ca209\", \"semantic_memory_id\": \"019cff97-dc7e-7f58-90dd-cbabe963f19e\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -168,7 +168,7 @@
       "effectiveLexicalProvider": "bm25",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cff85-6792-7a44-b5ae-d2a0d6b11591\", \"semantic_memory_id\": \"019cff85-67f0-7f2e-8448-18410dcc3422\"}",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019cff97-dc3e-79ae-a2ce-6a8b264ca209\", \"semantic_memory_id\": \"019cff97-dc7e-7f58-90dd-cbabe963f19e\"}",
       "approxTokens": 13,
       "failureReasons": []
     },

@@ -90,6 +90,7 @@ npm run serve
 Useful endpoints:
 
 - `GET /health`
+- `GET /ops/overview`
 - `GET /search`
 - `GET /timeline`
 - `GET /relationships`
@@ -119,6 +120,29 @@ first tools are:
 - `memory.get_relationships`
 - `memory.save_candidate`
 - `memory.upsert_state`
+
+## Start The Operator Console
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/brain-console
+npm install
+BRAIN_RUNTIME_BASE_URL=http://127.0.0.1:8787 npm run dev
+```
+
+Open:
+
+- `http://127.0.0.1:3000/console`
+
+Current first-slice pages:
+
+- `/console`
+- `/console/query`
+- `/console/eval`
+- `/console/benchmark`
+- `/console/jobs`
+- `/console/artifacts/[id]`
+
+The console is intentionally read-first. It calls the live local-brain runtime for health/search/artifact data and reads the latest eval/benchmark artifacts from disk.
 
 ## Smoke Test Provider Wiring
 

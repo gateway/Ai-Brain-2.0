@@ -35,7 +35,7 @@ Current working slice:
 - parent-linked temporal nodes for the first real TMT ancestry chain
 - deterministic relationship adjudication into `relationship_memory`
 - deterministic semantic forgetting/decay loop with archival thresholds
-- ParadeDB BM25 lexical branch enabled by default with guarded fallback to native PostgreSQL FTS
+- ParadeDB BM25 lexical branch implemented, benchmarked, and available as an opt-in lexical provider
 
 This is not the full brain yet. It is the first implementation slice that
 proves the substrate, schema, and file ingestion loop without Docker.
@@ -413,6 +413,6 @@ curl -s -X POST http://127.0.0.1:8787/derive/provider \
 - fully automated `pgai` vectorizer ownership beyond controlled sidecar evaluation
 - provider-backed multimodal derivation execution against a real external AI endpoint remains targeted first through the `external` adapter
 - signed Slack/Discord production deployments with allowlists, attachment auth, and retry hardening
-- lexical defaulting now assumes ParadeDB BM25 is present locally; if it is missing or fails, the runtime falls back to native FTS
+- BM25 remains opt-in at runtime; the default lexical branch is native FTS until BM25 tail-size/token-burn tuning is tighter
 - LLM adjudication for relationship and conflict refinement
 - deeper TMT descent with per-level budgets, profile/session layers, and recall gating

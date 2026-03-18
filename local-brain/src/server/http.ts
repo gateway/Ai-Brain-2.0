@@ -7,6 +7,7 @@ import { runCandidateConsolidation } from "../jobs/consolidation.js";
 import { ProducerRequestError, ingestDiscordRelayRequest, ingestSlackEventsRequest } from "../producers/live.js";
 import { ingestWebhookPayload } from "../producers/webhook.js";
 import { getArtifactDetail, getRelationships, searchMemory, timelineMemory } from "../retrieval/service.js";
+import { getOpsOverview } from "../ops/service.js";
 
 interface JsonResponse {
   readonly statusCode: number;
@@ -96,6 +97,15 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
       body: {
         ok: true
       }
+    };
+  }
+
+  if (request.method === "GET" && url.pathname === "/ops/overview") {
+    const result = await getOpsOverview();
+
+    return {
+      statusCode: 200,
+      body: result
     };
   }
 
