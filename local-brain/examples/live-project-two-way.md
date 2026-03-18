@@ -1,0 +1,3 @@
+I'm working on Two-Way, a project created by Gumee. He's an airline pilot and a part of the pilot association. He created a SaaS platform that takes all the systems pilots used to log into email, get pushed from email servers or MailChimp servers for newsletters, log in for surveys on another website, and do reports sometimes through email. The association has to figure out how to put that into actual notes.
+
+I'm the acting CTO for Two-Way and helping him reduce friction in the company as we build out the platform and build a web app version of this. We are going to go to a conference in Turkey with this new platform that we're building

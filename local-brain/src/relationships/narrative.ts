@@ -1,4 +1,5 @@
 import type { PoolClient } from "pg";
+import { loadNamespaceSelfProfileForClient, upsertNamespaceSelfProfileForClient } from "../identity/service.js";
 import type { SceneRecord, TimeGranularity } from "../types.js";
 
 type EntityType = "self" | "person" | "place" | "org" | "project" | "concept" | "unknown";
@@ -109,6 +110,7 @@ const PLACE_NAMES = new Map<string, string>([
   ["mexico city", "Mexico City"],
   ["singapore", "Singapore"],
   ["thailand", "Thailand"],
+  ["turkey", "Turkey"],
   ["vietnam", "Vietnam"]
 ]);
 
@@ -249,6 +251,13 @@ function canonicalizePlace(value: string): string | null {
 
 function unique<T>(values: readonly T[]): T[] {
   return [...new Set(values)];
+}
+
+function splitNameList(value: string): string[] {
+  return value
+    .split(/\s*(?:,|and)\s*/u)
+    .map((part) => normalizeWhitespace(part.replace(/^(?:with|through)\s+/iu, "")))
+    .filter(Boolean);
 }
 
 function looksLikePersonName(value: string): boolean {
@@ -458,6 +467,11 @@ function classifyAmbiguity(
 }
 
 async function loadExistingSelfName(client: PoolClient, namespaceId: string): Promise<string | null> {
+  const boundProfile = await loadNamespaceSelfProfileForClient(client, namespaceId);
+  if (boundProfile?.canonicalName) {
+    return boundProfile.canonicalName;
+  }
+
   const result = await client.query<{ canonical_name: string }>(
     `
       SELECT canonical_name
@@ -473,6 +487,15 @@ async function loadExistingSelfName(client: PoolClient, namespaceId: string): Pr
   return result.rows[0]?.canonical_name ?? null;
 }
 
+function cleanProjectName(value: string): string {
+  return normalizeWhitespace(
+    value
+      .replace(/\b(?:i\s+am|i'm|am)\s+working\s+on\s+/giu, "")
+      .replace(/\b(?:we\s+are|we're)\s+building\s+/giu, "")
+      .replace(/[.,;:]+$/gu, "")
+  );
+}
+
 async function loadNamespacePersonAliases(client: PoolClient, namespaceId: string): Promise<Map<string, string>> {
   const result = await client.query<{ alias: string; canonical_name: string }>(
     `
@@ -481,6 +504,7 @@ async function loadNamespacePersonAliases(client: PoolClient, namespaceId: strin
       JOIN entities e ON e.id = ea.entity_id
       WHERE e.namespace_id = $1
         AND e.entity_type IN ('self', 'person')
+        AND e.merged_into_entity_id IS NULL
     `,
     [namespaceId]
   );
@@ -821,6 +845,51 @@ function extractClaimsFromScene(
       }
     }
 
+    const friendsWithMatch = sentenceText.match(
+      /\b((?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|I)\s+is\s+friends?\s+with\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}(?:\s*(?:,|and)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})*)/iu
+    );
+    if (friendsWithMatch) {
+      const rawSubject = normalizeWhitespace(friendsWithMatch[1] ?? "");
+      const subjectPerson =
+        rawSubject === "I" ? resolvedSelfName ?? undefined : resolvePersonName(rawSubject, aliasMap, resolvedSelfName, explicitPeople);
+      const targets = splitNameList(friendsWithMatch[2] ?? "");
+
+      for (const target of targets) {
+        const person = resolvePersonName(target, aliasMap, resolvedSelfName, explicitPeople);
+        if (subjectPerson && person && normalizeName(subjectPerson) !== normalizeName(person)) {
+          claims.push({
+            claimType: "relationship",
+            subjectName: subjectPerson,
+            subjectType: subjectPerson === resolvedSelfName ? "self" : "person",
+            predicate: "friend_of",
+            objectName: person,
+            objectType: "person",
+            confidence: 0.92,
+            status: "accepted"
+          });
+          lastPerson = person;
+        }
+      }
+    }
+
+    const goodFriendMatch = sentenceText.match(/\bgood friend of ours,\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/iu);
+    if (goodFriendMatch && subject) {
+      const person = resolvePersonName(goodFriendMatch[1], aliasMap, resolvedSelfName, explicitPeople);
+      if (person) {
+        claims.push({
+          claimType: "relationship",
+          subjectName: subject,
+          subjectType: subject === resolvedSelfName ? "self" : "person",
+          predicate: "friend_of",
+          objectName: person,
+          objectType: "person",
+          confidence: 0.84,
+          status: "accepted"
+        });
+        lastPerson = person;
+      }
+    }
+
     const fromMatch = sentenceTextForSubject.match(/^(?:((?!(?:He|She|They)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She|They))\b.*?\bis\s+from\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})\b/u);
     if (fromMatch) {
       const rawSubject = fromMatch[2] ? lastPerson : fromMatch[1];
@@ -896,6 +965,138 @@ function extractClaimsFromScene(
           objectName: project,
           objectType: "project",
           confidence: 0.94,
+          status: "accepted"
+        });
+      }
+    }
+
+    const createdByMatch = sentenceText.match(
+      /\b([A-Z][A-Za-z0-9]+(?:-[A-Z][A-Za-z0-9]+)?(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4})\b(?:,\s*|\s+)a\s+project\s+created\s+by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/iu
+    );
+    if (createdByMatch) {
+      const projectName = cleanProjectName(createdByMatch[1] ?? "");
+      const person = resolvePersonName(createdByMatch[2], aliasMap, resolvedSelfName, explicitPeople);
+      if (projectName && person) {
+        lastProject = projectName;
+        lastPerson = person;
+        claims.push({
+          claimType: "project_origin",
+          subjectName: person,
+          subjectType: person === resolvedSelfName ? "self" : "person",
+          predicate: "created_by",
+          objectName: projectName,
+          objectType: "project",
+          confidence: 0.9,
+          status: "accepted"
+        });
+      }
+    }
+
+    const workingOnMatch = sentenceText.match(
+      /\bI(?:'m|\s+am)?\s+working\s+on\s+([A-Z][A-Za-z0-9]+(?:-[A-Z][A-Za-z0-9]+)?(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4})\b/iu
+    );
+    if (workingOnMatch && resolvedSelfName) {
+      const projectName = cleanProjectName(workingOnMatch[1] ?? "");
+      if (projectName) {
+        lastProject = projectName;
+        claims.push({
+          claimType: "project_engagement",
+          subjectName: resolvedSelfName,
+          subjectType: "self",
+          predicate: "works_on",
+          objectName: projectName,
+          objectType: "project",
+          confidence: 0.84,
+          status: "accepted"
+        });
+      }
+    }
+
+    const actingRoleMatch = sentenceText.match(
+      /\bI(?:'m|\s+am)?\s+the\s+acting\s+([A-Za-z][A-Za-z0-9 /-]{1,60}?)\s+for\s+([A-Z][A-Za-z0-9]+(?:-[A-Z][A-Za-z0-9]+)?(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4}?)(?=\s+(?:and|as|with|who|that|which|we|he|she|they)\b|[.,;]|$)/iu
+    );
+    if (resolvedSelfName && actingRoleMatch) {
+      const role = normalizeWhitespace(actingRoleMatch[1] ?? "");
+      const projectName = cleanProjectName(actingRoleMatch[2] ?? "");
+      if (projectName && role) {
+        lastProject = projectName;
+        claims.push({
+          claimType: "role_assigned",
+          subjectName: resolvedSelfName,
+          subjectType: "self",
+          predicate: "project_role",
+          objectName: projectName,
+          objectType: "project",
+          confidence: 0.92,
+          status: "accepted",
+          metadata: {
+            project_key: normalizeName(projectName),
+            role
+          }
+        });
+      }
+    }
+
+    const worksAtMatch = sentenceTextForSubject.match(
+      /^(?:((?!(?:He|She|They)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She|They))\b.*?\bworks?\s+at\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4})\b/u
+    );
+    if (worksAtMatch) {
+      const rawSubject = worksAtMatch[2] ? lastPerson : worksAtMatch[1];
+      const person = resolvePersonName(rawSubject, aliasMap, resolvedSelfName, explicitPeople);
+      const orgOrProject = normalizeWhitespace(worksAtMatch[3] ?? "");
+      if (person && orgOrProject) {
+        lastProject = orgOrProject;
+        claims.push({
+          claimType: "employment",
+          subjectName: person,
+          subjectType: person === resolvedSelfName ? "self" : "person",
+          predicate: "works_at",
+          objectName: orgOrProject,
+          objectType: "project",
+          confidence: 0.88,
+          status: "accepted"
+        });
+      }
+    }
+
+    const associationMatch = sentenceText.match(
+      /^(?:((?!(?:He|She|They)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She|They))\b.*?\bpart of\s+(?:the\s+)?([A-Za-z][A-Za-z0-9.& -]{2,80}?association)\b/iu
+    );
+    if (associationMatch) {
+      const rawSubject = associationMatch[2] ? lastPerson : associationMatch[1];
+      const person = resolvePersonName(rawSubject, aliasMap, resolvedSelfName, explicitPeople);
+      const orgName = normalizeWhitespace(associationMatch[3] ?? "").replace(/^the\s+/iu, "");
+      if (person && orgName) {
+        lastOrg = titleCase(orgName);
+        claims.push({
+          claimType: "org_membership",
+          subjectName: person,
+          subjectType: person === resolvedSelfName ? "self" : "person",
+          predicate: "member_of",
+          objectName: lastOrg,
+          objectType: "org",
+          confidence: 0.88,
+          status: "accepted"
+        });
+      }
+    }
+
+    const bestFriendsWithMatch = sentenceText.match(
+      /^(?:((?!(?:He|She|They)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She|They))\b.*?\bbest friends?\s+with\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/iu
+    );
+    if (bestFriendsWithMatch) {
+      const rawSubject = bestFriendsWithMatch[2] ? lastPerson : bestFriendsWithMatch[1];
+      const subjectPerson = resolvePersonName(rawSubject, aliasMap, resolvedSelfName, explicitPeople);
+      const targetPerson = resolvePersonName(bestFriendsWithMatch[3], aliasMap, resolvedSelfName, explicitPeople);
+      if (subjectPerson && targetPerson && normalizeName(subjectPerson) !== normalizeName(targetPerson)) {
+        claims.push({
+          claimType: "relationship",
+          subjectName: subjectPerson,
+          subjectType: subjectPerson === resolvedSelfName ? "self" : "person",
+          predicate: "friend_of",
+          objectName: targetPerson,
+          objectType: "person",
+          confidence: 0.9,
           status: "accepted"
         });
       }
@@ -1074,7 +1275,8 @@ function extractClaimsFromScene(
       if (
         extractedRole &&
         /\b(?:cto|fractional cto|engineer|founder|owner|lead|designer|pm)\b/iu.test(extractedRole) &&
-        /\b(?:working|worked|hired|joined|as)\b/iu.test(sentenceText)
+        /\b(?:working|worked|hired|joined|as)\b/iu.test(sentenceText) &&
+        !/\bacting\s+[A-Za-z]/iu.test(sentenceText)
       ) {
         claims.push({
           claimType: "role_assigned",
@@ -1100,6 +1302,55 @@ function extractClaimsFromScene(
       const projectName = normalizeWhitespace(explicitProjectRoleMatch[1] ?? "");
       const role = normalizeWhitespace(explicitProjectRoleMatch[2] ?? "");
       if (projectName && role) {
+        lastProject = projectName;
+        claims.push({
+          claimType: "role_assigned",
+          subjectName: resolvedSelfName,
+          subjectType: "self",
+          predicate: "project_role",
+          objectName: projectName,
+          objectType: "project",
+          confidence: 0.9,
+          status: "accepted",
+          metadata: {
+            project_key: normalizeName(projectName),
+            role
+          }
+        });
+      }
+    }
+
+    const conferenceMatch = sentenceText.match(
+      /\b(?:go(?:ing)?|travel(?:ing)?|demo(?:ing)?|present(?:ing)?)\s+to\s+(?:a\s+)?conference\s+in\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2}?)(?=\s+(?:with|for|about|on|this|that)\b|[.,;]|$)/iu
+    );
+    if (conferenceMatch && resolvedSelfName) {
+      const place = canonicalizePlace(conferenceMatch[1] ?? "") ?? normalizeWhitespace(conferenceMatch[1] ?? "");
+      if (place) {
+        claims.push({
+          claimType: "project_focus_changed",
+          subjectName: lastProject ?? resolvedSelfName,
+          subjectType: lastProject ? "project" : "self",
+          predicate: "project_focus",
+          objectName: `conference in ${place}`,
+          objectType: "concept",
+          confidence: lastProject ? 0.78 : 0.6,
+          status: lastProject ? "accepted" : "pending",
+          metadata: {
+            project_key: lastProject ? normalizeName(lastProject) : null,
+            event_kind: "conference",
+            place
+          }
+        });
+      }
+    }
+
+    const actingRoleForProjectMatch = sentenceText.match(
+      /\bI(?:'m|\s+am)?\s+the\s+((?!acting\b)[A-Za-z][A-Za-z0-9 /-]{1,60}?)\s+for\s+([A-Z][A-Za-z0-9]+(?:-[A-Z][A-Za-z0-9]+)?(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4}?)(?=\s+(?:and|as|with|who|that|which|we|he|she|they)\b|[.,;]|$)/iu
+    );
+    if (resolvedSelfName && actingRoleForProjectMatch) {
+      const role = normalizeWhitespace(actingRoleForProjectMatch[1] ?? "");
+      const projectName = cleanProjectName(actingRoleForProjectMatch[2] ?? "");
+      if (role && projectName) {
         lastProject = projectName;
         claims.push({
           claimType: "role_assigned",
@@ -1201,7 +1452,7 @@ function inferEventKind(sceneText: string, claims: readonly ResolvedNarrativeCla
     /\b(?:live|lived|living|move back|destination thailand visa|dtv)\b/u.test(lowered)
   ) {
     if (
-      !(predicates.has("works_at") || predicates.has("works_with") || predicates.has("runs")) ||
+      !(predicates.has("works_at") || predicates.has("works_on") || predicates.has("works_with") || predicates.has("runs")) ||
       /\b(?:chiang mai|koh samui|danang|thailand|vietnam)\b/u.test(lowered)
     ) {
       return "life_update";
@@ -1210,12 +1461,15 @@ function inferEventKind(sceneText: string, claims: readonly ResolvedNarrativeCla
 
   if (
     predicates.has("works_at") ||
+    predicates.has("works_on") ||
     predicates.has("works_with") ||
     predicates.has("project_status") ||
     predicates.has("project_deadline") ||
     predicates.has("project_focus") ||
     predicates.has("project_role") ||
     predicates.has("runs") ||
+    predicates.has("created_by") ||
+    predicates.has("member_of") ||
     /\b(?:cto|fractional cto|company|memoir engine|zoom|application)\b/u.test(lowered)
   ) {
     return "work";
@@ -1239,6 +1493,9 @@ function buildEventLabel(sceneText: string, claims: readonly ResolvedNarrativeCl
     "project_deadline",
     "project_focus",
     "project_role",
+    "works_on",
+    "created_by",
+    "member_of",
     "works_at",
     "works_with",
     "runs",
@@ -1321,8 +1578,16 @@ function predicateMatchesObjectType(
     return objectType === "org" || objectType === "project";
   }
 
-  if (predicate === "runs") {
+  if (predicate === "works_on") {
+    return objectType === "project";
+  }
+
+  if (predicate === "runs" || predicate === "created_by") {
     return objectType === "project" || objectType === "org";
+  }
+
+  if (predicate === "member_of") {
+    return objectType === "org";
   }
 
   if (predicate === "works_with" || predicate === "friend_of" || predicate === "with" || predicate === "hikes_with") {
@@ -1853,6 +2118,15 @@ export async function stageNarrativeClaims(
   let nextEventIndex = 0;
   const sceneIdByIndex = new Map<number, string>();
 
+  if (selfName) {
+    await upsertNamespaceSelfProfileForClient(client, {
+      namespaceId: input.namespaceId,
+      canonicalName: selfName,
+      aliases: [selfName],
+      note: "narrative_bootstrap"
+    });
+  }
+
   for (const scene of input.scenes) {
     const sceneSource = input.sceneSources.find((entry) => entry.sceneIndex === scene.sceneIndex);
     const sceneInsert = await client.query<{ id: string }>(
@@ -1981,6 +2255,12 @@ export async function stageNarrativeClaims(
       if (subjectType === "self" && claim.subjectName) {
         knownSelfName = claim.subjectName;
         namespaceAliases.set(normalizeName(claim.subjectName), claim.subjectName);
+        await upsertNamespaceSelfProfileForClient(client, {
+          namespaceId: input.namespaceId,
+          canonicalName: claim.subjectName,
+          aliases: [claim.subjectName],
+          note: "narrative_identity_claim"
+        });
       }
 
       if (subjectType === "person" && claim.subjectName && subjectEntityId) {
@@ -2296,7 +2576,7 @@ export async function stageNarrativeClaims(
         subjectEntityId &&
         objectEntityId &&
         claim.objectName &&
-        ["friend_of", "with", "from", "lives_in", "lived_in", "currently_in", "runs", "works_at", "works_with", "hikes_with"].includes(
+        ["friend_of", "with", "from", "lives_in", "lived_in", "currently_in", "runs", "works_at", "works_on", "works_with", "hikes_with", "member_of", "created_by"].includes(
           claim.predicate
         )
       ) {

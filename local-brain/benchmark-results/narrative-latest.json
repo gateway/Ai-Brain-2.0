@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-03-18T11:00:55.884Z",
+  "generatedAt": "2026-03-18T13:40:25.413Z",
   "totalCases": 5,
   "passedCases": 5,
   "failedCases": 0,
   "cases": [
     {
       "name": "negative_control_no_people",
-      "namespaceId": "narrative_negative_control_no_people_mmvxkgnw",
+      "namespaceId": "narrative_negative_control_no_people_mmw39kn2",
       "passed": true,
       "scores": {
         "entity_presence": 1,
@@ -19,7 +19,7 @@
     },
     {
       "name": "personal_story_relationships",
-      "namespaceId": "narrative_personal_story_relationships_mmvxkgx5",
+      "namespaceId": "narrative_personal_story_relationships_mmw39ktx",
       "passed": true,
       "scores": {
         "entity_presence": 1,
@@ -32,7 +32,7 @@
     },
     {
       "name": "preference_supersession",
-      "namespaceId": "narrative_preference_supersession_mmvxkh2o",
+      "namespaceId": "narrative_preference_supersession_mmw39kzp",
       "passed": true,
       "scores": {
         "entity_presence": 1,
@@ -45,7 +45,7 @@
     },
     {
       "name": "project_state_and_spec",
-      "namespaceId": "narrative_project_state_and_spec_mmvxkh5d",
+      "namespaceId": "narrative_project_state_and_spec_mmw39l2w",
       "passed": true,
       "scores": {
         "entity_presence": 1,
@@ -58,7 +58,7 @@
     },
     {
       "name": "temporal_prefix_subject_guard",
-      "namespaceId": "narrative_temporal_prefix_subject_guard_mmvxkh90",
+      "namespaceId": "narrative_temporal_prefix_subject_guard_mmw39l6b",
       "passed": true,
       "scores": {
         "entity_presence": 1,

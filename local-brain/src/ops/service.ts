@@ -556,6 +556,8 @@ export async function getOpsRelationshipGraph(
     WHERE rm.namespace_id = $1
       AND rm.status = 'active'
       AND rm.valid_until IS NULL
+      AND subject.merged_into_entity_id IS NULL
+      AND object_entity.merged_into_entity_id IS NULL
       AND ($2::timestamptz IS NULL OR rm.valid_from >= $2::timestamptz)
       AND ($3::timestamptz IS NULL OR rm.valid_from <= $3::timestamptz)
       AND (

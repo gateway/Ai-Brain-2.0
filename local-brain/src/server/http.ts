@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { ignoreClarification, processBrainOutboxEvents, resolveClarification } from "../clarifications/service.js";
+import { ignoreClarification, mergeEntityAlias, processBrainOutboxEvents, resolveClarification } from "../clarifications/service.js";
 import { readConfig } from "../config.js";
 import { attachTextDerivation, deriveArtifactViaProvider } from "../derivations/service.js";
+import { getNamespaceSelfProfile, upsertNamespaceSelfProfile } from "../identity/service.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { enqueueDerivationJob } from "../jobs/derivation-queue.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
@@ -150,6 +151,15 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
     };
   }
 
+  if (request.method === "GET" && url.pathname === "/ops/profile/self") {
+    const result = await getNamespaceSelfProfile(requireString(url.searchParams.get("namespace_id"), "namespace_id"));
+
+    return {
+      statusCode: result ? 200 : 404,
+      body: result ?? { error: "Self profile not found." }
+    };
+  }
+
   if (request.method === "GET" && url.pathname === "/search") {
     const result = await searchMemory({
       namespaceId: requireString(url.searchParams.get("namespace_id"), "namespace_id"),
@@ -290,6 +300,47 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
         ...result,
         outbox
       }
+    };
+  }
+
+  if (request.method === "POST" && url.pathname === "/ops/entities/merge") {
+    const body = await readJsonBody(request);
+    const result = await mergeEntityAlias({
+      namespaceId: requireString(body.namespace_id, "namespace_id"),
+      sourceEntityId: optionalString(body.source_entity_id),
+      sourceName: optionalString(body.source_name),
+      canonicalName: requireString(body.canonical_name, "canonical_name"),
+      entityType: requireString(body.entity_type, "entity_type"),
+      targetEntityId: optionalString(body.target_entity_id),
+      aliases: Array.isArray(body.aliases) ? body.aliases.filter((value): value is string => typeof value === "string") : undefined,
+      note: optionalString(body.note)
+    });
+    const outbox = await processBrainOutboxEvents({
+      namespaceId: result.namespaceId,
+      limit: 25
+    });
+
+    return {
+      statusCode: 200,
+      body: {
+        ...result,
+        outbox
+      }
+    };
+  }
+
+  if (request.method === "POST" && url.pathname === "/ops/profile/self") {
+    const body = await readJsonBody(request);
+    const result = await upsertNamespaceSelfProfile({
+      namespaceId: requireString(body.namespace_id, "namespace_id"),
+      canonicalName: requireString(body.canonical_name, "canonical_name"),
+      aliases: Array.isArray(body.aliases) ? body.aliases.filter((value): value is string => typeof value === "string") : undefined,
+      note: optionalString(body.note)
+    });
+
+    return {
+      statusCode: 200,
+      body: result
     };
   }
 

@@ -1,0 +1,3 @@
+Steve is friends with Gumee and Ben. They all met in Chiang Mai, Thailand, and we all met through a good friend of ours, Dan, who is originally from Mexico City and has traveled around. He also has a passport from Australia. He is a developer and an amazing friend, and he has connected all of us and connected the dots on how we've been friends over the last six or seven months, from late 2025 to right now (mid March 2026).
+
+We usually go on weekly scooter or motorcycle bike rides on Sundays, check out amazing new spots, hang out, and do a lot of dinners and some movies. That is like a circle of the friendship. Tim is a part of all that circle. He is from Australia and has been best friends with Ben but he also works at Well Inked.

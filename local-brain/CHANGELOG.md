@@ -2,6 +2,11 @@
 
 ## 2026-03-18
 
+- Added first-class alias correction / merge support with `POST /ops/entities/merge`, outbox propagation, and durable entity redirects through `entities.merged_into_entity_id`.
+- Added durable self identity scaffolding with `identity_profiles`, `namespace_self_bindings`, and `GET/POST /ops/profile/self`, so project namespaces can resolve `I/me/my` without restating `Steve` in every note.
+- Tightened project/spec narrative extraction so freeform notes now emit `created_by`, `works_on`, `member_of`, cleaner `project_role`, and bounded conference/project-focus claims instead of over-captured project tails.
+- Verified the user-facing `Gumee -> Gummi` correction flow against a live namespace and confirmed the graph now surfaces `Gummi` as the active canonical person.
+- Verified a fresh self-profile-backed project namespace so the `Two-Way` note now resolves `Steve`, extracts `Two-Way`, `Pilot Association`, and `conference in Turkey`, and promotes `project_role` into active procedural truth.
 - Fixed temporal-prefix subject pollution so leading phrases like `In June 2026 ...` no longer become fake person nodes during narrative extraction.
 - Added a new golden-story regression case, `temporal_prefix_subject_guard`, to lock that fix in and verify `Steve -> lives_in -> Chiang Mai` without creating an `In June` entity.
 - Hardened place-containment recursive retrieval with path-based cycle protection instead of only a depth cap.

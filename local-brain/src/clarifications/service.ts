@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { queryRows, withTransaction } from "../db/client.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
+import { refreshRelationshipPriors } from "../jobs/relationship-priors.js";
 import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
 
 type ClarificationAction = "resolve" | "ignore";
@@ -89,6 +90,17 @@ interface IgnoreClarificationInput {
   readonly note?: string;
 }
 
+interface MergeEntityAliasInput {
+  readonly namespaceId: string;
+  readonly sourceEntityId?: string;
+  readonly sourceName?: string;
+  readonly canonicalName: string;
+  readonly entityType: string;
+  readonly targetEntityId?: string;
+  readonly aliases?: readonly string[];
+  readonly note?: string;
+}
+
 export interface ClarificationInboxItem {
   readonly candidateId: string;
   readonly claimType: string;
@@ -129,6 +141,14 @@ export interface BrainOutboxProcessResult {
   readonly processed: number;
   readonly failed: number;
   readonly touchedNamespaces: readonly string[];
+}
+
+export interface EntityMergeResult {
+  readonly namespaceId: string;
+  readonly sourceEntityId: string;
+  readonly targetEntityId: string;
+  readonly mergeMode: "rename" | "redirect_merge";
+  readonly outboxEventId: string;
 }
 
 const KINSHIP_TERMS = new Set([
@@ -270,7 +290,7 @@ function inferFollowUpAmbiguity(candidate: ClaimCandidateRow): {
 }
 
 function isRelationshipPredicate(predicate: string): boolean {
-  return ["friend_of", "with", "from", "lives_in", "lived_in", "currently_in", "runs", "works_at", "works_with", "hikes_with"].includes(
+  return ["friend_of", "with", "from", "lives_in", "lived_in", "currently_in", "runs", "works_at", "works_on", "works_with", "hikes_with", "member_of", "created_by"].includes(
     predicate
   );
 }
@@ -333,6 +353,114 @@ async function upsertAlias(
     `,
     [entityId, alias, normalizeName(alias), aliasType, aliasType === "manual", JSON.stringify(metadata)]
   );
+}
+
+async function resolveEntityForUpdate(
+  client: PoolClient,
+  namespaceId: string,
+  entityType: string,
+  options: {
+    readonly entityId?: string;
+    readonly canonicalName?: string;
+  }
+): Promise<{ id: string; canonical_name: string; entity_type: string }> {
+  const byId = options.entityId
+    ? await client.query<{ id: string; canonical_name: string; entity_type: string }>(
+        `
+          SELECT id::text, canonical_name, entity_type
+          FROM entities
+          WHERE namespace_id = $1
+            AND id = $2::uuid
+          FOR UPDATE
+        `,
+        [namespaceId, options.entityId]
+      )
+    : null;
+
+  if (byId?.rows[0]) {
+    return byId.rows[0];
+  }
+
+  if (!options.canonicalName) {
+    throw new Error("Missing source entity identity.");
+  }
+
+  const byName = await client.query<{ id: string; canonical_name: string; entity_type: string }>(
+    `
+      SELECT id::text, canonical_name, entity_type
+      FROM entities
+      WHERE namespace_id = $1
+        AND entity_type = $2
+        AND normalized_name = $3
+        AND merged_into_entity_id IS NULL
+      FOR UPDATE
+    `,
+    [namespaceId, entityType, normalizeName(options.canonicalName)]
+  );
+
+  const row = byName.rows[0];
+  if (!row) {
+    throw new Error(`Entity "${options.canonicalName}" was not found in namespace ${namespaceId}.`);
+  }
+
+  return row;
+}
+
+async function upsertOutboxEvent(
+  client: PoolClient,
+  options: {
+    readonly namespaceId: string;
+    readonly aggregateType: string;
+    readonly aggregateId: string | null;
+    readonly eventType: string;
+    readonly payload: Record<string, unknown>;
+    readonly idempotencyKey: string;
+  }
+): Promise<string> {
+  const payload = JSON.stringify(options.payload);
+  const existingOutbox = await client.query<{ id: string }>(
+    `
+      SELECT id
+      FROM brain_outbox_events
+      WHERE idempotency_key = $1
+      LIMIT 1
+    `,
+    [options.idempotencyKey]
+  );
+
+  if (existingOutbox.rows[0]) {
+    await client.query(
+      `
+        UPDATE brain_outbox_events
+        SET
+          payload = $2::jsonb,
+          status = 'pending',
+          next_attempt_at = now(),
+          updated_at = now()
+        WHERE id = $1
+      `,
+      [existingOutbox.rows[0].id, payload]
+    );
+    return existingOutbox.rows[0].id;
+  }
+
+  const inserted = await client.query<{ id: string }>(
+    `
+      INSERT INTO brain_outbox_events (
+        namespace_id,
+        aggregate_type,
+        aggregate_id,
+        event_type,
+        payload,
+        idempotency_key
+      )
+      VALUES ($1, $2, $3::uuid, $4, $5::jsonb, $6)
+      RETURNING id
+    `,
+    [options.namespaceId, options.aggregateType, options.aggregateId, options.eventType, payload, options.idempotencyKey]
+  );
+
+  return inserted.rows[0]?.id ?? "";
 }
 
 async function fetchCandidateForUpdate(client: PoolClient, namespaceId: string, candidateId: string): Promise<ClaimCandidateRow> {
@@ -745,6 +873,409 @@ export async function ignoreClarification(input: IgnoreClarificationInput): Prom
   });
 }
 
+async function transferEntityAliases(
+  client: PoolClient,
+  sourceEntityId: string,
+  targetEntityId: string,
+  note: string | undefined
+): Promise<void> {
+  const aliasRows = await client.query<{ alias: string }>(
+    `
+      SELECT alias
+      FROM entity_aliases
+      WHERE entity_id = $1::uuid
+    `,
+    [sourceEntityId]
+  );
+
+  for (const row of aliasRows.rows) {
+    await upsertAlias(client, targetEntityId, row.alias, "manual", {
+      clarification_source: "entity_merge",
+      note: note ?? null
+    });
+  }
+
+  await client.query(
+    `
+      DELETE FROM entity_aliases
+      WHERE entity_id = $1::uuid
+    `,
+    [sourceEntityId]
+  );
+}
+
+async function mergeEntityReferences(client: PoolClient, namespaceId: string, sourceEntityId: string, targetEntityId: string): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO memory_entity_mentions (
+        namespace_id,
+        entity_id,
+        source_scene_id,
+        source_memory_id,
+        source_chunk_id,
+        mention_text,
+        mention_role,
+        confidence,
+        occurred_at,
+        metadata
+      )
+      SELECT
+        namespace_id,
+        $2::uuid,
+        source_scene_id,
+        source_memory_id,
+        source_chunk_id,
+        mention_text,
+        mention_role,
+        confidence,
+        occurred_at,
+        metadata || jsonb_build_object('merged_from_entity_id', $1::text)
+      FROM memory_entity_mentions
+      WHERE namespace_id = $3
+        AND entity_id = $1::uuid
+      ON CONFLICT (entity_id, source_memory_id, source_chunk_id, mention_text)
+      DO UPDATE SET
+        confidence = GREATEST(memory_entity_mentions.confidence, EXCLUDED.confidence),
+        metadata = memory_entity_mentions.metadata || EXCLUDED.metadata
+    `,
+    [sourceEntityId, targetEntityId, namespaceId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM memory_entity_mentions
+      WHERE namespace_id = $2
+        AND entity_id = $1::uuid
+    `,
+    [sourceEntityId, namespaceId]
+  );
+
+  await client.query(
+    `
+      UPDATE claim_candidates
+      SET
+        subject_entity_id = CASE WHEN subject_entity_id = $1::uuid THEN $2::uuid ELSE subject_entity_id END,
+        object_entity_id = CASE WHEN object_entity_id = $1::uuid THEN $2::uuid ELSE object_entity_id END,
+        metadata = claim_candidates.metadata || jsonb_build_object('merged_from_entity_id', $1::text)
+      WHERE namespace_id = $3
+        AND (subject_entity_id = $1::uuid OR object_entity_id = $1::uuid)
+    `,
+    [sourceEntityId, targetEntityId, namespaceId]
+  );
+
+  await client.query(
+    `
+      UPDATE narrative_events
+      SET
+        primary_subject_entity_id = CASE WHEN primary_subject_entity_id = $1::uuid THEN $2::uuid ELSE primary_subject_entity_id END,
+        primary_location_entity_id = CASE WHEN primary_location_entity_id = $1::uuid THEN $2::uuid ELSE primary_location_entity_id END,
+        metadata = narrative_events.metadata || jsonb_build_object('merged_from_entity_id', $1::text)
+      WHERE namespace_id = $3
+        AND (primary_subject_entity_id = $1::uuid OR primary_location_entity_id = $1::uuid)
+    `,
+    [sourceEntityId, targetEntityId, namespaceId]
+  );
+
+  await client.query(
+    `
+      INSERT INTO narrative_event_members (
+        namespace_id,
+        event_id,
+        entity_id,
+        member_role,
+        confidence,
+        source_scene_id,
+        source_memory_id,
+        metadata
+      )
+      SELECT
+        namespace_id,
+        event_id,
+        $2::uuid,
+        member_role,
+        confidence,
+        source_scene_id,
+        source_memory_id,
+        metadata || jsonb_build_object('merged_from_entity_id', $1::text)
+      FROM narrative_event_members
+      WHERE namespace_id = $3
+        AND entity_id = $1::uuid
+      ON CONFLICT (event_id, entity_id, member_role, source_scene_id, source_memory_id)
+      DO UPDATE SET
+        confidence = GREATEST(narrative_event_members.confidence, EXCLUDED.confidence),
+        metadata = narrative_event_members.metadata || EXCLUDED.metadata
+    `,
+    [sourceEntityId, targetEntityId, namespaceId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM narrative_event_members
+      WHERE namespace_id = $2
+        AND entity_id = $1::uuid
+    `,
+    [sourceEntityId, namespaceId]
+  );
+
+  await client.query(
+    `
+      INSERT INTO relationship_candidates (
+        namespace_id,
+        subject_entity_id,
+        predicate,
+        object_entity_id,
+        source_scene_id,
+        source_event_id,
+        source_memory_id,
+        source_chunk_id,
+        confidence,
+        prior_score,
+        prior_reason,
+        status,
+        valid_from,
+        valid_until,
+        processed_at,
+        decision_reason,
+        metadata
+      )
+      SELECT
+        namespace_id,
+        CASE WHEN subject_entity_id = $1::uuid THEN $2::uuid ELSE subject_entity_id END,
+        predicate,
+        CASE WHEN object_entity_id = $1::uuid THEN $2::uuid ELSE object_entity_id END,
+        source_scene_id,
+        source_event_id,
+        source_memory_id,
+        source_chunk_id,
+        confidence,
+        prior_score,
+        prior_reason,
+        status,
+        valid_from,
+        valid_until,
+        processed_at,
+        decision_reason,
+        metadata || jsonb_build_object('merged_from_entity_id', $1::text)
+      FROM relationship_candidates
+      WHERE namespace_id = $3
+        AND (subject_entity_id = $1::uuid OR object_entity_id = $1::uuid)
+      ON CONFLICT (subject_entity_id, predicate, object_entity_id, source_memory_id, source_chunk_id)
+      DO UPDATE SET
+        confidence = GREATEST(relationship_candidates.confidence, EXCLUDED.confidence),
+        prior_score = GREATEST(relationship_candidates.prior_score, EXCLUDED.prior_score),
+        metadata = relationship_candidates.metadata || EXCLUDED.metadata
+    `,
+    [sourceEntityId, targetEntityId, namespaceId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM relationship_candidates
+      WHERE namespace_id = $2
+        AND (subject_entity_id = $1::uuid OR object_entity_id = $1::uuid)
+    `,
+    [sourceEntityId, namespaceId]
+  );
+
+  await client.query(
+    `
+      INSERT INTO relationship_memory (
+        namespace_id,
+        subject_entity_id,
+        predicate,
+        object_entity_id,
+        confidence,
+        status,
+        valid_from,
+        valid_until,
+        source_candidate_id,
+        superseded_by_id,
+        metadata,
+        created_at
+      )
+      SELECT
+        namespace_id,
+        CASE WHEN subject_entity_id = $1::uuid THEN $2::uuid ELSE subject_entity_id END,
+        predicate,
+        CASE WHEN object_entity_id = $1::uuid THEN $2::uuid ELSE object_entity_id END,
+        confidence,
+        status,
+        valid_from,
+        valid_until,
+        source_candidate_id,
+        superseded_by_id,
+        metadata || jsonb_build_object('merged_from_entity_id', $1::text),
+        created_at
+      FROM relationship_memory
+      WHERE namespace_id = $3
+        AND (subject_entity_id = $1::uuid OR object_entity_id = $1::uuid)
+      ON CONFLICT (namespace_id, subject_entity_id, predicate, object_entity_id, valid_from)
+      DO UPDATE SET
+        confidence = GREATEST(relationship_memory.confidence, EXCLUDED.confidence),
+        metadata = relationship_memory.metadata || EXCLUDED.metadata
+    `,
+    [sourceEntityId, targetEntityId, namespaceId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM relationship_memory
+      WHERE namespace_id = $2
+        AND (subject_entity_id = $1::uuid OR object_entity_id = $1::uuid)
+    `,
+    [sourceEntityId, namespaceId]
+  );
+
+  await client.query(
+    `
+      UPDATE namespace_self_bindings
+      SET entity_id = $2::uuid, updated_at = now()
+      WHERE namespace_id = $3
+        AND entity_id = $1::uuid
+    `,
+    [sourceEntityId, targetEntityId, namespaceId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM relationship_priors
+      WHERE namespace_id = $2
+        AND (entity_a_id = $1::uuid OR entity_b_id = $1::uuid)
+    `,
+    [sourceEntityId, namespaceId]
+  );
+}
+
+export async function mergeEntityAlias(input: MergeEntityAliasInput): Promise<EntityMergeResult> {
+  const aliases = unique([input.canonicalName, ...(input.aliases ?? [])]);
+
+  return withTransaction(async (client) => {
+    const source = await resolveEntityForUpdate(client, input.namespaceId, input.entityType, {
+      entityId: input.sourceEntityId,
+      canonicalName: input.sourceName
+    });
+
+    let target =
+      input.targetEntityId && input.targetEntityId !== source.id
+        ? await resolveEntityForUpdate(client, input.namespaceId, input.entityType, {
+            entityId: input.targetEntityId
+          })
+        : null;
+
+    if (!target && normalizeName(source.canonical_name) !== normalizeName(input.canonicalName)) {
+      const existingTarget = await client.query<{ id: string; canonical_name: string; entity_type: string }>(
+        `
+          SELECT id::text, canonical_name, entity_type
+          FROM entities
+          WHERE namespace_id = $1
+            AND entity_type = $2
+            AND normalized_name = $3
+            AND merged_into_entity_id IS NULL
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [input.namespaceId, input.entityType, normalizeName(input.canonicalName)]
+      );
+      target = existingTarget.rows[0] ?? null;
+    }
+
+    const canonicalName = normalizeWhitespace(input.canonicalName);
+    const mergeMode: "rename" | "redirect_merge" = !target || target.id === source.id ? "rename" : "redirect_merge";
+
+    let targetEntityId = source.id;
+    if (mergeMode === "rename") {
+      await client.query(
+        `
+          UPDATE entities
+          SET
+            canonical_name = $2,
+            normalized_name = $3,
+            merged_into_entity_id = NULL,
+            metadata = entities.metadata || $4::jsonb,
+            last_seen_at = now()
+          WHERE id = $1::uuid
+        `,
+        [
+          source.id,
+          canonicalName,
+          normalizeName(canonicalName),
+          JSON.stringify({
+            alias_merge_mode: "rename",
+            alias_merge_note: input.note ?? null
+          })
+        ]
+      );
+      targetEntityId = source.id;
+      for (const alias of unique([source.canonical_name, ...aliases])) {
+        await upsertAlias(client, source.id, alias, "manual", {
+          clarification_source: "entity_merge",
+          note: input.note ?? null
+        });
+      }
+    } else {
+      const resolvedTarget = target;
+      if (!resolvedTarget) {
+        throw new Error("Expected a target entity for redirect merge.");
+      }
+      targetEntityId = resolvedTarget.id;
+      await transferEntityAliases(client, source.id, targetEntityId, input.note);
+      for (const alias of unique([source.canonical_name, ...aliases])) {
+        await upsertAlias(client, targetEntityId, alias, "manual", {
+          clarification_source: "entity_merge",
+          note: input.note ?? null
+        });
+      }
+      await mergeEntityReferences(client, input.namespaceId, source.id, targetEntityId);
+      await client.query(
+        `
+          UPDATE entities
+          SET
+            merged_into_entity_id = $2::uuid,
+            metadata = entities.metadata || $3::jsonb,
+            last_seen_at = now()
+          WHERE id = $1::uuid
+        `,
+        [
+          source.id,
+          targetEntityId,
+          JSON.stringify({
+            alias_merge_mode: "redirect_merge",
+            merged_into_entity_id: targetEntityId,
+            alias_merge_note: input.note ?? null
+          })
+        ]
+      );
+    }
+
+    const outboxEventId = await upsertOutboxEvent(client, {
+      namespaceId: input.namespaceId,
+      aggregateType: "entity",
+      aggregateId: source.id,
+      eventType: "entity.alias_merged",
+      payload: {
+        namespace_id: input.namespaceId,
+        source_entity_id: source.id,
+        source_name: source.canonical_name,
+        target_entity_id: targetEntityId,
+        canonical_name: canonicalName,
+        entity_type: input.entityType,
+        aliases: unique([source.canonical_name, ...aliases]),
+        merge_mode: mergeMode,
+        note: input.note ?? null
+      },
+      idempotencyKey: `entity:merge:${input.namespaceId}:${source.id}:${targetEntityId}:${normalizeName(canonicalName)}`
+    });
+
+    return {
+      namespaceId: input.namespaceId,
+      sourceEntityId: source.id,
+      targetEntityId,
+      mergeMode,
+      outboxEventId
+    };
+  });
+}
+
 async function claimOutboxEvents(limit: number, workerId: string, namespaceId?: string): Promise<readonly OutboxEventRow[]> {
   return withTransaction(async (client) => {
     const result = await client.query<OutboxEventRow>(
@@ -1004,6 +1535,37 @@ async function processResolvedEvent(event: OutboxEventRow): Promise<void> {
   });
 }
 
+async function processAliasMergedEvent(event: OutboxEventRow): Promise<void> {
+  const sourceEntityId = typeof event.payload.source_entity_id === "string" ? event.payload.source_entity_id : null;
+  const targetEntityId = typeof event.payload.target_entity_id === "string" ? event.payload.target_entity_id : null;
+  const mergeMode = typeof event.payload.merge_mode === "string" ? event.payload.merge_mode : "rename";
+
+  if (!sourceEntityId || !targetEntityId) {
+    await markOutboxProcessed(event.id);
+    return;
+  }
+
+  await withTransaction(async (client) => {
+    if (mergeMode === "redirect_merge" && sourceEntityId !== targetEntityId) {
+      await mergeEntityReferences(client, event.namespace_id, sourceEntityId, targetEntityId);
+    }
+
+    await client.query(
+      `
+        UPDATE brain_outbox_events
+        SET
+          status = 'processed',
+          processed_at = now(),
+          locked_at = NULL,
+          locked_by = NULL,
+          updated_at = now()
+        WHERE id = $1
+      `,
+      [event.id]
+    );
+  });
+}
+
 export async function processBrainOutboxEvents(options?: {
   readonly namespaceId?: string;
   readonly limit?: number;
@@ -1019,6 +1581,10 @@ export async function processBrainOutboxEvents(options?: {
     try {
       if (event.event_type === "clarification.resolved") {
         await processResolvedEvent(event);
+        touchedNamespaces.add(event.namespace_id);
+        processed += 1;
+      } else if (event.event_type === "entity.alias_merged") {
+        await processAliasMergedEvent(event);
         touchedNamespaces.add(event.namespace_id);
         processed += 1;
       } else if (event.event_type === "clarification.ignored") {
@@ -1046,6 +1612,7 @@ export async function processBrainOutboxEvents(options?: {
   }
 
   for (const namespaceId of touchedNamespaces) {
+    await refreshRelationshipPriors(namespaceId);
     await runCandidateConsolidation(namespaceId, 100);
     await runRelationshipAdjudication(namespaceId, {
       limit: 200,

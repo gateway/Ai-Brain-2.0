@@ -38,6 +38,8 @@ Current working slice:
 - graph-history priors with a persisted `relationship_priors` table
 - timeline and relationship ops surfaces for the console (`GET /ops/timeline`, `GET /ops/graph`)
 - typed clarification inbox plus outbox-driven reprocessing for alias collisions, kinship resolution, place grounding, and misspellings
+- first-class alias merge / correction route for accepted entities (`POST /ops/entities/merge`)
+- namespace self profile support (`GET/POST /ops/profile/self`) so project notes can resolve `I` without restating the user identity
 - deterministic relationship adjudication into `relationship_memory`
 - deterministic semantic forgetting/decay loop with archival thresholds
 - ParadeDB BM25 lexical branch implemented, benchmarked, and now the default lexical provider
@@ -155,6 +157,8 @@ infers a conservative `occurred_at` value. Relative expressions like
 - `relationship_memory`
 - `relationship_adjudication_events`
 - `brain_outbox_events`
+- `identity_profiles`
+- `namespace_self_bindings`
 - `semantic_memory`
 - `semantic_decay_events`
 - `procedural_memory`
@@ -209,6 +213,9 @@ Operator console-backed ops endpoints:
 - `GET /ops/inbox?namespace_id=...`
 - `POST /ops/inbox/resolve`
 - `POST /ops/inbox/ignore`
+- `GET /ops/profile/self?namespace_id=...`
+- `POST /ops/profile/self`
+- `POST /ops/entities/merge`
 - `GET /ops/timeline?namespace_id=...&time_start=...&time_end=...&limit=...`
 - `GET /ops/graph?namespace_id=...&entity_name=...&time_start=...&time_end=...&limit=...`
 
