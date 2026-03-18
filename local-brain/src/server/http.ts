@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { ignoreClarification, mergeEntityAlias, processBrainOutboxEvents, resolveClarification } from "../clarifications/service.js";
+import { classifyDerivationTextToCandidates, classifyTextToCandidates } from "../classification/service.js";
 import { readConfig } from "../config.js";
 import { attachTextDerivation, deriveArtifactViaProvider } from "../derivations/service.js";
 import { getNamespaceSelfProfile, upsertNamespaceSelfProfile } from "../identity/service.js";
@@ -408,6 +409,44 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
       model: optionalString(body.model),
       outputDimensionality: optionalNumber(body.output_dimensionality),
       embed: Boolean(body.embed),
+      metadata: typeof body.metadata === "object" && body.metadata ? (body.metadata as Record<string, unknown>) : {}
+    });
+
+    return {
+      statusCode: 200,
+      body: result
+    };
+  }
+
+  if (request.method === "POST" && url.pathname === "/classify/text") {
+    const body = await readJsonBody(request);
+    const result = await classifyTextToCandidates({
+      namespaceId: requireString(body.namespace_id, "namespace_id"),
+      text: requireString(body.text, "text"),
+      provider: optionalString(body.provider),
+      model: optionalString(body.model),
+      presetId: optionalString(body.preset_id),
+      maxOutputTokens: optionalNumber(body.max_output_tokens),
+      artifactId: optionalString(body.artifact_id),
+      artifactObservationId: optionalString(body.artifact_observation_id),
+      sourceChunkId: optionalString(body.source_chunk_id),
+      metadata: typeof body.metadata === "object" && body.metadata ? (body.metadata as Record<string, unknown>) : {}
+    });
+
+    return {
+      statusCode: 200,
+      body: result
+    };
+  }
+
+  if (request.method === "POST" && url.pathname === "/classify/derivation") {
+    const body = await readJsonBody(request);
+    const result = await classifyDerivationTextToCandidates({
+      derivationId: requireString(body.derivation_id, "derivation_id"),
+      provider: optionalString(body.provider),
+      model: optionalString(body.model),
+      presetId: optionalString(body.preset_id),
+      maxOutputTokens: optionalNumber(body.max_output_tokens),
       metadata: typeof body.metadata === "object" && body.metadata ? (body.metadata as Record<string, unknown>) : {}
     });
 

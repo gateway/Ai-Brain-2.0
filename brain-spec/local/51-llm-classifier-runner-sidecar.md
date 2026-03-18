@@ -6,6 +6,12 @@ Date: 2026-03-18
 
 Use a small LLM as an ingestion-side classifier that turns derived text into structured candidate data before promotion into the brain.
 
+Status:
+
+- architecture accepted
+- first live implementation now exists in the local brain runtime
+- current runtime shape: provider-backed text classification -> staged candidates/inbox -> existing consolidation/adjudication path
+
 This is not a second memory system.
 
 It is a sidecar runner that helps the existing brain decide:
@@ -32,6 +38,23 @@ The correct placement is:
 So the flow is:
 
 `artifact -> derivation -> classifier runner -> claim candidates / ambiguity / consolidation -> memory`
+
+Current runtime shape:
+
+- provider adapter contract:
+  - `embedText`
+  - `deriveFromArtifact`
+  - `classifyText`
+- live entrypoints:
+  - `npm run classify:text`
+  - `POST /classify/text`
+  - `POST /classify/derivation`
+- current staged writes:
+  - `relationship_candidates`
+  - `claim_candidates`
+  - `memory_candidates`
+  - ambiguity rows through `claim_candidates`
+- final truth is still owned by consolidation/adjudication, not by the model
 
 ## Why This Is The Right Shape
 

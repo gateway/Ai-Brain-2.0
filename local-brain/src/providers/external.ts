@@ -1,6 +1,8 @@
 import { readConfig } from "../config.js";
 import { postJson } from "./http.js";
 import {
+  type ClassifyTextRequest,
+  type ClassifyTextResponse,
   ProviderError,
   type DeriveFromArtifactRequest,
   type DeriveFromArtifactResponse,
@@ -8,6 +10,7 @@ import {
   type EmbedTextResponse,
   type ProviderAdapter
 } from "./types.js";
+import { parseJsonObjectText } from "./json.js";
 
 interface ExternalEmbeddingResponse {
   readonly model?: string;
@@ -37,6 +40,21 @@ interface ExternalDeriveResponse {
   readonly providerMetadata?: Record<string, unknown>;
 }
 
+interface ExternalChatResponse {
+  readonly model?: string;
+  readonly choices?: Array<{
+    readonly message?: {
+      readonly content?: string;
+    };
+  }>;
+  readonly usage?: {
+    readonly prompt_tokens?: number;
+    readonly completion_tokens?: number;
+    readonly total_tokens?: number;
+  };
+  readonly metrics?: Record<string, unknown>;
+}
+
 function buildHeaders(apiKey?: string): Record<string, string> {
   return apiKey ? { authorization: `Bearer ${apiKey}` } : {};
 }
@@ -49,6 +67,7 @@ export function createExternalAdapter(): ProviderAdapter {
     supports: {
       textEmbedding: true,
       multimodalDerivation: true,
+      textClassification: true,
       modalities: ["text", "image", "pdf", "audio", "video"]
     },
     async embedText(request: EmbedTextRequest): Promise<EmbedTextResponse> {
@@ -129,6 +148,63 @@ export function createExternalAdapter(): ProviderAdapter {
         },
         latencyMs: Date.now() - started,
         providerMetadata: result.data.providerMetadata
+      };
+    },
+    async classifyText(request: ClassifyTextRequest): Promise<ClassifyTextResponse> {
+      const started = Date.now();
+      const model = request.model ?? config.externalAiClassifyModel;
+      const presetId = typeof request.metadata?.preset_id === "string"
+        ? request.metadata.preset_id
+        : config.externalAiClassifyPresetId;
+      const enableThinking = request.metadata?.enable_thinking === true;
+      const result = await postJson<ExternalChatResponse>(
+        "external",
+        `${config.externalAiBaseUrl}${config.externalAiClassifyPath}`,
+        {
+          headers: buildHeaders(config.externalAiApiKey),
+          body: {
+            model,
+            preset_id: presetId,
+            system_prompt: request.systemPrompt,
+            enable_thinking: enableThinking,
+            max_tokens: request.maxOutputTokens,
+            messages: [
+              {
+                role: "user",
+                content: request.instruction
+                  ? `${request.instruction}\n\nTEXT TO CLASSIFY:\n${request.text}`
+                  : request.text
+              }
+            ]
+          },
+          timeoutMs: 300_000
+        }
+      );
+
+      const rawText = result.data.choices?.[0]?.message?.content?.trim();
+      if (!rawText) {
+        throw new ProviderError({
+          provider: "external",
+          code: "PROVIDER_UNKNOWN",
+          message: "External AI provider returned no classification content"
+        });
+      }
+
+      return {
+        provider: "external",
+        model: result.data.model ?? model,
+        output: parseJsonObjectText("external", rawText),
+        rawText,
+        tokenUsage: {
+          inputTokens: result.data.usage?.prompt_tokens,
+          outputTokens: result.data.usage?.completion_tokens,
+          totalTokens: result.data.usage?.total_tokens
+        },
+        latencyMs: Date.now() - started,
+        providerMetadata: {
+          preset_id: presetId,
+          metrics: result.data.metrics ?? {}
+        }
       };
     }
   };

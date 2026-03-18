@@ -2,6 +2,19 @@
 
 ## 2026-03-18
 
+- Added an optional provider-backed structured classification path for text using the same adapter boundary as embeddings and derivations.
+- Added `classifyText` to provider adapters, with live implementations for `external` and `openrouter` and explicit unsupported behavior for `gemini`.
+- Added a classifier staging service and new entrypoints:
+  - `npm run classify:text`
+  - `POST /classify/text`
+  - `POST /classify/derivation`
+- Verified the external classification path end to end against the local mock external provider, staging:
+  - `entities`
+  - `relationship_candidates`
+  - `claim_candidates`
+  - `memory_candidates`
+  - ambiguity rows for clarification
+- Fixed a real namespace leak in `memory_candidates` dedupe by adding namespaced uniqueness in `021_memory_candidates_namespace_dedup.sql` and updating all related upsert paths.
 - Added first-class alias correction / merge support with `POST /ops/entities/merge`, outbox propagation, and durable entity redirects through `entities.merged_into_entity_id`.
 - Added durable self identity scaffolding with `identity_profiles`, `namespace_self_bindings`, and `GET/POST /ops/profile/self`, so project namespaces can resolve `I/me/my` without restating `Steve` in every note.
 - Tightened project/spec narrative extraction so freeform notes now emit `created_by`, `works_on`, `member_of`, cleaner `project_role`, and bounded conference/project-focus claims instead of over-captured project tails.

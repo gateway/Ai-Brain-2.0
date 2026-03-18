@@ -12,6 +12,7 @@
     "derive:attach-text": "npm run build && node dist/cli/derive-attach-text.js",
     "derive:queue": "npm run build && node dist/cli/enqueue-derivation-job.js",
     "derive:work": "npm run build && node dist/cli/process-derivation-jobs.js",
+    "classify:text": "npm run build && node dist/cli/classify-text.js",
     "vector-sync:work": "npm run build && node dist/cli/process-vector-sync.js",
     "reconcile:dir": "npm run build && node dist/cli/reconcile-dir.js",
     "search": "npm run build && node dist/cli/search.js",

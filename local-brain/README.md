@@ -26,6 +26,7 @@ Current working slice:
 - live Discord relay receiver (`POST /producer/discord/events`)
 - provider adapter scaffolding for OpenRouter and Gemini
 - provider adapter scaffolding for a generic external AI endpoint
+- provider-backed structured text classification into staged candidates and ambiguities
 - binary artifact registration for image / pdf / audio evidence
 - text-proxy derivations for searchable captions / OCR / manual extraction notes
 - durable derivation job queue for OCR / transcription / caption / summary work
@@ -381,6 +382,29 @@ External derivation provider contract:
 Only the `external` provider currently supports multimodal `deriveFromArtifact`.
 `OpenRouter` and `Gemini` are wired for embeddings here, not full local artifact derivation.
 
+External classification provider contract:
+
+- `POST /v1/chat/completions`
+- request fields used by the brain:
+  - `model`
+  - `preset_id` when the provider supports preset routing
+  - `system_prompt`
+  - `max_tokens`
+  - `messages`
+- response fields used by the brain:
+  - `choices[0].message.content`
+  - optional `usage.prompt_tokens`
+  - optional `usage.completion_tokens`
+  - optional `usage.total_tokens`
+  - optional provider metrics
+
+The external classification path is intentionally staged:
+
+- provider returns structured JSON only
+- the brain writes `entities`, `relationship_candidates`, `claim_candidates`, `memory_candidates`, and ambiguity rows
+- the provider does **not** write `semantic_memory`, `procedural_memory`, or `relationship_memory` directly
+- low-confidence or vague items stay in the inbox path instead of becoming truth
+
 Queue worker:
 
 ```bash
@@ -459,6 +483,38 @@ Provider embedding smoke check:
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
 npm run provider:smoke -- --provider openrouter --text "local brain provider smoke test"
 ```
+
+Provider classification smoke check:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+BRAIN_EXTERNAL_AI_BASE_URL=http://127.0.0.1:8090 npm run provider:smoke -- --provider external --mode classify --preset research-analyst
+```
+
+Stage text classification into candidates:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+BRAIN_EXTERNAL_AI_BASE_URL=http://127.0.0.1:8090 npm run classify:text -- --namespace personal --provider external --preset research-analyst --text "Steve is friends with Gummi and works on Two-Way."
+```
+
+Or through the HTTP runtime:
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/classify/text \
+  -H 'content-type: application/json' \
+  --data '{"namespace_id":"personal","provider":"external","preset_id":"research-analyst","text":"Steve is friends with Gummi and works on Two-Way."}'
+```
+
+The current intended production split is:
+
+- the brain owns memory, graph state, BM25/vector retrieval, TMT, inbox/outbox, and promotion
+- external providers own ephemeral inference:
+  - embeddings
+  - OCR / transcription / captions
+  - structured extraction / classification
+  - optional final reasoning
+- provider outputs stay portable behind one adapter contract so a local Qwen endpoint and OpenRouter can both plug in without schema changes
 
 External AI endpoint smoke path:
 

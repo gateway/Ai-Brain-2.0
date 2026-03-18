@@ -2665,7 +2665,7 @@ export async function stageNarrativeClaims(
               metadata
             )
             VALUES ($1, $2, $3, $4, $5, 'semantic_note', $6, $7, $8, $9::jsonb, $10::jsonb)
-            ON CONFLICT (source_memory_id, source_chunk_id, candidate_type, content)
+            ON CONFLICT ON CONSTRAINT memory_candidates_namespace_source_memory_id_source_chunk_key
             DO NOTHING
           `,
           [

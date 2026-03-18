@@ -223,7 +223,7 @@ async function saveCandidate(args: ToolCallArgs): Promise<unknown> {
           metadata
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-        ON CONFLICT (source_memory_id, source_chunk_id, candidate_type, content)
+        ON CONFLICT ON CONSTRAINT memory_candidates_namespace_source_memory_id_source_chunk_key
         DO UPDATE SET
           confidence = COALESCE(EXCLUDED.confidence, memory_candidates.confidence),
           metadata = memory_candidates.metadata || EXCLUDED.metadata,

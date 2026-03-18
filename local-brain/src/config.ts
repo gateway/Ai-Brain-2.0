@@ -11,6 +11,7 @@ export interface BrainConfig {
   readonly openRouterApiKey?: string;
   readonly openRouterBaseUrl: string;
   readonly openRouterEmbeddingModel: string;
+  readonly openRouterClassifyModel: string;
   readonly geminiApiKey?: string;
   readonly geminiBaseUrl: string;
   readonly geminiEmbeddingModel: string;
@@ -19,8 +20,11 @@ export interface BrainConfig {
   readonly externalAiBaseUrl: string;
   readonly externalAiEmbeddingPath: string;
   readonly externalAiDerivePath: string;
+  readonly externalAiClassifyPath: string;
   readonly externalAiEmbeddingModel: string;
   readonly externalAiDeriveModel: string;
+  readonly externalAiClassifyModel: string;
+  readonly externalAiClassifyPresetId?: string;
   readonly slackSigningSecret?: string;
   readonly slackBotToken?: string;
   readonly slackAllowedTeams: readonly string[];
@@ -89,6 +93,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     openRouterApiKey: env.OPENROUTER_API_KEY ?? undefined,
     openRouterBaseUrl: env.BRAIN_OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
     openRouterEmbeddingModel: env.BRAIN_OPENROUTER_EMBEDDING_MODEL ?? env.BRAIN_EMBEDDING_MODEL ?? "text-embedding-3-small",
+    openRouterClassifyModel: env.BRAIN_OPENROUTER_CLASSIFY_MODEL ?? "openai/gpt-4.1-mini",
     geminiApiKey: env.GEMINI_API_KEY ?? undefined,
     geminiBaseUrl: env.BRAIN_GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta",
     geminiEmbeddingModel: env.BRAIN_GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001",
@@ -97,8 +102,12 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     externalAiBaseUrl: env.BRAIN_EXTERNAL_AI_BASE_URL ?? "http://127.0.0.1:8080",
     externalAiEmbeddingPath: env.BRAIN_EXTERNAL_AI_EMBEDDING_PATH ?? "/v1/embeddings",
     externalAiDerivePath: env.BRAIN_EXTERNAL_AI_DERIVE_PATH ?? "/v1/artifacts/derive",
+    externalAiClassifyPath: env.BRAIN_EXTERNAL_AI_CLASSIFY_PATH ?? "/v1/chat/completions",
     externalAiEmbeddingModel: env.BRAIN_EXTERNAL_AI_EMBEDDING_MODEL ?? env.BRAIN_EMBEDDING_MODEL ?? "text-embedding-default",
     externalAiDeriveModel: env.BRAIN_EXTERNAL_AI_DERIVE_MODEL ?? "artifact-derive-default",
+    externalAiClassifyModel:
+      env.BRAIN_EXTERNAL_AI_CLASSIFY_MODEL ?? "unsloth/Qwen3.5-35B-A3B-GGUF",
+    externalAiClassifyPresetId: env.BRAIN_EXTERNAL_AI_CLASSIFY_PRESET_ID ?? "research-analyst",
     slackSigningSecret: env.SLACK_SIGNING_SECRET ?? undefined,
     slackBotToken: env.SLACK_BOT_TOKEN ?? undefined,
     slackAllowedTeams: parseList(env.BRAIN_SLACK_ALLOWED_TEAMS),

@@ -1,6 +1,8 @@
 import { readConfig } from "../config.js";
 import { postJson } from "./http.js";
 import {
+  type ClassifyTextRequest,
+  type ClassifyTextResponse,
   ProviderError,
   type DeriveFromArtifactRequest,
   type DeriveFromArtifactResponse,
@@ -26,6 +28,7 @@ export function createGeminiAdapter(): ProviderAdapter {
     supports: {
       textEmbedding: true,
       multimodalDerivation: false,
+      textClassification: false,
       modalities: SUPPORTED_MODALITIES
     },
     async embedText(request: EmbedTextRequest): Promise<EmbedTextResponse> {
@@ -80,6 +83,13 @@ export function createGeminiAdapter(): ProviderAdapter {
         message:
           `Gemini multimodal derivation for modality "${request.modality}" is intentionally deferred in this slice. ` +
           "Use artifact_derivations as the storage target when wiring provider-backed extraction."
+      });
+    },
+    async classifyText(_request: ClassifyTextRequest): Promise<ClassifyTextResponse> {
+      throw new ProviderError({
+        provider: "gemini",
+        code: "PROVIDER_UNSUPPORTED",
+        message: "Gemini structured text classification is not wired in this local-first slice"
       });
     }
   };

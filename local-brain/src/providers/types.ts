@@ -31,6 +31,12 @@ export interface EmbedTextResponse {
   readonly providerMetadata?: Record<string, unknown>;
 }
 
+export interface ProviderTokenUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly totalTokens?: number;
+}
+
 export interface DeriveFromArtifactRequest {
   readonly modality: ProviderModality;
   readonly artifactUri: string;
@@ -48,6 +54,25 @@ export interface DeriveFromArtifactResponse {
   readonly confidenceScore?: number;
   readonly entities?: string[];
   readonly provenance: ProviderProvenance;
+  readonly latencyMs: number;
+  readonly providerMetadata?: Record<string, unknown>;
+}
+
+export interface ClassifyTextRequest {
+  readonly text: string;
+  readonly model?: string;
+  readonly systemPrompt?: string;
+  readonly instruction?: string;
+  readonly maxOutputTokens?: number;
+  readonly metadata?: Record<string, unknown>;
+}
+
+export interface ClassifyTextResponse {
+  readonly provider: ProviderId;
+  readonly model: string;
+  readonly output: Record<string, unknown>;
+  readonly rawText: string;
+  readonly tokenUsage?: ProviderTokenUsage;
   readonly latencyMs: number;
   readonly providerMetadata?: Record<string, unknown>;
 }
@@ -88,8 +113,10 @@ export interface ProviderAdapter {
   readonly supports: {
     readonly textEmbedding: boolean;
     readonly multimodalDerivation: boolean;
+    readonly textClassification: boolean;
     readonly modalities: ProviderModality[];
   };
   embedText(request: EmbedTextRequest): Promise<EmbedTextResponse>;
   deriveFromArtifact(request: DeriveFromArtifactRequest): Promise<DeriveFromArtifactResponse>;
+  classifyText(request: ClassifyTextRequest): Promise<ClassifyTextResponse>;
 }

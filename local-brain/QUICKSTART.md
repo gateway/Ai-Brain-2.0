@@ -21,7 +21,7 @@ This package currently provides:
 - a simple HTTP runtime surface
 - a reproducible evaluation harness
 - provider adapter scaffolding (OpenRouter/Gemini) with a smoke test CLI
-- external AI provider scaffolding for derivation and embeddings
+- external AI provider scaffolding for derivation, embeddings, and staged classification
 - text-proxy derivations for captions / OCR / extracted notes
 - durable derivation job queue for OCR / transcription / caption / summary work
 - live Slack/Discord receivers with env-gated signatures and allowlists
@@ -105,6 +105,8 @@ Useful endpoints:
 - `POST /derive/text`
 - `POST /derive/provider`
 - `POST /derive/queue`
+- `POST /classify/text`
+- `POST /classify/derivation`
 
 ## Start The MCP Server
 
@@ -160,6 +162,13 @@ Gemini:
 ```bash
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
 GEMINI_API_KEY=... npm run provider:smoke -- --provider gemini --text "provider smoke" --dimensions 1536
+```
+
+External classification:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+BRAIN_EXTERNAL_AI_BASE_URL=http://127.0.0.1:8090 npm run provider:smoke -- --provider external --mode classify --preset research-analyst
 ```
 
 Hybrid search example:
@@ -236,6 +245,20 @@ cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
 BRAIN_EXTERNAL_AI_BASE_URL=http://127.0.0.1:8090 npm run serve
 ```
 
+Stage structured extraction from plain text:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+BRAIN_EXTERNAL_AI_BASE_URL=http://127.0.0.1:8090 npm run classify:text -- --namespace personal --provider external --preset research-analyst --text "Steve is friends with Gumee and Ben. Dan connected the Chiang Mai group. Steve is acting CTO for Two-Way."
+```
+
+Or classify an existing text derivation:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+BRAIN_EXTERNAL_AI_BASE_URL=http://127.0.0.1:8090 npm run classify:text -- --provider external --preset research-analyst --derivation-id <derivation_uuid>
+```
+
 External derive contract expected by the brain:
 
 - `POST /v1/artifacts/derive`
@@ -254,6 +277,29 @@ External derive contract expected by the brain:
   - optional provenance like `pageNumber`, `timestampMs`, `byteOffsetStart`, `byteOffsetEnd`
 
 Only the `external` provider supports multimodal derivation right now.
+
+External classify contract expected by the brain:
+
+- `POST /v1/chat/completions`
+- request:
+  - `model`
+  - `preset_id`
+  - `system_prompt`
+  - `max_tokens`
+  - `messages`
+- response:
+  - `choices[0].message.content` as strict JSON
+  - optional `usage`
+  - optional `metrics`
+
+The classifier path writes staged rows only:
+
+- `relationship_candidates`
+- `claim_candidates`
+- `memory_candidates`
+- ambiguity/inbox rows through `claim_candidates`
+
+It does **not** write final truth directly.
 If the provider is unreachable, queued derivation jobs retry with backoff instead of corrupting memory state.
 If the provider is misconfigured or returns terminal errors, the job is marked failed cleanly and the raw artifact remains intact.
 
