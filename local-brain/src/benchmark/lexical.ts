@@ -145,6 +145,13 @@ const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     maxApproxTokens: 160
   },
   {
+    name: "current_relationship_live_query",
+    query: "where does Steve live?",
+    expectTopIncludes: ["Steve", "Chiang Mai"],
+    expectTopMemoryType: "relationship_memory",
+    maxApproxTokens: 40
+  },
+  {
     name: "alias_collision_stephen",
     query: "Stephen summer home Tahoe",
     expectTopIncludes: ["Stephen", "summer home", "Tahoe"],
@@ -420,6 +427,67 @@ async function insertProcedural(
   return row.id;
 }
 
+async function upsertEntity(
+  namespaceId: string,
+  entityType: string,
+  canonicalName: string
+): Promise<string> {
+  const [row] = await queryRows<{ id: string }>(
+    `
+      INSERT INTO entities (
+        namespace_id,
+        entity_type,
+        canonical_name,
+        normalized_name,
+        last_seen_at,
+        metadata
+      )
+      VALUES ($1, $2, $3, lower($3), now(), $4::jsonb)
+      ON CONFLICT (namespace_id, entity_type, normalized_name)
+      DO UPDATE SET
+        canonical_name = EXCLUDED.canonical_name,
+        last_seen_at = now(),
+        metadata = entities.metadata || EXCLUDED.metadata
+      RETURNING id
+    `,
+    [namespaceId, entityType, canonicalName, JSON.stringify({ benchmark_seed: true })]
+  );
+
+  return row.id;
+}
+
+async function insertRelationshipMemory(
+  namespaceId: string,
+  subjectName: string,
+  predicate: string,
+  objectName: string,
+  objectType: string,
+  validFrom: string,
+  confidence = 0.95
+): Promise<void> {
+  const subjectId = await upsertEntity(namespaceId, "person", subjectName);
+  const objectId = await upsertEntity(namespaceId, objectType, objectName);
+
+  await queryRows(
+    `
+      INSERT INTO relationship_memory (
+        namespace_id,
+        subject_entity_id,
+        predicate,
+        object_entity_id,
+        confidence,
+        status,
+        valid_from,
+        metadata
+      )
+      VALUES ($1, $2, $3, $4, $5, 'active', $6::timestamptz, $7::jsonb)
+      ON CONFLICT (namespace_id, subject_entity_id, predicate, object_entity_id, valid_from)
+      DO NOTHING
+    `,
+    [namespaceId, subjectId, predicate, objectId, confidence, validFrom, JSON.stringify({ benchmark_seed: true })]
+  );
+}
+
 async function insertArtifactDerivation(
   namespaceId: string,
   uri: string,
@@ -515,6 +583,8 @@ async function seedBenchmarkCorpus(namespaceId: string): Promise<void> {
     "2025-04-18T19:30:00Z",
     { benchmark_case: "entity_collision_sara" }
   );
+  await insertRelationshipMemory(namespaceId, "Steve", "lives_in", "Chiang Mai", "place", "2026-03-18T00:00:00Z", 0.95);
+  await insertRelationshipMemory(namespaceId, "Steve", "lives_in", "Thailand", "place", "2026-03-18T00:00:00Z", 0.81);
   await insertSemantic(
     namespaceId,
     "CVE-2026-3172 is the tracked buffer overflow in the gateway parser and remains open for hardening.",

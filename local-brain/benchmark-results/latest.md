@@ -1,13 +1,13 @@
 # Lexical Benchmark Report
 
-Generated: 2026-03-18T10:07:58.124Z
-Namespace: eval_1773828477583_a045c2d9
+Generated: 2026-03-18T14:30:32.542Z
+Namespace: eval_1773844232007_f409851c
 Baseline Eval Passed: true
 
 ## Summary
 
-- FTS passed: 14/14
-- BM25 passed: 14/14
+- FTS passed: 15/15
+- BM25 passed: 15/15
 - BM25 token delta: 22
 - BM25 fallback cases: 0
 - Recommendation: candidate_for_default
@@ -54,6 +54,26 @@ Baseline Eval Passed: true
 - Top overlap: 0.999
 - Approx tokens: 84
 - Top content: YEAR rollup Thu Jan 01 2026 00:00:00 GMT+0700 (Indochina Time) -> Fri Jan 01 2027 00:00:00 GMT+0700 (Indochina Time). events=11. roles=import:11. top_entities=Benjamin Williams:1, Chiang Mai:1, Gumi:1, Iceland:1, Icelandic Air:1.
+
+### current_relationship_live_query (fts)
+- Passed: true
+- Result count: 3
+- Effective lexical provider: fts
+- Lexical fallback used: false
+- Top memory type: relationship_memory
+- Top overlap: n/a
+- Approx tokens: 14
+- Top content: Steve lives in Chiang Mai
+
+### current_relationship_live_query (bm25)
+- Passed: true
+- Result count: 3
+- Effective lexical provider: bm25
+- Lexical fallback used: false
+- Top memory type: relationship_memory
+- Top overlap: n/a
+- Approx tokens: 14
+- Top content: Steve lives in Chiang Mai
 
 ### alias_collision_stephen (fts)
 - Passed: true
@@ -123,7 +143,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d006a-92c5-790f-a180-cdf377ed0b19", "semantic_memory_id": "019d006a-934a-7a31-a799-877bb0d65c2f"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d015a-f78a-7327-a6fd-d7bb59b16ff2", "semantic_memory_id": "019d015a-f83d-7336-bd92-a2db927c904c"}
 
 ### spicy_active_truth (bm25)
 - Passed: true
@@ -133,7 +153,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d006a-92c5-790f-a180-cdf377ed0b19", "semantic_memory_id": "019d006a-934a-7a31-a799-877bb0d65c2f"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d015a-f78a-7327-a6fd-d7bb59b16ff2", "semantic_memory_id": "019d015a-f83d-7336-bd92-a2db927c904c"}
 
 ### sweet_active_truth (fts)
 - Passed: true
@@ -143,7 +163,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d006a-92c5-790f-a180-cdf377ed0b19", "semantic_memory_id": "019d006a-934c-7370-b3cb-c00dfaa3653a"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d015a-f78a-7327-a6fd-d7bb59b16ff2", "semantic_memory_id": "019d015a-f83f-73e5-bb69-d742091d2b62"}
 
 ### sweet_active_truth (bm25)
 - Passed: true
@@ -153,7 +173,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d006a-92c5-790f-a180-cdf377ed0b19", "semantic_memory_id": "019d006a-934c-7370-b3cb-c00dfaa3653a"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d015a-f78a-7327-a6fd-d7bb59b16ff2", "semantic_memory_id": "019d015a-f83f-73e5-bb69-d742091d2b62"}
 
 ### rare_entity_cve (fts)
 - Passed: true

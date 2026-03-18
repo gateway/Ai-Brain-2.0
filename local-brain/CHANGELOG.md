@@ -2,6 +2,13 @@
 
 ## 2026-03-18
 
+- Added `relationship_memory` as a first-class searchable branch in the main `/search` retrieval path, so active graph facts like `Steve lives_in Chiang Mai` now surface in normal queries instead of only the graph/relationships endpoints.
+- Fixed the Query page namespace default to use the shared console defaults instead of hard-coding `personal`, eliminating a misleading mismatch where the graph and query runner were often inspecting different namespaces by default.
+- Added an explicit lexical benchmark case for `where does Steve live?` and verified it passes for both FTS and BM25 with `relationship_memory` as the top result.
+- Tightened active relationship query pruning so present-tense person/place questions prefer `lives_in` / `currently_in` over older `lived_in` history.
+- Normalized provider ambiguity labels in the classifier staging path to the brain's allowed ambiguity enum, fixing a real external-Qwen classification failure against `claim_candidates_ambiguity_type_check`.
+- Verified the live runtime now answers `where does Steve live?` with relationship-backed rows (`Thailand`, `Chiang Mai`) instead of relying only on raw episodic text.
+- Verified the real external Qwen classifier against the saved friend note, staging `10` entities, `10` relationship candidates, `4` claims, `2` ambiguities, and `12` memory candidates into a fresh namespace.
 - Added an optional provider-backed structured classification path for text using the same adapter boundary as embeddings and derivations.
 - Added `classifyText` to provider adapters, with live implementations for `external` and `openrouter` and explicit unsupported behavior for `gemini`.
 - Added a classifier staging service and new entrypoints:

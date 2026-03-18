@@ -3,7 +3,12 @@ import { queryRows } from "../db/client.js";
 import { getProviderAdapter } from "../providers/registry.js";
 import { ProviderError } from "../providers/types.js";
 import type { ArtifactId, RecallResult } from "../types.js";
-import { isPrecisionLexicalQuery, isRelationshipStyleExactQuery } from "./query-signals.js";
+import {
+  isActiveRelationshipQuery,
+  isPrecisionLexicalQuery,
+  isRelationshipStyleExactQuery,
+  preferredRelationshipPredicates
+} from "./query-signals.js";
 import { planRecallQuery } from "./planner.js";
 import type {
   ArtifactDetail,
@@ -307,7 +312,9 @@ function memoryTypePriority(memoryType: RecallResult["memoryType"], hasTimeWindo
         return 3;
       case "memory_candidate":
         return 4;
+      case "relationship_candidate":
       case "procedural_memory":
+      case "relationship_memory":
         return 5;
       default:
         return 6;
@@ -326,7 +333,9 @@ function memoryTypePriority(memoryType: RecallResult["memoryType"], hasTimeWindo
         return 3;
       case "memory_candidate":
         return 4;
+      case "relationship_candidate":
       case "procedural_memory":
+      case "relationship_memory":
         return 5;
       default:
         return 6;
@@ -336,18 +345,22 @@ function memoryTypePriority(memoryType: RecallResult["memoryType"], hasTimeWindo
   switch (memoryType) {
     case "procedural_memory":
       return 0;
-    case "semantic_memory":
+    case "relationship_memory":
       return 1;
-    case "episodic_memory":
+    case "relationship_candidate":
       return 2;
-    case "artifact_derivation":
+    case "semantic_memory":
       return 3;
-    case "memory_candidate":
+    case "episodic_memory":
       return 4;
-    case "temporal_nodes":
+    case "artifact_derivation":
       return 5;
-    default:
+    case "memory_candidate":
       return 6;
+    case "temporal_nodes":
+      return 7;
+    default:
+      return 8;
   }
 }
 
@@ -490,12 +503,50 @@ function proceduralLexicalDocument(): string {
   `;
 }
 
+function relationshipLexicalDocument(
+  relationshipAlias = "rm",
+  subjectAlias = "subject_entity",
+  objectAlias = "object_entity"
+): string {
+  return `
+    coalesce(${subjectAlias}.canonical_name, '') || ' ' ||
+    replace(coalesce(${relationshipAlias}.predicate, ''), '_', ' ') || ' ' ||
+    coalesce(${objectAlias}.canonical_name, '') || ' ' ||
+    CASE
+      WHEN ${relationshipAlias}.valid_until IS NULL THEN 'current active latest authoritative'
+      ELSE 'historical inactive superseded'
+    END
+  `;
+}
+
 function lexicalBranchWeight(
   branch: string,
   planner: ReturnType<typeof planRecallQuery>,
   relationshipExactFocus: boolean,
-  precisionLexicalFocus: boolean
+  precisionLexicalFocus: boolean,
+  activeRelationshipFocus: boolean
 ): number {
+  if (activeRelationshipFocus) {
+    switch (branch) {
+      case "relationship_memory":
+        return 1.45;
+      case "relationship_candidate":
+        return 1.2;
+      case "procedural_memory":
+        return 1.2;
+      case "semantic_memory":
+        return 0.8;
+      case "memory_candidate":
+        return 0.65;
+      case "temporal_nodes":
+        return planner.temporalSummaryWeight * 0.85;
+      case "episodic_memory":
+        return planner.episodicWeight * 0.95;
+      default:
+        return 1;
+    }
+  }
+
   if (relationshipExactFocus) {
     switch (branch) {
       case "episodic_memory":
@@ -506,6 +557,8 @@ function lexicalBranchWeight(
         return 0.72;
       case "memory_candidate":
         return 0.7;
+      case "relationship_candidate":
+        return 0.82;
       default:
         return 1;
     }
@@ -519,6 +572,8 @@ function lexicalBranchWeight(
         return 1.1;
       case "memory_candidate":
         return 0.55;
+      case "relationship_candidate":
+        return 0.85;
       case "temporal_nodes":
         return planner.temporalSummaryWeight * 0.92;
       default:
@@ -548,6 +603,8 @@ function pruneRankedResults(
   planner: ReturnType<typeof planRecallQuery>,
   relationshipExactFocus: boolean,
   precisionLexicalFocus: boolean,
+  activeRelationshipFocus: boolean,
+  preferredRelationshipPredicates: readonly string[],
   narrowTemporalWindow: boolean
 ): readonly {
   row: SearchRow;
@@ -565,6 +622,32 @@ function pruneRankedResults(
   const hasTemporal = rows.some((item) => item.row.memory_type === "temporal_nodes");
   const hasEpisodic = rows.some((item) => item.row.memory_type === "episodic_memory");
   const proceduralRows = rows.filter((item) => item.row.memory_type === "procedural_memory");
+  const relationshipRows = rows.filter(
+    (item) => item.row.memory_type === "relationship_memory" || item.row.memory_type === "relationship_candidate"
+  );
+
+  if (!planner.temporalFocus && activeRelationshipFocus && relationshipRows.length > 0) {
+    const focusedRelationshipKeys = new Set(
+      (preferredRelationshipPredicates.length > 0
+        ? relationshipRows.filter((item) => preferredRelationshipPredicates.includes(String(item.row.provenance.predicate ?? "")))
+        : relationshipRows
+      ).map((item) => resultKey(item.row))
+    );
+    const activeRelationshipKeys = focusedRelationshipKeys.size > 0
+      ? focusedRelationshipKeys
+      : new Set(relationshipRows.map((item) => resultKey(item.row)));
+
+    return rows
+      .filter(
+        (item) =>
+          item.row.memory_type === "procedural_memory" ||
+          (
+            (item.row.memory_type === "relationship_memory" || item.row.memory_type === "relationship_candidate") &&
+            activeRelationshipKeys.has(resultKey(item.row))
+          )
+      )
+      .slice(0, 3);
+  }
 
   if (!planner.temporalFocus && proceduralRows.length > 0 && (topType === "procedural_memory" || topType === "semantic_memory")) {
     return proceduralRows.slice(0, 1);
@@ -625,6 +708,7 @@ function rankLexicalSources(
   temporalFocus: boolean,
   relationshipExactFocus: boolean,
   precisionLexicalFocus: boolean,
+  activeRelationshipFocus: boolean,
   planner: ReturnType<typeof planRecallQuery>,
   timeStart: string | null,
   timeEnd: string | null,
@@ -638,7 +722,7 @@ function rankLexicalSources(
       const key = resultKey(row);
       const current = accumulator.get(key) ?? { row, score: 0 };
       current.row = row;
-      const branchWeight = lexicalBranchWeight(source.branch, planner, relationshipExactFocus, precisionLexicalFocus);
+      const branchWeight = lexicalBranchWeight(source.branch, planner, relationshipExactFocus, precisionLexicalFocus, activeRelationshipFocus);
       const temporalAlignment = temporalWindowAlignmentMultiplier(row, timeStart, timeEnd);
       const lexicalHitWeight = lexicalHitMultiplier(row.content, lexicalTerms);
       current.score += (branchWeight * temporalAlignment * lexicalHitWeight) / (20 + index + 1);
@@ -1195,7 +1279,8 @@ async function loadFtsLexicalRows(
   timeEnd: string | null,
   planner: ReturnType<typeof planRecallQuery>,
   hasTimeWindow: boolean,
-  relationshipExactFocus: boolean
+  relationshipExactFocus: boolean,
+  _activeRelationshipFocus: boolean
 ): Promise<RankedSearchRow[]> {
   const temporalRowsPromise = planner.temporalFocus || hasTimeWindow
     ? queryRows<SearchRow>(
@@ -1233,7 +1318,112 @@ async function loadFtsLexicalRows(
       )
     : Promise.resolve<SearchRow[]>([]);
 
-  const [proceduralRows, semanticRows, candidateRows, temporalRows, episodicRows, derivationRows] = await Promise.all([
+  const [relationshipRows, relationshipCandidateRows, proceduralRows, semanticRows, candidateRows, temporalRows, episodicRows, derivationRows] = await Promise.all([
+    queryRows<SearchRow>(
+      `
+        SELECT
+          rm.id AS memory_id,
+          'relationship_memory'::text AS memory_type,
+          CONCAT(
+            subject_entity.canonical_name,
+            ' ',
+            replace(rm.predicate, '_', ' '),
+            ' ',
+            object_entity.canonical_name
+          ) AS content,
+          ts_rank(
+            to_tsvector(
+              'english',
+              ${relationshipLexicalDocument()}
+            ),
+            websearch_to_tsquery('english', $2)
+          ) AS raw_score,
+          e.artifact_id,
+          COALESCE(e.occurred_at, rm.valid_from) AS occurred_at,
+          rm.namespace_id,
+          jsonb_build_object(
+            'tier', 'relationship_memory',
+            'lexical_provider', 'fts_bridge',
+            'subject_name', subject_entity.canonical_name,
+            'predicate', rm.predicate,
+            'object_name', object_entity.canonical_name,
+            'status', rm.status,
+            'source_candidate_id', rm.source_candidate_id,
+            'source_memory_id', rc.source_memory_id,
+            'source_uri', a.uri,
+            'metadata', rm.metadata
+          ) AS provenance
+        FROM relationship_memory rm
+        JOIN entities subject_entity ON subject_entity.id = rm.subject_entity_id
+        JOIN entities object_entity ON object_entity.id = rm.object_entity_id
+        LEFT JOIN relationship_candidates rc ON rc.id = rm.source_candidate_id
+        LEFT JOIN episodic_memory e ON e.id = rc.source_memory_id
+        LEFT JOIN artifacts a ON a.id = e.artifact_id
+        WHERE rm.namespace_id = $1
+          AND rm.status = 'active'
+          AND rm.valid_until IS NULL
+          AND to_tsvector(
+                'english',
+                ${relationshipLexicalDocument()}
+              ) @@ websearch_to_tsquery('english', $2)
+          AND ($3::timestamptz IS NULL OR COALESCE(e.occurred_at, rm.valid_from) >= $3)
+          AND ($4::timestamptz IS NULL OR COALESCE(e.occurred_at, rm.valid_from) <= $4)
+        ORDER BY raw_score DESC, COALESCE(e.occurred_at, rm.valid_from) DESC
+        LIMIT $5
+      `,
+      [namespaceId, queryText, timeStart, timeEnd, candidateLimit]
+    ),
+    queryRows<SearchRow>(
+      `
+        SELECT
+          rc.id AS memory_id,
+          'relationship_candidate'::text AS memory_type,
+          CONCAT(
+            subject_entity.canonical_name,
+            ' ',
+            replace(rc.predicate, '_', ' '),
+            ' ',
+            object_entity.canonical_name
+          ) AS content,
+          ts_rank(
+            to_tsvector(
+              'english',
+              ${relationshipLexicalDocument("rc")}
+            ),
+            websearch_to_tsquery('english', $2)
+          ) AS raw_score,
+          e.artifact_id,
+          COALESCE(e.occurred_at, rc.valid_from, rc.created_at) AS occurred_at,
+          rc.namespace_id,
+          jsonb_build_object(
+            'tier', 'relationship_candidate',
+            'lexical_provider', 'fts_bridge',
+            'subject_name', subject_entity.canonical_name,
+            'predicate', rc.predicate,
+            'object_name', object_entity.canonical_name,
+            'status', rc.status,
+            'source_memory_id', rc.source_memory_id,
+            'source_uri', a.uri,
+            'metadata', rc.metadata
+          ) AS provenance
+        FROM relationship_candidates rc
+        JOIN entities subject_entity ON subject_entity.id = rc.subject_entity_id
+        JOIN entities object_entity ON object_entity.id = rc.object_entity_id
+        LEFT JOIN episodic_memory e ON e.id = rc.source_memory_id
+        LEFT JOIN artifacts a ON a.id = e.artifact_id
+        WHERE rc.namespace_id = $1
+          AND rc.status IN ('pending', 'accepted')
+          AND to_tsvector(
+                'english',
+                ${relationshipLexicalDocument("rc")}
+              ) @@ websearch_to_tsquery('english', $2)
+          AND ($3::timestamptz IS NULL OR COALESCE(e.occurred_at, rc.valid_from, rc.created_at) >= $3)
+          AND ($4::timestamptz IS NULL OR COALESCE(e.occurred_at, rc.valid_from, rc.created_at) <= $4)
+        ORDER BY raw_score DESC, COALESCE(e.occurred_at, rc.valid_from, rc.created_at) DESC
+        LIMIT $5
+      `,
+      [namespaceId, queryText, timeStart, timeEnd, candidateLimit]
+    ),
     queryRows<SearchRow>(
       `
         SELECT
@@ -1396,6 +1586,8 @@ async function loadFtsLexicalRows(
   ]);
 
   return toRankedRows([
+    ...relationshipRows,
+    ...relationshipCandidateRows,
     ...proceduralRows,
     ...semanticRows,
     ...candidateRows,
@@ -1416,7 +1608,8 @@ async function loadBm25LexicalRows(
   planner: ReturnType<typeof planRecallQuery>,
   hasTimeWindow: boolean,
   relationshipExactFocus: boolean,
-  precisionLexicalFocus: boolean
+  precisionLexicalFocus: boolean,
+  activeRelationshipFocus: boolean
 ): Promise<RankedSearchRow[]> {
   const plannerTerms = planner.lexicalTerms.filter((term) => {
     const normalized = term.toLowerCase();
@@ -1432,7 +1625,112 @@ async function loadBm25LexicalRows(
   const episodicMatch = buildBm25DisjunctionClause(["e.content", "e.role"], effectiveQueryText, 2);
   const derivationMatch = buildBm25DisjunctionClause(["ad.content_text", "ad.derivation_type"], effectiveQueryText, 2);
 
-  const [proceduralRows, semanticRows, candidateRows, temporalRows, episodicRows, derivationRows] = await Promise.all([
+  const [relationshipRows, relationshipCandidateRows, proceduralRows, semanticRows, candidateRows, temporalRows, episodicRows, derivationRows] = await Promise.all([
+    queryRows<SearchRow>(
+      `
+        SELECT
+          rm.id AS memory_id,
+          'relationship_memory'::text AS memory_type,
+          CONCAT(
+            subject_entity.canonical_name,
+            ' ',
+            replace(rm.predicate, '_', ' '),
+            ' ',
+            object_entity.canonical_name
+          ) AS content,
+          ts_rank(
+            to_tsvector(
+              'english',
+              ${relationshipLexicalDocument()}
+            ),
+            websearch_to_tsquery('english', $2)
+          ) AS raw_score,
+          e.artifact_id,
+          COALESCE(e.occurred_at, rm.valid_from) AS occurred_at,
+          rm.namespace_id,
+          jsonb_build_object(
+            'tier', 'relationship_memory',
+            'lexical_provider', 'fts_bridge',
+            'subject_name', subject_entity.canonical_name,
+            'predicate', rm.predicate,
+            'object_name', object_entity.canonical_name,
+            'status', rm.status,
+            'source_candidate_id', rm.source_candidate_id,
+            'source_memory_id', rc.source_memory_id,
+            'source_uri', a.uri,
+            'metadata', rm.metadata
+          ) AS provenance
+        FROM relationship_memory rm
+        JOIN entities subject_entity ON subject_entity.id = rm.subject_entity_id
+        JOIN entities object_entity ON object_entity.id = rm.object_entity_id
+        LEFT JOIN relationship_candidates rc ON rc.id = rm.source_candidate_id
+        LEFT JOIN episodic_memory e ON e.id = rc.source_memory_id
+        LEFT JOIN artifacts a ON a.id = e.artifact_id
+        WHERE rm.namespace_id = $1
+          AND rm.status = 'active'
+          AND rm.valid_until IS NULL
+          AND to_tsvector(
+                'english',
+                ${relationshipLexicalDocument()}
+              ) @@ websearch_to_tsquery('english', $2)
+          AND ($3::timestamptz IS NULL OR COALESCE(e.occurred_at, rm.valid_from) >= $3)
+          AND ($4::timestamptz IS NULL OR COALESCE(e.occurred_at, rm.valid_from) <= $4)
+        ORDER BY raw_score DESC, COALESCE(e.occurred_at, rm.valid_from) DESC
+        LIMIT $5
+      `,
+      [namespaceId, queryText, timeStart, timeEnd, candidateLimit]
+    ),
+    queryRows<SearchRow>(
+      `
+        SELECT
+          rc.id AS memory_id,
+          'relationship_candidate'::text AS memory_type,
+          CONCAT(
+            subject_entity.canonical_name,
+            ' ',
+            replace(rc.predicate, '_', ' '),
+            ' ',
+            object_entity.canonical_name
+          ) AS content,
+          ts_rank(
+            to_tsvector(
+              'english',
+              ${relationshipLexicalDocument("rc")}
+            ),
+            websearch_to_tsquery('english', $2)
+          ) AS raw_score,
+          e.artifact_id,
+          COALESCE(e.occurred_at, rc.valid_from, rc.created_at) AS occurred_at,
+          rc.namespace_id,
+          jsonb_build_object(
+            'tier', 'relationship_candidate',
+            'lexical_provider', 'fts_bridge',
+            'subject_name', subject_entity.canonical_name,
+            'predicate', rc.predicate,
+            'object_name', object_entity.canonical_name,
+            'status', rc.status,
+            'source_memory_id', rc.source_memory_id,
+            'source_uri', a.uri,
+            'metadata', rc.metadata
+          ) AS provenance
+        FROM relationship_candidates rc
+        JOIN entities subject_entity ON subject_entity.id = rc.subject_entity_id
+        JOIN entities object_entity ON object_entity.id = rc.object_entity_id
+        LEFT JOIN episodic_memory e ON e.id = rc.source_memory_id
+        LEFT JOIN artifacts a ON a.id = e.artifact_id
+        WHERE rc.namespace_id = $1
+          AND rc.status IN ('pending', 'accepted')
+          AND to_tsvector(
+                'english',
+                ${relationshipLexicalDocument("rc")}
+              ) @@ websearch_to_tsquery('english', $2)
+          AND ($3::timestamptz IS NULL OR COALESCE(e.occurred_at, rc.valid_from, rc.created_at) >= $3)
+          AND ($4::timestamptz IS NULL OR COALESCE(e.occurred_at, rc.valid_from, rc.created_at) <= $4)
+        ORDER BY raw_score DESC, COALESCE(e.occurred_at, rc.valid_from, rc.created_at) DESC
+        LIMIT $5
+      `,
+      [namespaceId, queryText, timeStart, timeEnd, candidateLimit]
+    ),
     queryRows<SearchRow>(
       `
         SELECT
@@ -1636,6 +1934,8 @@ async function loadBm25LexicalRows(
 
   return rankLexicalSources(
     [
+      { branch: "relationship_memory", rows: toRankedRows(relationshipRows) },
+      { branch: "relationship_candidate", rows: toRankedRows(relationshipCandidateRows) },
       { branch: "procedural_memory", rows: toRankedRows(proceduralRows) },
       { branch: "semantic_memory", rows: toRankedRows(semanticRows) },
       { branch: "memory_candidate", rows: toRankedRows(candidateRows) },
@@ -1648,6 +1948,7 @@ async function loadBm25LexicalRows(
     planner.temporalFocus,
     relationshipExactFocus,
     precisionLexicalFocus,
+    activeRelationshipFocus,
     planner,
     timeStart,
     timeEnd,
@@ -1707,6 +2008,8 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
   const queryText = query.query.trim();
   const planner = planRecallQuery(query);
   const relationshipExactFocus = isRelationshipStyleExactQuery(queryText);
+  const activeRelationshipFocus = isActiveRelationshipQuery(queryText);
+  const preferredActiveRelationshipPredicates = preferredRelationshipPredicates(queryText);
   const precisionLexicalFocus = (!query.queryEmbedding || query.queryEmbedding.length === 0) && (isPrecisionLexicalQuery(queryText) || relationshipExactFocus);
   const timeStart = query.timeStart ?? planner.inferredTimeStart ?? null;
   const timeEnd = query.timeEnd ?? planner.inferredTimeEnd ?? null;
@@ -1730,7 +2033,8 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
             timeEnd,
             planner,
             hasTimeWindow,
-            relationshipExactFocus
+            relationshipExactFocus,
+            activeRelationshipFocus
           ),
           provider: "fts" as LexicalProvider,
           fallbackUsed: false,
@@ -1749,7 +2053,8 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
             planner,
             hasTimeWindow,
             relationshipExactFocus,
-            precisionLexicalFocus
+            precisionLexicalFocus,
+            activeRelationshipFocus
           ),
           provider: "bm25" as LexicalProvider,
           fallbackUsed: false,
@@ -1769,7 +2074,8 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
             timeEnd,
             planner,
             hasTimeWindow,
-            relationshipExactFocus
+            relationshipExactFocus,
+            activeRelationshipFocus
           ),
           provider: "fts" as LexicalProvider,
           fallbackUsed: true,
@@ -1971,7 +2277,15 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       return resultKey(left.row).localeCompare(resultKey(right.row));
     });
 
-  const results = pruneRankedResults(rankedResults, planner, relationshipExactFocus, precisionLexicalFocus, narrowTemporalWindow)
+  const results = pruneRankedResults(
+    rankedResults,
+    planner,
+    relationshipExactFocus,
+    precisionLexicalFocus,
+    activeRelationshipFocus,
+    preferredActiveRelationshipPredicates,
+    narrowTemporalWindow
+  )
     .slice(0, limit)
     .map((row) =>
       buildRecallResult(row.row, row.rrfScore, {

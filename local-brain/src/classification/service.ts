@@ -4,6 +4,15 @@ import { getProviderAdapter } from "../providers/registry.js";
 
 type BrainEntityType = "self" | "person" | "place" | "org" | "project" | "concept" | "unknown";
 type MentionRole = "subject" | "participant" | "location" | "organization" | "project" | "mentioned";
+type BrainAmbiguityType =
+  | "possible_misspelling"
+  | "undefined_kinship"
+  | "vague_place"
+  | "alias_collision"
+  | "unknown_reference"
+  | "asr_correction"
+  | "kinship_resolution"
+  | "place_grounding";
 
 interface EntityPacket {
   readonly name: string;
@@ -182,6 +191,58 @@ function coerceMentionRole(value: unknown, entityType: BrainEntityType): Mention
       return "participant";
     default:
       return "mentioned";
+  }
+}
+
+function normalizeAmbiguityType(value: unknown): BrainAmbiguityType | null {
+  const normalized = asString(value)?.toLowerCase().replace(/[\s-]+/gu, "_");
+  if (!normalized) {
+    return null;
+  }
+
+  switch (normalized) {
+    case "possible_misspelling":
+    case "undefined_kinship":
+    case "vague_place":
+    case "alias_collision":
+    case "unknown_reference":
+    case "asr_correction":
+    case "kinship_resolution":
+    case "place_grounding":
+      return normalized;
+    case "misspelling":
+    case "spelling_error":
+    case "name_misspelling":
+      return "possible_misspelling";
+    case "kinship":
+    case "unknown_kinship":
+      return "undefined_kinship";
+    case "place":
+    case "location":
+    case "place_alias":
+      return "vague_place";
+    case "alias":
+    case "nickname":
+    case "entity_collision":
+    case "name_collision":
+      return "alias_collision";
+    default:
+      if (normalized.includes("misspell") || normalized.includes("spelling")) {
+        return "possible_misspelling";
+      }
+      if (normalized.includes("kinship") || normalized.includes("uncle") || normalized.includes("aunt")) {
+        return normalized.includes("resolution") ? "kinship_resolution" : "undefined_kinship";
+      }
+      if (normalized.includes("place") || normalized.includes("location") || normalized.includes("ground")) {
+        return normalized.includes("ground") ? "place_grounding" : "vague_place";
+      }
+      if (normalized.includes("alias") || normalized.includes("nickname") || normalized.includes("collision")) {
+        return "alias_collision";
+      }
+      if (normalized.includes("asr") || normalized.includes("transcrib")) {
+        return "asr_correction";
+      }
+      return "unknown_reference";
   }
 }
 
@@ -628,7 +689,7 @@ export async function classifyTextToCandidates(
           "provider_classification",
           asString(claim.time_expression_text) ?? null,
           claim.ambiguity_type || claim.ambiguity_reason ? "requires_clarification" : "none",
-          asString(claim.ambiguity_type) ?? null,
+          normalizeAmbiguityType(claim.ambiguity_type),
           asString(claim.ambiguity_reason) ?? null,
           JSON.stringify({
             source: "provider_classification",
@@ -689,7 +750,7 @@ export async function classifyTextToCandidates(
           textValue,
           coerceEntityType(ambiguity.entity_type),
           textValue.toLowerCase(),
-          asString(ambiguity.ambiguity_type) ?? "unknown_reference",
+          normalizeAmbiguityType(ambiguity.ambiguity_type) ?? "unknown_reference",
           asString(ambiguity.reason) ?? "Needs clarification",
           JSON.stringify({
             source: "provider_classification",

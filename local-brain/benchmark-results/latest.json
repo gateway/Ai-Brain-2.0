@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-03-18T10:07:58.124Z",
-  "namespaceId": "eval_1773828477583_a045c2d9",
+  "generatedAt": "2026-03-18T14:30:32.542Z",
+  "namespaceId": "eval_1773844232007_f409851c",
   "baselineEvalPassed": true,
   "baselineEvalFailures": [],
   "cases": [
@@ -57,6 +57,30 @@
       "failureReasons": []
     },
     {
+      "name": "current_relationship_live_query",
+      "provider": "fts",
+      "passed": true,
+      "resultCount": 3,
+      "effectiveLexicalProvider": "fts",
+      "lexicalFallbackUsed": false,
+      "topMemoryType": "relationship_memory",
+      "topContent": "Steve lives in Chiang Mai",
+      "approxTokens": 14,
+      "failureReasons": []
+    },
+    {
+      "name": "current_relationship_live_query",
+      "provider": "bm25",
+      "passed": true,
+      "resultCount": 3,
+      "effectiveLexicalProvider": "bm25",
+      "lexicalFallbackUsed": false,
+      "topMemoryType": "relationship_memory",
+      "topContent": "Steve lives in Chiang Mai",
+      "approxTokens": 14,
+      "failureReasons": []
+    },
+    {
       "name": "alias_collision_stephen",
       "provider": "fts",
       "passed": true,
@@ -138,7 +162,7 @@
       "effectiveLexicalProvider": "fts",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019d006a-92c5-790f-a180-cdf377ed0b19\", \"semantic_memory_id\": \"019d006a-934a-7a31-a799-877bb0d65c2f\"}",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019d015a-f78a-7327-a6fd-d7bb59b16ff2\", \"semantic_memory_id\": \"019d015a-f83d-7336-bd92-a2db927c904c\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -150,7 +174,7 @@
       "effectiveLexicalProvider": "bm25",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019d006a-92c5-790f-a180-cdf377ed0b19\", \"semantic_memory_id\": \"019d006a-934a-7a31-a799-877bb0d65c2f\"}",
+      "topContent": "preference: preference:spicy food = {\"target\": \"spicy food\", \"polarity\": \"dislike\", \"source_memory_id\": \"019d015a-f78a-7327-a6fd-d7bb59b16ff2\", \"semantic_memory_id\": \"019d015a-f83d-7336-bd92-a2db927c904c\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -162,7 +186,7 @@
       "effectiveLexicalProvider": "fts",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019d006a-92c5-790f-a180-cdf377ed0b19\", \"semantic_memory_id\": \"019d006a-934c-7370-b3cb-c00dfaa3653a\"}",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019d015a-f78a-7327-a6fd-d7bb59b16ff2\", \"semantic_memory_id\": \"019d015a-f83f-73e5-bb69-d742091d2b62\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -174,7 +198,7 @@
       "effectiveLexicalProvider": "bm25",
       "lexicalFallbackUsed": false,
       "topMemoryType": "procedural_memory",
-      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019d006a-92c5-790f-a180-cdf377ed0b19\", \"semantic_memory_id\": \"019d006a-934c-7370-b3cb-c00dfaa3653a\"}",
+      "topContent": "preference: preference:sweet food = {\"target\": \"sweet food\", \"polarity\": \"like\", \"source_memory_id\": \"019d015a-f78a-7327-a6fd-d7bb59b16ff2\", \"semantic_memory_id\": \"019d015a-f83f-73e5-bb69-d742091d2b62\"}",
       "approxTokens": 13,
       "failureReasons": []
     },
@@ -346,9 +370,9 @@
     }
   ],
   "summary": {
-    "ftsPassed": 14,
-    "bm25Passed": 14,
-    "totalCases": 14,
+    "ftsPassed": 15,
+    "bm25Passed": 15,
+    "totalCases": 15,
     "bm25TokenDelta": 22,
     "bm25FallbackCases": 0,
     "recommendation": "candidate_for_default",

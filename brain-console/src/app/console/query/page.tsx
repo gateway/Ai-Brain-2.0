@@ -3,7 +3,7 @@ import { ConsoleShell } from "@/components/console-shell";
 import { StatusBadge } from "@/components/metric-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { getRuntimeBaseUrl, searchBrain, type SearchResult } from "@/lib/brain-runtime";
+import { getConsoleDefaults, getRuntimeBaseUrl, searchBrain, type SearchResult } from "@/lib/brain-runtime";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -13,7 +13,8 @@ function readParam(value: string | string[] | undefined, fallback = ""): string 
 
 export default async function QueryPage({ searchParams }: { readonly searchParams: SearchParams }) {
   const params = await searchParams;
-  const namespaceId = readParam(params.namespace, "personal");
+  const defaults = await getConsoleDefaults();
+  const namespaceId = readParam(params.namespace, defaults.namespaceId);
   const query = readParam(params.q);
   const timeStart = readParam(params.time_start);
   const timeEnd = readParam(params.time_end);

@@ -62,3 +62,47 @@ export function isPrecisionLexicalQuery(queryText: string): boolean {
 
   return nonStopLower.length > 0 && nonStopLower.length <= 3 && !/\b(what|when|where|who)\b/i.test(normalized);
 }
+
+export function isActiveRelationshipQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bwhere\s+do(?:es)?\s+.+\s+(?:live|work|stay|based)\b/i.test(normalized) ||
+    /\bwhere\s+is\s+.+\s+from\b/i.test(normalized) ||
+    /\bwho\s+does\s+.+\s+work\s+with\b/i.test(normalized) ||
+    /\bwho\s+(?:is|are)\s+.+\s+friends?\s+with\b/i.test(normalized) ||
+    /\bwhat\s+does\s+.+\s+do\b/i.test(normalized)
+  );
+}
+
+export function preferredRelationshipPredicates(queryText: string): readonly string[] {
+  const normalized = queryText.trim().toLowerCase();
+  if (!normalized) {
+    return [];
+  }
+
+  if (/\bwhere\s+do(?:es)?\s+.+\s+(?:live|stay|based)\b/i.test(normalized)) {
+    return ["lives_in", "currently_in"];
+  }
+
+  if (/\bwhere\s+is\s+.+\s+from\b/i.test(normalized)) {
+    return ["from", "originates_from"];
+  }
+
+  if (/\bwho\s+does\s+.+\s+work\s+with\b/i.test(normalized)) {
+    return ["works_with", "works_at", "works_on", "member_of"];
+  }
+
+  if (/\bwho\s+(?:is|are)\s+.+\s+friends?\s+with\b/i.test(normalized)) {
+    return ["friend_of", "friends_with", "best_friends_with", "with", "hikes_with"];
+  }
+
+  if (/\bwhat\s+does\s+.+\s+do\b/i.test(normalized) || /\bwhere\s+do(?:es)?\s+.+\s+work\b/i.test(normalized)) {
+    return ["works_at", "works_on", "member_of", "runs", "works_with"];
+  }
+
+  return [];
+}
