@@ -5,6 +5,7 @@
 - Added a durable `derivation_jobs` queue for OCR, transcription, caption, summary, text, and embedding backfills so multimodal work can be deferred safely without a live provider.
 - Added `POST /derive/queue` and a matching CLI so artifacts can be routed into a replayable job queue instead of only synchronous provider calls.
 - Added a derivation worker CLI that drains the durable queue and writes finished text proxies back into `artifact_derivations`.
+- Added a vector-sync worker CLI that drains `vector_sync_jobs` and keeps embedding sync separate from OCR/STT/caption extraction.
 - Hardened live Slack/Discord producer intake with replay-window Slack signature checks, shared-secret Discord gating, and env-based team/guild/channel/user allowlists.
 - Changed provider transport failures and timeouts to retryable queue errors instead of terminal one-shot failures.
 - Added `timescaledb`-backed `episodic_timeline` as a sidecar hypertable mirror for time-windowed episodic recall, while keeping `episodic_memory` as the authoritative FK anchor.
@@ -15,6 +16,8 @@
 - Added hybrid retrieval over native PostgreSQL full-text plus `pgvector` embeddings with RRF fusion and lexical fallback when embeddings are unavailable.
 - Added retrieval metadata so searches report whether they ran in lexical or hybrid mode and why vector fallback occurred.
 - Added provider/model/dimensions support to the search CLI and HTTP search route.
+- Added a TMT-style recall planner helper that classifies temporal queries, infers year windows like `2025`, and biases historical recall toward episodic evidence plus temporal summaries.
+- Added a first runnable stdio MCP server and CLI with `memory.search`, `memory.timeline`, `memory.get_artifact`, `memory.get_relationships`, `memory.save_candidate`, and `memory.upsert_state`.
 - Added deterministic temporal summary scaffolding with `temporal_nodes` and `temporal_node_members`.
 - Added deterministic relationship adjudication into `relationship_memory` with adjudication event logs.
 - Added deterministic semantic forgetting/decay with `semantic_decay_events`.

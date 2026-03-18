@@ -76,7 +76,7 @@ Useful endpoints:
 
 ```bash
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
-npm run build && node dist/cli/mcp.js
+npm run mcp
 ```
 
 This is a stdio JSON-RPC surface intended for local assistant clients. The
@@ -157,6 +157,14 @@ npm run derive:queue -- --namespace personal --artifact-id <artifact_uuid> --pro
 npm run derive:work -- --namespace personal --provider external --limit 25
 ```
 
+Queue second-stage embedding sync for derived text:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run vector-sync:enqueue -- --namespace personal --provider external --model text-embedding-default --limit 50
+npm run vector-sync:work -- --namespace personal --provider external --limit 50
+```
+
 ## Verified Example Queries
 
 ```bash
@@ -174,7 +182,7 @@ npm run decay:semantic -- --namespace personal_refined2 --inactivity-hours 24 --
 - retrieval is hybrid today, but the fusion kernel is still app-side and the lexical branch is native PostgreSQL FTS rather than ParadeDB BM25
 - relationship extraction is still heuristic; adjudication is deterministic threshold/rule-based (no LLM judge yet)
 - raw binary artifacts are stored, and the new derivation queue is the safe path for OCR/transcription/caption work when no live external service is connected
-- the current safe multimodal path is artifact registration plus attached text proxies or queued derivation jobs
+- the current safe multimodal path is artifact registration plus queued derivation jobs, with embeddings handled as a second queued stage
 - relative-time resolution is still limited
 - time-bounded queries now infer year windows and include temporal summaries when useful, but explicit parent-child TMT links are still the next structural step
 

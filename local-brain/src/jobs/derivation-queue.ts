@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { withClient, withTransaction } from "../db/client.js";
 import { deriveArtifactViaProvider } from "../derivations/service.js";
+import { enqueueTargetVectorSync } from "./vector-sync.js";
 import { ProviderError } from "../providers/types.js";
 import type { ProviderModality } from "../providers/types.js";
 
@@ -74,6 +75,13 @@ interface ClaimedDerivationJobRow {
   readonly metadata: Record<string, unknown> | null;
 }
 
+interface AutoVectorSyncConfig {
+  readonly provider: string;
+  readonly model: string;
+  readonly outputDimensionality?: number;
+  readonly metadata?: Record<string, unknown>;
+}
+
 function normalizeLimit(limit: number | undefined): number {
   if (!limit || Number.isNaN(limit)) {
     return 50;
@@ -85,6 +93,59 @@ function normalizeLimit(limit: number | undefined): number {
 function retryDelayMs(retryCount: number): number {
   const minutes = Math.min(60, 2 ** Math.max(0, retryCount));
   return minutes * 60_000;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseAutoVectorSyncConfig(
+  metadata: Record<string, unknown> | null
+): AutoVectorSyncConfig | null {
+  if (!metadata) {
+    return null;
+  }
+
+  const enabled =
+    metadata.enqueue_vector_sync === true ||
+    metadata.auto_embed === true ||
+    isObject(metadata.vector_sync);
+
+  if (!enabled) {
+    return null;
+  }
+
+  const nested = isObject(metadata.vector_sync) ? metadata.vector_sync : {};
+  const provider =
+    (typeof nested.provider === "string" && nested.provider.trim()) ||
+    (typeof metadata.vector_provider === "string" && metadata.vector_provider.trim());
+  const model =
+    (typeof nested.model === "string" && nested.model.trim()) ||
+    (typeof metadata.vector_model === "string" && metadata.vector_model.trim());
+  const outputDimensionality = Number(
+    (typeof nested.output_dimensionality === "number" && nested.output_dimensionality) ||
+      (typeof metadata.vector_output_dimensionality === "number" && metadata.vector_output_dimensionality) ||
+      (typeof nested.dimensions === "number" && nested.dimensions) ||
+      (typeof metadata.vector_dimensions === "number" && metadata.vector_dimensions) ||
+      NaN
+  );
+
+  if (!provider || !model) {
+    return null;
+  }
+
+  return {
+    provider,
+    model,
+    outputDimensionality: Number.isFinite(outputDimensionality) ? outputDimensionality : undefined,
+    metadata: {
+      source: "derivation_job_follow_up"
+    }
+  };
 }
 
 function inferJobKind(artifactType: string, mimeType?: string | null): DerivationJobKind {
@@ -329,6 +390,49 @@ export async function processDerivationJobs(
 
   for (const job of jobs) {
     try {
+      if (job.job_kind === "embed") {
+        const targetDerivationId = readString(job.metadata?.target_derivation_id);
+        if (!targetDerivationId) {
+          throw new Error("Embed derivation jobs require metadata.target_derivation_id. Use vector_sync_jobs for direct embedding sync.");
+        }
+
+        if (!job.provider || !job.model) {
+          throw new Error("Embed derivation jobs require provider and model so the follow-up vector sync can run.");
+        }
+
+        await enqueueTargetVectorSync({
+          namespaceId: job.namespace_id,
+          targetTable: "artifact_derivations",
+          targetId: targetDerivationId,
+          contentColumn: "content_text",
+          provider: job.provider,
+          model: job.model,
+          outputDimensionality: job.output_dimensionality ?? undefined,
+          metadata: {
+            source: "embed_derivation_job_bridge",
+            parent_derivation_job_id: job.id
+          }
+        });
+
+        await withClient(async (client) => {
+          await client.query(
+            `
+              UPDATE derivation_jobs
+              SET status = 'completed',
+                  locked_at = NULL,
+                  locked_by = NULL,
+                  updated_at = now(),
+                  last_error = NULL,
+                  last_error_at = NULL
+              WHERE id = $1
+            `,
+            [job.id]
+          );
+        });
+        completed += 1;
+        continue;
+      }
+
       const result = await deriveArtifactViaProvider({
         artifactId: job.artifact_id,
         artifactObservationId: job.artifact_observation_id,
@@ -338,7 +442,7 @@ export async function processDerivationJobs(
         modality: job.modality,
         maxOutputTokens: job.max_output_tokens ?? undefined,
         outputDimensionality: job.output_dimensionality ?? undefined,
-        embed: job.job_kind === "embed",
+        embed: false,
         metadata: {
           ...(job.metadata ?? {}),
           derivation_job_id: job.id,
@@ -360,6 +464,24 @@ export async function processDerivationJobs(
           [job.id, result.derivationId]
         );
       });
+
+      const autoVectorSync = parseAutoVectorSyncConfig(job.metadata);
+      if (autoVectorSync) {
+        await enqueueTargetVectorSync({
+          namespaceId: job.namespace_id,
+          targetTable: "artifact_derivations",
+          targetId: result.derivationId,
+          contentColumn: "content_text",
+          provider: autoVectorSync.provider,
+          model: autoVectorSync.model,
+          outputDimensionality: autoVectorSync.outputDimensionality,
+          metadata: {
+            ...(autoVectorSync.metadata ?? {}),
+            parent_derivation_job_id: job.id,
+            parent_derivation_type: job.job_kind
+          }
+        });
+      }
       completed += 1;
     } catch (error) {
       const nextRetryCount = job.retry_count + 1;

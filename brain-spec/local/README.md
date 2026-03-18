@@ -36,7 +36,9 @@ Files:
 - `29-runtime-proof-and-next-data-collection.md`
 - `30-timescale-vectorscale-pgai-live-producers-run-log.md`
 - `31-progress-and-next-slices.md`
+- `32-mcp-run-log.md`
 - `32-temporal-planner-run-log.md`
+- `33-multimodal-vector-sync-runtime-log.md`
 - `implementation/`
 
 Scope:
@@ -68,4 +70,6 @@ Recommended first read:
 - [29-runtime-proof-and-next-data-collection.md](29-runtime-proof-and-next-data-collection.md)
 - [30-timescale-vectorscale-pgai-live-producers-run-log.md](30-timescale-vectorscale-pgai-live-producers-run-log.md)
 - [31-progress-and-next-slices.md](31-progress-and-next-slices.md)
+- [32-mcp-run-log.md](32-mcp-run-log.md)
 - [32-temporal-planner-run-log.md](32-temporal-planner-run-log.md)
+- [33-multimodal-vector-sync-runtime-log.md](33-multimodal-vector-sync-runtime-log.md)

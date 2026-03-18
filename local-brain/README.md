@@ -270,11 +270,26 @@ Current worker behavior:
 - fails terminal on auth and invalid-request errors
 - writes finished derivations into `artifact_derivations` with provenance preserved
 
+Optional second-stage embedding sync:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run vector-sync:enqueue -- --namespace personal --provider external --model text-embedding-default --limit 50
+npm run vector-sync:work -- --namespace personal --provider external --limit 50
+```
+
+This is the current recommended shape for multimodal memory:
+
+- derive text first
+- commit durable text proxies into `artifact_derivations`
+- enqueue vector sync after the text write
+- keep embeddings replayable and provider-independent from the extraction step
+
 MCP server:
 
 ```bash
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
-npm run build && node dist/cli/mcp.js
+npm run mcp
 ```
 
 The first stdio tool surface is:
@@ -303,7 +318,7 @@ Live producer security knobs:
 - `BRAIN_DISCORD_ALLOWED_USERS`
 - `BRAIN_PRODUCER_SHARED_SECRET`
 
-Allowlists are comma-separated IDs. Leave them empty to allow all channels/users.
+Allowlists are comma-separated IDs. Leave them empty to allow all teams/guilds/channels/users.
 Slack requests also enforce a 5 minute replay window when signing validation is enabled.
 
 This is the current safe path for images and PDFs:
@@ -311,7 +326,7 @@ This is the current safe path for images and PDFs:
 - register the binary as durable evidence
 - attach caption / OCR / extraction text as a derivation
 - search the derivation text with provenance back to the raw file
-- add provider-backed embeddings later when keys and provider behavior are verified
+- add provider-backed embeddings as a second queued stage when keys and provider behavior are verified
 
 Provider embedding smoke check:
 
@@ -334,7 +349,8 @@ curl -s -X POST http://127.0.0.1:8787/derive/provider \
 - SQL-first fused hybrid retrieval kernel
 - automatic OCR / caption / transcription jobs for binary artifacts
 - fully automated `pgai` vectorizer ownership beyond controlled sidecar evaluation
-- provider-backed multimodal derivation execution against a real external AI endpoint
+- provider-backed multimodal derivation execution against a real external AI endpoint remains targeted first through the `external` adapter
 - signed Slack/Discord production deployments with allowlists, attachment auth, and retry hardening
 - ParadeDB BM25 remains the next lexical upgrade; today the honest branch is native PostgreSQL FTS plus vector RRF
 - LLM adjudication for relationship and conflict refinement
+- full parent-child TMT linkage and ancestor traversal

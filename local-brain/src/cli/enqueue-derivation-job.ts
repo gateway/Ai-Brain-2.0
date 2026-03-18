@@ -12,6 +12,9 @@ interface Args {
   readonly model?: string;
   readonly outputDimensionality?: number;
   readonly maxOutputTokens?: number;
+  readonly vectorProvider?: string;
+  readonly vectorModel?: string;
+  readonly vectorOutputDimensionality?: number;
 }
 
 function parseArgs(argv: readonly string[]): Args {
@@ -43,12 +46,13 @@ function parseArgs(argv: readonly string[]): Args {
 
   if (!namespaceId || !artifactId) {
     throw new Error(
-      "Usage: derive:queue --namespace <namespace> --artifact-id <uuid> [--artifact-observation-id <uuid>] [--source-chunk-id <uuid>] [--job-kind ocr|transcription|caption|summary|derive_text|embed] [--modality text|image|pdf|audio|video] [--provider external] [--model <name>] [--dimensions <n>] [--max-output-tokens <n>]"
+      "Usage: derive:queue --namespace <namespace> --artifact-id <uuid> [--artifact-observation-id <uuid>] [--source-chunk-id <uuid>] [--job-kind ocr|transcription|caption|summary|derive_text|embed] [--modality text|image|pdf|audio|video] [--provider external] [--model <name>] [--dimensions <n>] [--max-output-tokens <n>] [--vector-provider <provider> --vector-model <model> --vector-dimensions <n>]"
     );
   }
 
   const outputDimensionality = flags.has("dimensions") ? Number(flags.get("dimensions")) : undefined;
   const maxOutputTokens = flags.has("max-output-tokens") ? Number(flags.get("max-output-tokens")) : undefined;
+  const vectorOutputDimensionality = flags.has("vector-dimensions") ? Number(flags.get("vector-dimensions")) : undefined;
 
   return {
     namespaceId,
@@ -60,7 +64,10 @@ function parseArgs(argv: readonly string[]): Args {
     provider: flags.get("provider") ?? undefined,
     model: flags.get("model") ?? undefined,
     outputDimensionality: Number.isFinite(outputDimensionality) ? outputDimensionality : undefined,
-    maxOutputTokens: Number.isFinite(maxOutputTokens) ? maxOutputTokens : undefined
+    maxOutputTokens: Number.isFinite(maxOutputTokens) ? maxOutputTokens : undefined,
+    vectorProvider: flags.get("vector-provider") ?? undefined,
+    vectorModel: flags.get("vector-model") ?? undefined,
+    vectorOutputDimensionality: Number.isFinite(vectorOutputDimensionality) ? vectorOutputDimensionality : undefined
   };
 }
 
@@ -77,7 +84,16 @@ async function main(): Promise<void> {
       provider: args.provider,
       model: args.model,
       outputDimensionality: args.outputDimensionality,
-      maxOutputTokens: args.maxOutputTokens
+      maxOutputTokens: args.maxOutputTokens,
+      metadata:
+        args.vectorProvider && args.vectorModel
+          ? {
+              enqueue_vector_sync: true,
+              vector_provider: args.vectorProvider,
+              vector_model: args.vectorModel,
+              ...(args.vectorOutputDimensionality ? { vector_output_dimensionality: args.vectorOutputDimensionality } : {})
+            }
+          : undefined
     });
 
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

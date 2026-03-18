@@ -29,7 +29,10 @@ Verified local runtime slice in [local-brain/README.md](local-brain/README.md):
 - binary artifact registration for image/pdf/audio
 - text-proxy derivations for captions / OCR / extraction notes
 - provider-backed derivation route for external AI services
+- second-stage vector sync worker for replayable embedding backfill
+- stdio MCP server for local assistant/tool integration
 - hybrid retrieval with lexical fallback
+- TMT-style temporal planner for historical recall
 - preference supersession
 - deterministic relationship adjudication
 - deterministic temporal rollups
@@ -40,6 +43,7 @@ Latest verified run log:
 
 - [Timescale, pgvectorscale, pgai, and live producers run log](brain-spec/local/30-timescale-vectorscale-pgai-live-producers-run-log.md)
 - [Progress, runtime proof, and next slices](brain-spec/local/31-progress-and-next-slices.md)
+- [MCP, temporal planner, and multimodal/vector-sync runtime proof](brain-spec/local/33-multimodal-vector-sync-runtime-log.md)
 
 ## Main Folders
 
@@ -59,6 +63,7 @@ Latest verified run log:
 - [brain-spec/local/28-hybrid-retrieval-and-runtime-proof.md](brain-spec/local/28-hybrid-retrieval-and-runtime-proof.md)
 - [brain-spec/local/29-runtime-proof-and-next-data-collection.md](brain-spec/local/29-runtime-proof-and-next-data-collection.md)
 - [brain-spec/local/30-timescale-vectorscale-pgai-live-producers-run-log.md](brain-spec/local/30-timescale-vectorscale-pgai-live-producers-run-log.md)
+- [brain-spec/local/33-multimodal-vector-sync-runtime-log.md](brain-spec/local/33-multimodal-vector-sync-runtime-log.md)
 - [local-brain/CHANGELOG.md](local-brain/CHANGELOG.md)
 
 ## Honest Current Limits
@@ -75,7 +80,7 @@ Latest verified run log:
 ## Next High-Value Moves
 
 - finish real OCR / transcription / caption workers against the external/local AI endpoint
-- implement the MCP server so assistants can actively use the brain
+- expand the MCP server so assistants can actively use more of the brain
 - strengthen temporal/TMT retrieval behavior for long-horizon recall
 - move hybrid retrieval from transitional app-side RRF to a SQL-first fused kernel
 - benchmark BM25 / ParadeDB against the current lexical branch before switching

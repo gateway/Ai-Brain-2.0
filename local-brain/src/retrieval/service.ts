@@ -3,6 +3,7 @@ import { queryRows } from "../db/client.js";
 import { getProviderAdapter } from "../providers/registry.js";
 import { ProviderError } from "../providers/types.js";
 import type { ArtifactId, RecallResult } from "../types.js";
+import { planRecallQuery } from "./planner.js";
 import type {
   ArtifactDetail,
   ArtifactDerivationSummary,
@@ -144,21 +145,42 @@ function mapRecallRows(rows: SearchRow[]): RecallResult[] {
   );
 }
 
-function memoryTypePriority(memoryType: RecallResult["memoryType"], hasTimeWindow: boolean): number {
+function memoryTypePriority(memoryType: RecallResult["memoryType"], hasTimeWindow: boolean, temporalFocus: boolean): number {
+  if (temporalFocus) {
+    switch (memoryType) {
+      case "episodic_memory":
+        return 0;
+      case "temporal_nodes":
+        return 1;
+      case "artifact_derivation":
+        return 2;
+      case "semantic_memory":
+        return 3;
+      case "memory_candidate":
+        return 4;
+      case "procedural_memory":
+        return 5;
+      default:
+        return 6;
+    }
+  }
+
   if (hasTimeWindow) {
     switch (memoryType) {
       case "episodic_memory":
         return 0;
-      case "artifact_derivation":
+      case "temporal_nodes":
         return 1;
-      case "semantic_memory":
+      case "artifact_derivation":
         return 2;
-      case "memory_candidate":
+      case "semantic_memory":
         return 3;
-      case "procedural_memory":
+      case "memory_candidate":
         return 4;
-      default:
+      case "procedural_memory":
         return 5;
+      default:
+        return 6;
     }
   }
 
@@ -173,18 +195,22 @@ function memoryTypePriority(memoryType: RecallResult["memoryType"], hasTimeWindo
       return 3;
     case "episodic_memory":
       return 4;
-    default:
+    case "temporal_nodes":
       return 5;
+    default:
+      return 6;
   }
 }
 
-function compareLexical(left: RankedSearchRow, right: RankedSearchRow, hasTimeWindow: boolean): number {
+function compareLexical(left: RankedSearchRow, right: RankedSearchRow, hasTimeWindow: boolean, temporalFocus: boolean): number {
   const scoreDelta = right.scoreValue - left.scoreValue;
   if (scoreDelta !== 0) {
     return scoreDelta;
   }
 
-  const priorityDelta = memoryTypePriority(left.memory_type, hasTimeWindow) - memoryTypePriority(right.memory_type, hasTimeWindow);
+  const priorityDelta =
+    memoryTypePriority(left.memory_type, hasTimeWindow, temporalFocus) -
+    memoryTypePriority(right.memory_type, hasTimeWindow, temporalFocus);
   if (priorityDelta !== 0) {
     return priorityDelta;
   }
@@ -273,12 +299,49 @@ async function resolveQueryEmbedding(
 export async function searchMemory(query: RecallQuery): Promise<RecallResponse> {
   const limit = normalizeLimit(query.limit);
   const queryText = query.query.trim();
-  const timeStart = query.timeStart ?? null;
-  const timeEnd = query.timeEnd ?? null;
+  const planner = planRecallQuery(query);
+  const timeStart = query.timeStart ?? planner.inferredTimeStart ?? null;
+  const timeEnd = query.timeEnd ?? planner.inferredTimeEnd ?? null;
   const hasTimeWindow = Boolean(timeStart || timeEnd);
 
-  const candidateLimit = Math.max(limit * 4, 20);
-  const [proceduralRows, semanticRows, candidateRows, episodicRows, derivationRows, queryEmbeddingResult] = await Promise.all([
+  const candidateLimit = Math.max(limit * planner.candidateLimitMultiplier, 20);
+  const temporalRowsPromise = planner.temporalFocus || hasTimeWindow
+    ? queryRows<SearchRow>(
+        `
+          SELECT
+            id AS memory_id,
+            'temporal_nodes'::text AS memory_type,
+            summary_text AS content,
+            ts_rank(to_tsvector('english', coalesce(summary_text, '')), websearch_to_tsquery('english', $2)) AS raw_score,
+            NULL::uuid AS artifact_id,
+            period_end AS occurred_at,
+            namespace_id,
+            jsonb_build_object(
+              'tier', 'temporal_summary',
+              'layer', layer,
+              'period_start', period_start,
+              'period_end', period_end,
+              'summary_version', summary_version,
+              'source_count', source_count,
+              'generated_by', generated_by,
+              'metadata', metadata
+            ) AS provenance
+          FROM temporal_nodes
+          WHERE namespace_id = $1
+            AND summary_text <> ''
+            AND (
+              ($3::timestamptz IS NULL OR period_end >= $3::timestamptz)
+              AND ($4::timestamptz IS NULL OR period_start <= $4::timestamptz)
+            )
+            AND to_tsvector('english', coalesce(summary_text, '')) @@ websearch_to_tsquery('english', $2)
+          ORDER BY raw_score DESC, period_end DESC
+          LIMIT $5
+        `,
+        [query.namespaceId, queryText, timeStart, timeEnd, candidateLimit]
+      )
+    : Promise.resolve<SearchRow[]>([]);
+
+  const [proceduralRows, semanticRows, candidateRows, temporalRows, episodicRows, derivationRows, queryEmbeddingResult] = await Promise.all([
     queryRows<SearchRow>(
       `
         SELECT
@@ -377,6 +440,7 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       `,
       [query.namespaceId, queryText, candidateLimit]
     ),
+    temporalRowsPromise,
     queryRows<SearchRow>(
       `
         SELECT
@@ -444,10 +508,11 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
     ...proceduralRows,
     ...semanticRows,
     ...candidateRows,
+    ...temporalRows,
     ...episodicRows,
     ...derivationRows
   ])
-    .sort((left, right) => compareLexical(left, right, hasTimeWindow))
+    .sort((left, right) => compareLexical(left, right, hasTimeWindow, planner.temporalFocus))
     .slice(0, candidateLimit);
 
   let vectorRows: RankedSearchRow[] = [];
@@ -547,7 +612,8 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
     current.row = row;
     current.lexicalRank = index + 1;
     current.lexicalRawScore = row.scoreValue;
-    current.rrfScore += 1 / (60 + index + 1);
+    const weight = row.memory_type === "episodic_memory" ? planner.episodicWeight : row.memory_type === "temporal_nodes" ? planner.temporalSummaryWeight : 1;
+    current.rrfScore += weight / (60 + index + 1);
     rankAccumulator.set(key, current);
   }
 
@@ -567,6 +633,13 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       const scoreDelta = right.rrfScore - left.rrfScore;
       if (scoreDelta !== 0) {
         return scoreDelta;
+      }
+
+      const priorityDelta =
+        memoryTypePriority(left.row.memory_type, hasTimeWindow, planner.temporalFocus) -
+        memoryTypePriority(right.row.memory_type, hasTimeWindow, planner.temporalFocus);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
       }
 
       const leftIso = toIsoString(left.row.occurred_at);
@@ -598,7 +671,8 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       vectorFallbackReason: queryEmbeddingResult.fallbackReason,
       lexicalCandidateCount: lexicalRows.length,
       vectorCandidateCount: vectorRows.length,
-      fusedResultCount: results.length
+      fusedResultCount: results.length,
+      planner
     }
   };
 }

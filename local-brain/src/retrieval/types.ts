@@ -12,6 +12,21 @@ export interface RecallQuery {
   readonly outputDimensionality?: number;
 }
 
+export type RecallIntent = "simple" | "hybrid" | "complex";
+export type RecallBranchPreference = "lexical_first" | "episodic_then_temporal";
+
+export interface RecallPlan {
+  readonly intent: RecallIntent;
+  readonly temporalFocus: boolean;
+  readonly inferredTimeStart?: string;
+  readonly inferredTimeEnd?: string;
+  readonly yearHints: readonly string[];
+  readonly branchPreference: RecallBranchPreference;
+  readonly candidateLimitMultiplier: number;
+  readonly episodicWeight: number;
+  readonly temporalSummaryWeight: number;
+}
+
 export interface TimelineQuery {
   readonly namespaceId: NamespaceId;
   readonly timeStart: string;
@@ -30,6 +45,7 @@ export interface RecallResponse {
     readonly lexicalCandidateCount: number;
     readonly vectorCandidateCount: number;
     readonly fusedResultCount: number;
+    readonly planner: RecallPlan;
   };
 }
 
