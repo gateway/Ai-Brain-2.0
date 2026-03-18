@@ -1,4 +1,4 @@
-import type { RecallIntent, RecallPlan, RecallQuery, TemporalQueryLayer } from "./types.js";
+import type { RecallIntent, RecallPlan, RecallQuery, TemporalLayerBudgetMap, TemporalQueryLayer } from "./types.js";
 
 const MONTH_LOOKUP = new Map<string, number>([
   ["january", 0],
@@ -15,8 +15,71 @@ const MONTH_LOOKUP = new Map<string, number>([
   ["december", 11]
 ]);
 
+const PLANNER_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "around",
+  "as",
+  "at",
+  "back",
+  "be",
+  "by",
+  "did",
+  "do",
+  "does",
+  "doing",
+  "during",
+  "find",
+  "for",
+  "from",
+  "had",
+  "has",
+  "have",
+  "he",
+  "her",
+  "his",
+  "i",
+  "in",
+  "is",
+  "it",
+  "its",
+  "me",
+  "my",
+  "of",
+  "on",
+  "or",
+  "our",
+  "show",
+  "she",
+  "tell",
+  "that",
+  "the",
+  "their",
+  "them",
+  "then",
+  "they",
+  "this",
+  "to",
+  "was",
+  "we",
+  "were",
+  "what",
+  "when",
+  "where",
+  "who",
+  "with",
+  "you",
+  "your"
+]);
+
 function uniqueSorted(values: readonly string[]): readonly string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+
+function tokenizeQuery(queryText: string): readonly string[] {
+  return queryText.match(/[A-Za-z0-9][A-Za-z0-9._:-]*/g) ?? [];
 }
 
 function expandYearHint(year: string): { readonly start: string; readonly end: string } {
@@ -103,7 +166,113 @@ function containsHistoricalCue(queryText: string): boolean {
 }
 
 function containsExplicitDateCue(queryText: string): boolean {
-  return /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i.test(queryText) || /\b(19\d{2}|20\d{2})\b/.test(queryText);
+  return (
+    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i.test(queryText) ||
+    tokenizeQuery(queryText).some((token) => /^(19\d{2}|20\d{2})$/.test(token))
+  );
+}
+
+function isCodeOrVersionToken(token: string): boolean {
+  return /[-.:]/.test(token) || (/\d/.test(token) && /[A-Za-z]/.test(token));
+}
+
+function buildDescendantBudgets(intent: RecallIntent): TemporalLayerBudgetMap {
+  if (intent === "complex") {
+    return {
+      session: 0,
+      day: 8,
+      week: 4,
+      month: 2,
+      year: 0,
+      profile: 0
+    };
+  }
+
+  if (intent === "hybrid") {
+    return {
+      session: 0,
+      day: 4,
+      week: 2,
+      month: 1,
+      year: 0,
+      profile: 0
+    };
+  }
+
+  return {
+    session: 0,
+    day: 2,
+    week: 0,
+    month: 0,
+    year: 0,
+    profile: 0
+  };
+}
+
+function extractLexicalTerms(queryText: string, temporalFocus: boolean): readonly string[] {
+  const tokens = tokenizeQuery(queryText);
+  const scored = new Map<
+    string,
+    {
+      readonly term: string;
+      readonly score: number;
+      readonly position: number;
+    }
+  >();
+
+  tokens.forEach((token, index) => {
+    const normalized = token.toLowerCase();
+    const isMonth = MONTH_LOOKUP.has(normalized);
+    const isYear = /^\d{4}$/.test(token);
+    const isCodeOrVersion = isCodeOrVersionToken(token);
+    const isAcronym = /^[A-Z0-9]{2,}$/.test(token);
+    const isCapitalized = /^[A-Z][a-z]+$/.test(token);
+
+    if (PLANNER_STOP_WORDS.has(normalized)) {
+      return;
+    }
+
+    if (temporalFocus && (isMonth || isYear)) {
+      return;
+    }
+
+    if (!isCodeOrVersion && !isAcronym && normalized.length < 3) {
+      return;
+    }
+
+    let score = 1;
+    if (isCodeOrVersion) {
+      score += 6;
+    }
+    if (isAcronym) {
+      score += 5;
+    }
+    if (isCapitalized && !isMonth) {
+      score += 4;
+    }
+    if (!temporalFocus && isYear) {
+      score += 2;
+    }
+    if (/^(trip|travel|itinerary|flight|flights|hotel|kyoto|tokyo|japan|dinner|dinners|breakfast|lunch|redesign|graph|relationship|timeline|preference|coffee|spicy|sweet)$/i.test(token)) {
+      score += 2;
+    }
+
+    const existing = scored.get(normalized);
+    if (!existing || score > existing.score || (score === existing.score && index < existing.position)) {
+      scored.set(normalized, {
+        term: token,
+        score,
+        position: index
+      });
+    }
+  });
+
+  const budget = temporalFocus ? 3 : 4;
+
+  return [...scored.values()]
+    .sort((left, right) => (right.score - left.score) || (left.position - right.position))
+    .slice(0, budget)
+    .map((item) => item.term);
 }
 
 function targetLayersForGranularity(
@@ -131,7 +300,8 @@ function targetLayersForGranularity(
 
 export function planRecallQuery(query: RecallQuery): RecallPlan {
   const queryText = query.query.trim();
-  const yearHints = uniqueSorted(queryText.match(/\b(19\d{2}|20\d{2})\b/g) ?? []);
+  const tokenizedQuery = tokenizeQuery(queryText);
+  const yearHints = uniqueSorted(tokenizedQuery.filter((token) => /^(19\d{2}|20\d{2})$/.test(token)));
   const hasExplicitWindow = Boolean(query.timeStart || query.timeEnd);
   const hasTemporalCue =
     containsTemporalQuestion(queryText) ||
@@ -147,6 +317,8 @@ export function planRecallQuery(query: RecallQuery): RecallPlan {
   const isNarrowWindow = temporalGranularity === "day" || temporalGranularity === "month";
   const isBroadTemporal = temporalGranularity === "year" || temporalGranularity === "broad";
   const targetLayers = targetLayersForGranularity(intent, temporalGranularity);
+  const lexicalTerms = extractLexicalTerms(queryText, hasTemporalCue);
+  const descendantLayerBudgets = buildDescendantBudgets(intent);
 
   return {
     intent,
@@ -154,8 +326,11 @@ export function planRecallQuery(query: RecallQuery): RecallPlan {
     inferredTimeStart: inferredWindow?.start,
     inferredTimeEnd: inferredWindow?.end,
     yearHints,
+    lexicalTerms,
     targetLayers,
     maxTemporalDepth: targetLayers.length,
+    descendantLayerBudgets,
+    supportMemberBudget: intent === "complex" ? 8 : intent === "hybrid" ? 6 : 3,
     branchPreference: hasTemporalCue ? "episodic_then_temporal" : "lexical_first",
     candidateLimitMultiplier: !hasTemporalCue ? 4 : isNarrowWindow ? 4 : isBroadTemporal ? 6 : 5,
     episodicWeight: !hasTemporalCue ? 1 : isNarrowWindow ? 1.35 : isBroadTemporal ? 1.05 : 1.2,

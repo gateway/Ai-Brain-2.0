@@ -3,6 +3,7 @@ import { queryRows } from "../db/client.js";
 import { getProviderAdapter } from "../providers/registry.js";
 import { ProviderError } from "../providers/types.js";
 import type { ArtifactId, RecallResult } from "../types.js";
+import { isRelationshipStyleExactQuery } from "./query-signals.js";
 import { planRecallQuery } from "./planner.js";
 import type {
   ArtifactDetail,
@@ -315,46 +316,59 @@ function resultKey(row: SearchRow): string {
   return `${row.memory_type}:${row.memory_id}`;
 }
 
-function extractBm25Terms(queryText: string): string[] {
-  const tokens = queryText.match(/[A-Za-z0-9]+/g) ?? [];
+function mergeUniqueRows(
+  existingRows: readonly RankedSearchRow[],
+  additionalRows: readonly RankedSearchRow[],
+  candidateLimit: number,
+  hasTimeWindow: boolean,
+  temporalFocus: boolean
+): RankedSearchRow[] {
+  const merged = new Map(existingRows.map((row) => [resultKey(row), row] as const));
 
-  return tokens.filter((token) => {
-    const normalized = token.toLowerCase();
-    if (/^\d{4}$/.test(normalized)) {
-      return true;
+  for (const row of additionalRows) {
+    const key = resultKey(row);
+    const existing = merged.get(key);
+    if (existing) {
+      if (row.provenance.tier === "temporal_descendant_support" && existing.provenance.tier !== "temporal_descendant_support") {
+        merged.set(key, {
+          ...existing,
+          provenance: {
+            ...existing.provenance,
+            temporal_support: row.provenance
+          }
+        });
+      }
+      continue;
     }
 
-    return normalized.length >= 3 && !BM25_STOP_WORDS.has(normalized);
-  });
+    merged.set(key, row);
+  }
+
+  return [...merged.values()]
+    .sort((left, right) => compareLexical(left, right, hasTimeWindow, temporalFocus))
+    .slice(0, candidateLimit);
 }
 
-function buildBm25MustClause(
+function buildBm25DisjunctionClause(
   fields: readonly string[],
-  terms: readonly string[],
-  startIndex: number
+  queryText: string,
+  parameterIndex: number
 ): {
   readonly clause: string;
   readonly values: readonly string[];
-  readonly nextIndex: number;
 } {
-  const values: string[] = [];
-  const groups: string[] = [];
-  let placeholder = startIndex;
-
-  for (const term of terms) {
-    const branchClauses: string[] = [];
-    for (const field of fields) {
-      branchClauses.push(`${field} ||| $${placeholder}`);
-    }
-    groups.push(`(${branchClauses.join(" OR ")})`);
-    values.push(term);
-    placeholder += 1;
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return {
+      clause: "TRUE",
+      values: []
+    };
   }
 
+  const groups = fields.map((field) => `${field} ||| $${parameterIndex}`);
   return {
-    clause: groups.length > 0 ? groups.join("\n            AND ") : "TRUE",
-    values,
-    nextIndex: placeholder
+    clause: `(${groups.join(" OR ")})`,
+    values: [normalized]
   };
 }
 
@@ -370,7 +384,26 @@ function proceduralLexicalDocument(): string {
   `;
 }
 
-function lexicalBranchWeight(branch: string, planner: ReturnType<typeof planRecallQuery>): number {
+function lexicalBranchWeight(
+  branch: string,
+  planner: ReturnType<typeof planRecallQuery>,
+  relationshipExactFocus: boolean
+): number {
+  if (relationshipExactFocus) {
+    switch (branch) {
+      case "episodic_memory":
+        return planner.episodicWeight * 1.35;
+      case "temporal_nodes":
+        return planner.temporalSummaryWeight * 0.95;
+      case "semantic_memory":
+        return 0.72;
+      case "memory_candidate":
+        return 0.7;
+      default:
+        return 1;
+    }
+  }
+
   switch (branch) {
     case "episodic_memory":
       return planner.episodicWeight;
@@ -381,11 +414,58 @@ function lexicalBranchWeight(branch: string, planner: ReturnType<typeof planReca
   }
 }
 
+function pruneRankedResults(
+  rows: readonly {
+    row: SearchRow;
+    lexicalRank?: number;
+    vectorRank?: number;
+    lexicalRawScore?: number;
+    vectorDistance?: number;
+    rrfScore: number;
+  }[],
+  planner: ReturnType<typeof planRecallQuery>,
+  relationshipExactFocus: boolean
+): readonly {
+  row: SearchRow;
+  lexicalRank?: number;
+  vectorRank?: number;
+  lexicalRawScore?: number;
+  vectorDistance?: number;
+  rrfScore: number;
+}[] {
+  if (rows.length <= 1) {
+    return rows;
+  }
+
+  const topType = rows[0]?.row.memory_type;
+  const hasTemporal = rows.some((item) => item.row.memory_type === "temporal_nodes");
+  const hasEpisodic = rows.some((item) => item.row.memory_type === "episodic_memory");
+
+  if (relationshipExactFocus && topType === "episodic_memory") {
+    return rows.filter((item) => item.row.memory_type === "episodic_memory");
+  }
+
+  if (topType === "procedural_memory") {
+    return rows.filter((item) => item.row.memory_type === "procedural_memory");
+  }
+
+  if (topType === "artifact_derivation") {
+    return rows.filter((item) => item.row.memory_type === "artifact_derivation");
+  }
+
+  if (planner.temporalFocus && hasTemporal && hasEpisodic) {
+    return rows.filter((item) => item.row.memory_type !== "memory_candidate");
+  }
+
+  return rows.filter((item) => item.row.memory_type !== "memory_candidate");
+}
+
 function rankLexicalSources(
   sources: readonly LexicalSourceRows[],
   candidateLimit: number,
   hasTimeWindow: boolean,
   temporalFocus: boolean,
+  relationshipExactFocus: boolean,
   planner: ReturnType<typeof planRecallQuery>
 ): RankedSearchRow[] {
   const accumulator = new Map<string, { row: RankedSearchRow; score: number }>();
@@ -396,7 +476,7 @@ function rankLexicalSources(
       const key = resultKey(row);
       const current = accumulator.get(key) ?? { row, score: 0 };
       current.row = row;
-      current.score += lexicalBranchWeight(source.branch, planner) / (20 + index + 1);
+      current.score += lexicalBranchWeight(source.branch, planner, relationshipExactFocus) / (20 + index + 1);
       accumulator.set(key, current);
     }
   }
@@ -517,6 +597,182 @@ async function loadTemporalHierarchyRows(
   return toRankedRows(rows).sort((left, right) => compareLexical(left, right, Boolean(timeStart || timeEnd), true));
 }
 
+function allowedDescendantLayers(
+  planner: ReturnType<typeof planRecallQuery>
+): readonly ("day" | "week" | "month")[] {
+  return planner.targetLayers.filter(
+    (layer): layer is "day" | "week" | "month" =>
+      (layer === "day" || layer === "week" || layer === "month") && planner.descendantLayerBudgets[layer] > 0
+  );
+}
+
+function buildLayerBudgetCase(
+  budgets: ReturnType<typeof planRecallQuery>["descendantLayerBudgets"]
+): string {
+  return `CASE d.layer
+    WHEN 'day' THEN ${Math.max(0, budgets.day)}
+    WHEN 'week' THEN ${Math.max(0, budgets.week)}
+    WHEN 'month' THEN ${Math.max(0, budgets.month)}
+    ELSE 0
+  END`;
+}
+
+async function loadTemporalDescendantSupportRows(
+  namespaceId: string,
+  seedRows: readonly RankedSearchRow[],
+  candidateLimit: number,
+  timeStart: string | null,
+  timeEnd: string | null,
+  planner: ReturnType<typeof planRecallQuery>
+): Promise<RankedSearchRow[]> {
+  const temporalIds = [...new Set(
+    seedRows.filter((row) => row.memory_type === "temporal_nodes").map((row) => row.memory_id)
+  )].slice(0, Math.min(candidateLimit, 6));
+  const layers = allowedDescendantLayers(planner);
+
+  if (temporalIds.length === 0 || layers.length === 0 || planner.supportMemberBudget <= 0) {
+    return [];
+  }
+
+  const layerBudgetCase = buildLayerBudgetCase(planner.descendantLayerBudgets);
+  const rows = await queryRows<SearchRow>(
+    `
+      WITH RECURSIVE descendants AS (
+        SELECT
+          child.id,
+          child.parent_id,
+          child.layer,
+          child.period_start,
+          child.period_end,
+          child.depth,
+          child.namespace_id,
+          child.summary_text,
+          child.source_count,
+          child.generated_by,
+          child.metadata,
+          child.parent_id AS seed_temporal_node_id,
+          1 AS hops
+        FROM temporal_nodes child
+        WHERE child.namespace_id = $1
+          AND child.parent_id = ANY($2::uuid[])
+          AND child.layer = ANY($3::text[])
+          AND ($4::timestamptz IS NULL OR child.period_end >= $4::timestamptz)
+          AND ($5::timestamptz IS NULL OR child.period_start <= $5::timestamptz)
+
+        UNION ALL
+
+        SELECT
+          child.id,
+          child.parent_id,
+          child.layer,
+          child.period_start,
+          child.period_end,
+          child.depth,
+          child.namespace_id,
+          child.summary_text,
+          child.source_count,
+          child.generated_by,
+          child.metadata,
+          descendants.seed_temporal_node_id,
+          descendants.hops + 1 AS hops
+        FROM temporal_nodes child
+        JOIN descendants ON child.parent_id = descendants.id
+        WHERE child.namespace_id = $1
+          AND child.layer = ANY($3::text[])
+          AND descendants.hops < $6
+          AND ($4::timestamptz IS NULL OR child.period_end >= $4::timestamptz)
+          AND ($5::timestamptz IS NULL OR child.period_start <= $5::timestamptz)
+      ),
+      ranked_descendants AS (
+        SELECT
+          d.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY d.seed_temporal_node_id, d.layer
+            ORDER BY d.period_end DESC, d.depth DESC, d.id
+          ) AS layer_rank
+        FROM descendants d
+      ),
+      selected_descendants AS (
+        SELECT *
+        FROM ranked_descendants d
+        WHERE d.layer_rank <= ${layerBudgetCase}
+      ),
+      descendant_members AS (
+        SELECT
+          sd.seed_temporal_node_id,
+          sd.id AS supporting_temporal_node_id,
+          sd.layer AS supporting_layer,
+          sd.period_start,
+          sd.period_end,
+          sd.hops AS support_hops,
+          e.id AS memory_id,
+          e.content,
+          e.artifact_id,
+          e.occurred_at,
+          e.namespace_id,
+          e.artifact_observation_id,
+          e.source_chunk_id,
+          e.source_offset,
+          e.metadata,
+          a.uri AS source_uri,
+          ROW_NUMBER() OVER (
+            PARTITION BY sd.id
+            ORDER BY e.occurred_at DESC, e.id
+          ) AS member_rank
+        FROM selected_descendants sd
+        JOIN temporal_node_members tnm
+          ON tnm.temporal_node_id = sd.id
+         AND tnm.member_role = 'summary_input'
+         AND tnm.source_memory_id IS NOT NULL
+        JOIN episodic_memory e
+          ON e.id = tnm.source_memory_id
+         AND e.namespace_id = $1
+        LEFT JOIN artifacts a ON a.id = e.artifact_id
+        WHERE ($4::timestamptz IS NULL OR e.occurred_at >= $4::timestamptz)
+          AND ($5::timestamptz IS NULL OR e.occurred_at <= $5::timestamptz)
+      )
+      SELECT DISTINCT ON (memory_id)
+        memory_id,
+        'episodic_memory'::text AS memory_type,
+        content,
+        (1.0 / (35 + support_hops + member_rank))::double precision AS raw_score,
+        artifact_id,
+        occurred_at,
+        namespace_id,
+        jsonb_build_object(
+          'tier', 'temporal_descendant_support',
+          'seed_temporal_node_id', seed_temporal_node_id,
+          'supporting_temporal_node_id', supporting_temporal_node_id,
+          'supporting_layer', supporting_layer,
+          'support_hops', support_hops,
+          'period_start', period_start,
+          'period_end', period_end,
+          'artifact_observation_id', artifact_observation_id,
+          'source_chunk_id', source_chunk_id,
+          'source_offset', source_offset,
+          'source_uri', source_uri,
+          'metadata', metadata
+        ) AS provenance
+      FROM descendant_members
+      WHERE member_rank <= $7
+      ORDER BY memory_id, support_hops ASC, member_rank ASC, occurred_at DESC
+      LIMIT $8
+    `,
+    [
+      namespaceId,
+      temporalIds,
+      layers,
+      timeStart,
+      timeEnd,
+      Math.max(planner.maxTemporalDepth, 1),
+      planner.supportMemberBudget,
+      candidateLimit
+    ]
+  );
+
+  return toRankedRows(rows).sort((left, right) => compareLexical(left, right, Boolean(timeStart || timeEnd), true));
+}
+
 async function loadFtsLexicalRows(
   namespaceId: string,
   queryText: string,
@@ -524,7 +780,8 @@ async function loadFtsLexicalRows(
   timeStart: string | null,
   timeEnd: string | null,
   planner: ReturnType<typeof planRecallQuery>,
-  hasTimeWindow: boolean
+  hasTimeWindow: boolean,
+  relationshipExactFocus: boolean
 ): Promise<RankedSearchRow[]> {
   const temporalRowsPromise = planner.temporalFocus || hasTimeWindow
     ? queryRows<SearchRow>(
@@ -743,15 +1000,22 @@ async function loadBm25LexicalRows(
   timeStart: string | null,
   timeEnd: string | null,
   planner: ReturnType<typeof planRecallQuery>,
-  hasTimeWindow: boolean
+  hasTimeWindow: boolean,
+  relationshipExactFocus: boolean
 ): Promise<RankedSearchRow[]> {
-  const matchTerms = extractBm25Terms(queryText);
-  const effectiveTerms = matchTerms.length > 0 ? matchTerms : [queryText];
-  const semanticMatch = buildBm25MustClause(["content_abstract", "canonical_key", "memory_kind"], effectiveTerms, 2);
-  const candidateMatch = buildBm25MustClause(["content", "candidate_type", "canonical_key"], effectiveTerms, 2);
-  const temporalMatch = buildBm25MustClause(["summary_text", "layer"], effectiveTerms, 2);
-  const episodicMatch = buildBm25MustClause(["e.content", "e.role"], effectiveTerms, 2);
-  const derivationMatch = buildBm25MustClause(["ad.content_text", "ad.derivation_type"], effectiveTerms, 2);
+  const plannerTerms = planner.lexicalTerms.filter((term) => {
+    const normalized = term.toLowerCase();
+    if (/^\d{4}$/.test(normalized) && planner.temporalFocus) {
+      return false;
+    }
+    return !BM25_STOP_WORDS.has(normalized);
+  });
+  const effectiveQueryText = (plannerTerms.length > 0 ? plannerTerms : [queryText]).join(" ");
+  const semanticMatch = buildBm25DisjunctionClause(["content_abstract", "canonical_key", "memory_kind"], effectiveQueryText, 2);
+  const candidateMatch = buildBm25DisjunctionClause(["content", "candidate_type", "canonical_key"], effectiveQueryText, 2);
+  const temporalMatch = buildBm25DisjunctionClause(["summary_text", "layer"], effectiveQueryText, 2);
+  const episodicMatch = buildBm25DisjunctionClause(["e.content", "e.role"], effectiveQueryText, 2);
+  const derivationMatch = buildBm25DisjunctionClause(["ad.content_text", "ad.derivation_type"], effectiveQueryText, 2);
 
   const [proceduralRows, semanticRows, candidateRows, temporalRows, episodicRows, derivationRows] = await Promise.all([
     queryRows<SearchRow>(
@@ -821,7 +1085,7 @@ async function loadBm25LexicalRows(
           AND valid_until IS NULL
           AND ${semanticMatch.clause}
         ORDER BY raw_score DESC, valid_from DESC
-        LIMIT $${semanticMatch.nextIndex}
+            LIMIT $3
       `,
       [namespaceId, ...semanticMatch.values, candidateLimit]
     ),
@@ -851,7 +1115,7 @@ async function loadBm25LexicalRows(
           AND status IN ('pending', 'accepted')
           AND ${candidateMatch.clause}
         ORDER BY raw_score DESC, created_at DESC
-        LIMIT $${candidateMatch.nextIndex}
+            LIMIT $3
       `,
       [namespaceId, ...candidateMatch.values, candidateLimit]
     ),
@@ -881,12 +1145,12 @@ async function loadBm25LexicalRows(
             WHERE namespace_id = $1
               AND summary_text <> ''
               AND (
-                ($${temporalMatch.nextIndex}::timestamptz IS NULL OR period_end >= $${temporalMatch.nextIndex}::timestamptz)
-                AND ($${temporalMatch.nextIndex + 1}::timestamptz IS NULL OR period_start <= $${temporalMatch.nextIndex + 1}::timestamptz)
+                ($3::timestamptz IS NULL OR period_end >= $3::timestamptz)
+                AND ($4::timestamptz IS NULL OR period_start <= $4::timestamptz)
               )
               AND ${temporalMatch.clause}
             ORDER BY raw_score DESC, period_end DESC
-            LIMIT $${temporalMatch.nextIndex + 2}
+            LIMIT $5
           `,
           [namespaceId, ...temporalMatch.values, timeStart, timeEnd, candidateLimit]
         )
@@ -914,10 +1178,10 @@ async function loadBm25LexicalRows(
         LEFT JOIN artifacts a ON a.id = e.artifact_id
         WHERE e.namespace_id = $1
           AND ${episodicMatch.clause}
-          AND ($${episodicMatch.nextIndex}::timestamptz IS NULL OR e.occurred_at >= $${episodicMatch.nextIndex})
-          AND ($${episodicMatch.nextIndex + 1}::timestamptz IS NULL OR e.occurred_at <= $${episodicMatch.nextIndex + 1})
+          AND ($3::timestamptz IS NULL OR e.occurred_at >= $3)
+          AND ($4::timestamptz IS NULL OR e.occurred_at <= $4)
         ORDER BY raw_score DESC, e.occurred_at DESC
-        LIMIT $${episodicMatch.nextIndex + 2}
+        LIMIT $5
       `,
       [namespaceId, ...episodicMatch.values, timeStart, timeEnd, candidateLimit]
     ),
@@ -927,13 +1191,13 @@ async function loadBm25LexicalRows(
           ad.id AS memory_id,
           'artifact_derivation'::text AS memory_type,
           ad.content_text AS content,
-          pdb.score(ad.id) AS raw_score,
+          ts_rank(to_tsvector('english', coalesce(ad.content_text, '')), websearch_to_tsquery('english', $2)) AS raw_score,
           ao.artifact_id,
           ad.created_at AS occurred_at,
           a.namespace_id,
           jsonb_build_object(
             'tier', 'artifact_derivation',
-            'lexical_provider', 'bm25',
+            'lexical_provider', 'fts_bridge',
             'derivation_type', ad.derivation_type,
             'provider', ad.provider,
             'model', ad.model,
@@ -947,11 +1211,11 @@ async function loadBm25LexicalRows(
         JOIN artifacts a ON a.id = ao.artifact_id
         WHERE a.namespace_id = $1
           AND coalesce(ad.content_text, '') <> ''
-          AND ${derivationMatch.clause}
+          AND to_tsvector('english', coalesce(ad.content_text, '')) @@ websearch_to_tsquery('english', $2)
         ORDER BY raw_score DESC, ad.created_at DESC
-        LIMIT $${derivationMatch.nextIndex}
+        LIMIT $3
       `,
-      [namespaceId, ...derivationMatch.values, candidateLimit]
+      [namespaceId, effectiveQueryText, candidateLimit]
     )
   ]);
 
@@ -967,6 +1231,7 @@ async function loadBm25LexicalRows(
     candidateLimit,
     hasTimeWindow,
     planner.temporalFocus,
+    relationshipExactFocus,
     planner
   );
 }
@@ -1022,6 +1287,7 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
   const limit = normalizeLimit(query.limit);
   const queryText = query.query.trim();
   const planner = planRecallQuery(query);
+  const relationshipExactFocus = isRelationshipStyleExactQuery(queryText);
   const timeStart = query.timeStart ?? planner.inferredTimeStart ?? null;
   const timeEnd = query.timeEnd ?? planner.inferredTimeEnd ?? null;
   const hasTimeWindow = Boolean(timeStart || timeEnd);
@@ -1031,7 +1297,16 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
     (async () => {
       if (config.lexicalProvider !== "bm25") {
         return {
-          rows: await loadFtsLexicalRows(query.namespaceId, queryText, candidateLimit, timeStart, timeEnd, planner, hasTimeWindow),
+          rows: await loadFtsLexicalRows(
+            query.namespaceId,
+            queryText,
+            candidateLimit,
+            timeStart,
+            timeEnd,
+            planner,
+            hasTimeWindow,
+            relationshipExactFocus
+          ),
           provider: "fts" as LexicalProvider,
           fallbackUsed: false,
           fallbackReason: undefined as string | undefined
@@ -1040,7 +1315,16 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
 
       try {
         return {
-          rows: await loadBm25LexicalRows(query.namespaceId, queryText, candidateLimit, timeStart, timeEnd, planner, hasTimeWindow),
+          rows: await loadBm25LexicalRows(
+            query.namespaceId,
+            queryText,
+            candidateLimit,
+            timeStart,
+            timeEnd,
+            planner,
+            hasTimeWindow,
+            relationshipExactFocus
+          ),
           provider: "bm25" as LexicalProvider,
           fallbackUsed: false,
           fallbackReason: undefined as string | undefined
@@ -1051,7 +1335,16 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
         }
 
         return {
-          rows: await loadFtsLexicalRows(query.namespaceId, queryText, candidateLimit, timeStart, timeEnd, planner, hasTimeWindow),
+          rows: await loadFtsLexicalRows(
+            query.namespaceId,
+            queryText,
+            candidateLimit,
+            timeStart,
+            timeEnd,
+            planner,
+            hasTimeWindow,
+            relationshipExactFocus
+          ),
           provider: "fts" as LexicalProvider,
           fallbackUsed: true,
           fallbackReason: error instanceof Error ? error.message : "unknown_bm25_failure"
@@ -1070,18 +1363,19 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       planner.maxTemporalDepth
     );
     if (ancestryRows.length > 0) {
-      const seen = new Set(lexicalRows.map((row) => resultKey(row)));
-      lexicalRows = [
-        ...lexicalRows,
-        ...ancestryRows.filter((row) => {
-          const key = resultKey(row);
-          if (seen.has(key)) {
-            return false;
-          }
-          seen.add(key);
-          return true;
-        })
-      ].slice(0, candidateLimit);
+      lexicalRows = mergeUniqueRows(lexicalRows, ancestryRows, candidateLimit, hasTimeWindow, planner.temporalFocus);
+    }
+
+    const descendantRows = await loadTemporalDescendantSupportRows(
+      query.namespaceId,
+      lexicalRows,
+      candidateLimit,
+      timeStart,
+      timeEnd,
+      planner
+    );
+    if (descendantRows.length > 0) {
+      lexicalRows = mergeUniqueRows(lexicalRows, descendantRows, candidateLimit, hasTimeWindow, planner.temporalFocus);
     }
   }
 
@@ -1198,7 +1492,7 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
     rankAccumulator.set(key, current);
   }
 
-  const results = [...rankAccumulator.values()]
+  const rankedResults = [...rankAccumulator.values()]
     .sort((left, right) => {
       const scoreDelta = right.rrfScore - left.rrfScore;
       if (scoreDelta !== 0) {
@@ -1219,7 +1513,9 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       }
 
       return resultKey(left.row).localeCompare(resultKey(right.row));
-    })
+    });
+
+  const results = pruneRankedResults(rankedResults, planner, relationshipExactFocus)
     .slice(0, limit)
     .map((row) =>
       buildRecallResult(row.row, row.rrfScore, {

@@ -66,7 +66,7 @@ Lexical env switches:
 
 - `BRAIN_LEXICAL_PROVIDER=fts|bm25`
 - `BRAIN_LEXICAL_FALLBACK_ENABLED=true|false`
-- default lexical mode is `bm25`
+- default lexical mode is `fts`
 - if BM25 is selected and fails, retrieval falls back to native FTS unless fallback is disabled
 
 ## Ingest A File
@@ -172,18 +172,19 @@ OPENROUTER_API_KEY=... npm run search -- "Kyoto shrine companion notes" --namesp
 
 Current retrieval behavior:
 
-- ParadeDB BM25 is now the default lexical branch
-- native PostgreSQL full-text search remains the fallback and can be forced with `BRAIN_LEXICAL_PROVIDER=fts`
+- native PostgreSQL full-text search is the default lexical branch
+- ParadeDB BM25 is available with `BRAIN_LEXICAL_PROVIDER=bm25`
 - `semantic_memory` and embedded `artifact_derivations` drive the vector branch
 - RRF fusion runs in the app today
 - if no embedding provider or query embedding is available, search degrades safely to lexical-only
 - time-bounded queries infer a temporal planning window and bias episodic plus temporal summaries ahead of flatter lexical hits
 - the planner now distinguishes year, month, and day-granularity temporal windows before retrieval
-- parent-linked `temporal_nodes` plus ancestor expansion now add real TMT-style context instead of only flat summary scans
+- parent-linked `temporal_nodes` plus bounded descendant episodic support now add real TMT-style context instead of only flat summary scans
 - time-windowed queries bias historical episodic evidence above speculative candidate rows
 - BM25 currently covers `episodic_memory`, `semantic_memory`, `memory_candidates`, `artifact_derivations`, and `temporal_nodes`
 - `procedural_memory` stays on an FTS bridge inside BM25 mode for now, because that path is still more trustworthy for active-truth preference/state lookups
-- the expanded lexical benchmark now passes `13/13` for both FTS and BM25, so BM25 is promoted to the default lexical branch while FTS remains the safety fallback
+- the expanded lexical benchmark now passes `14/14` for both FTS and BM25, and BM25 no longer falls back on the seeded corpus
+- BM25 is still kept opt-in because it returns a slightly larger lexical tail than FTS on the current benchmark set, so token-burn tuning is not fully settled
 
 Example BM25 search:
 

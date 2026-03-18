@@ -69,13 +69,14 @@ Latest verified run log:
 - [brain-spec/local/29-runtime-proof-and-next-data-collection.md](brain-spec/local/29-runtime-proof-and-next-data-collection.md)
 - [brain-spec/local/30-timescale-vectorscale-pgai-live-producers-run-log.md](brain-spec/local/30-timescale-vectorscale-pgai-live-producers-run-log.md)
 - [brain-spec/local/33-multimodal-vector-sync-runtime-log.md](brain-spec/local/33-multimodal-vector-sync-runtime-log.md)
+- [brain-spec/local/38-bm25-tmt-optimization-run-log.md](brain-spec/local/38-bm25-tmt-optimization-run-log.md)
 - [local-brain/CHANGELOG.md](local-brain/CHANGELOG.md)
 
 ## Honest Current Limits
 
 - the default lexical branch is still native PostgreSQL full-text search
-- ParadeDB BM25 is now implemented behind a feature flag, but not promoted to the default yet
-- the expanded lexical suite now passes `13/13` for both FTS and BM25 on the seeded local corpus, so BM25 is promoted to the default lexical branch with guarded FTS fallback
+- ParadeDB BM25 is implemented and now clears the expanded `14/14` lexical suite with zero fallback on the seeded local corpus
+- BM25 is still kept behind an explicit env switch for now because it returns a slightly fatter tail than FTS on the current benchmark corpus, so token-burn tuning is not finished yet
 - the `procedural_memory` branch still uses native FTS inside BM25 mode because that path currently preserves active-truth lookups better on live data
 - the hybrid fusion kernel is still app-side, not the final SQL-first kernel
 - Timescale is implemented as a sidecar hypertable mirror for episodic time-scans, not as an in-place conversion of the authoritative `episodic_memory` table

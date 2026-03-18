@@ -24,6 +24,9 @@ interface BenchmarkCaseResult {
   readonly provider: "fts" | "bm25";
   readonly passed: boolean;
   readonly resultCount: number;
+  readonly effectiveLexicalProvider: "fts" | "bm25";
+  readonly lexicalFallbackUsed: boolean;
+  readonly lexicalFallbackReason?: string;
   readonly topMemoryType?: string;
   readonly topContent?: string;
   readonly approxTokens: number;
@@ -41,6 +44,7 @@ export interface LexicalBenchmarkReport {
     readonly bm25Passed: number;
     readonly totalCases: number;
     readonly bm25TokenDelta: number;
+    readonly bm25FallbackCases: number;
     readonly recommendation: "keep_feature_gated" | "candidate_for_default";
     readonly reason: string;
   };
@@ -79,6 +83,13 @@ const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     expectTopIncludes: ["Japan", "Sarah", "2025"],
     expectTopMemoryTypes: ["episodic_memory", "temporal_nodes"],
     maxApproxTokens: 140
+  },
+  {
+    name: "japan_temporal_natural_language",
+    query: "What was I doing in Japan in 2025?",
+    expectTopIncludes: ["Japan"],
+    expectTopMemoryTypes: ["episodic_memory", "temporal_nodes"],
+    maxApproxTokens: 160
   },
   {
     name: "relationship_context_kyoto",
@@ -571,6 +582,9 @@ async function runOne(
       provider,
       passed: failureReasons.length === 0,
       resultCount: response.results.length,
+      effectiveLexicalProvider: response.meta.lexicalProvider,
+      lexicalFallbackUsed: response.meta.lexicalFallbackUsed,
+      lexicalFallbackReason: response.meta.lexicalFallbackReason,
       topMemoryType: top?.memoryType,
       topContent,
       approxTokens,
@@ -609,6 +623,7 @@ function toMarkdown(report: LexicalBenchmarkReport): string {
     `- FTS passed: ${report.summary.ftsPassed}/${report.summary.totalCases}`,
     `- BM25 passed: ${report.summary.bm25Passed}/${report.summary.totalCases}`,
     `- BM25 token delta: ${report.summary.bm25TokenDelta}`,
+    `- BM25 fallback cases: ${report.summary.bm25FallbackCases}`,
     `- Recommendation: ${report.summary.recommendation}`,
     `- Reason: ${report.summary.reason}`,
     "",
@@ -620,9 +635,14 @@ function toMarkdown(report: LexicalBenchmarkReport): string {
     lines.push(`### ${item.name} (${item.provider})`);
     lines.push(`- Passed: ${item.passed}`);
     lines.push(`- Result count: ${item.resultCount}`);
+    lines.push(`- Effective lexical provider: ${item.effectiveLexicalProvider}`);
+    lines.push(`- Lexical fallback used: ${item.lexicalFallbackUsed}`);
     lines.push(`- Top memory type: ${item.topMemoryType ?? "n/a"}`);
     lines.push(`- Approx tokens: ${item.approxTokens}`);
     lines.push(`- Top content: ${item.topContent ?? ""}`);
+    if (item.lexicalFallbackReason) {
+      lines.push(`- Lexical fallback reason: ${item.lexicalFallbackReason}`);
+    }
     if (item.failureReasons.length > 0) {
       lines.push(`- Failures: ${item.failureReasons.join("; ")}`);
     }
@@ -649,19 +669,21 @@ export async function runLexicalBenchmark(): Promise<LexicalBenchmarkReport> {
   const ftsTokens = tokenSum(cases, "fts");
   const bm25Tokens = tokenSum(cases, "bm25");
   const bm25TokenDelta = bm25Tokens - ftsTokens;
+  const bm25FallbackCases = cases.filter((item) => item.provider === "bm25" && item.lexicalFallbackUsed).length;
   const recommendation =
     baselineFailures.length === 0 &&
     BENCHMARK_CASES.length >= 10 &&
     bm25Passed === BENCHMARK_CASES.length &&
     bm25Passed >= ftsPassed &&
-    bm25TokenDelta <= 0
+    bm25TokenDelta <= 0 &&
+    bm25FallbackCases === 0
       ? "candidate_for_default"
       : "keep_feature_gated";
 
   const reason =
     recommendation === "candidate_for_default"
-      ? "BM25 matched or exceeded FTS across the expanded lexical stress suite without increasing token load."
-      : "Keep BM25 behind a flag until it clears the expanded lexical stress suite and baseline eval remains clean.";
+      ? "BM25 matched or exceeded FTS across the expanded lexical stress suite without increasing token load or triggering fallback."
+      : "Keep BM25 behind a flag until it clears the expanded lexical stress suite, baseline eval remains clean, and BM25 fallback frequency reaches zero.";
 
   return {
     generatedAt,
@@ -674,6 +696,7 @@ export async function runLexicalBenchmark(): Promise<LexicalBenchmarkReport> {
       bm25Passed,
       totalCases: BENCHMARK_CASES.length,
       bm25TokenDelta,
+      bm25FallbackCases,
       recommendation,
       reason
     }

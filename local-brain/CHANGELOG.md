@@ -2,6 +2,12 @@
 
 ## 2026-03-18
 
+- Tightened BM25 query shaping so natural-language temporal questions now route through planner-reduced lexical terms instead of raw question strings, while time stays in SQL filters.
+- Added bounded descendant episodic support under matched temporal summary nodes so TMT recall can descend back into supporting leaves without exploding token burn.
+- Fixed false temporal year detection on non-date numeric queries like `port 3000 screenshot`.
+- Moved artifact-derivation lexical search to an explicit FTS bridge inside BM25 mode after isolating a ParadeDB joined-query shape failure.
+- Hardened exact relationship recall so BM25 now prefers episodic evidence over semantic tails for Sara/Sarah/Ken style queries.
+- Expanded the lexical benchmark to `14/14` cases, added fallback tracking, and kept BM25 opt-in because its current benchmark tail is still slightly larger than native FTS.
 - Improved the TMT recall planner to infer year, month, and day-granularity temporal windows from queries before retrieval, increasing temporal grounding without changing the retrieval service contract.
 - Added parent-linked `temporal_nodes` depth metadata and ancestor expansion so temporal queries now retrieve real TMT-style context instead of only flat summaries.
 - Extended deterministic temporal rollups to support `year` nodes in addition to `day` / `week` / `month`.

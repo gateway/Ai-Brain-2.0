@@ -449,6 +449,16 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
       "Expected temporal recall to include temporal summary or ancestor context for a Japan 2025 query."
     ),
     assert(
+      "temporal.descendant_support",
+      japanTemporalContext.results.some(
+        (result) =>
+          result.memoryType === "episodic_memory" &&
+          (result.provenance.tier === "temporal_descendant_support" ||
+            (typeof result.provenance.temporal_support === "object" && result.provenance.temporal_support !== null))
+      ),
+      "Expected temporal recall to bring back bounded episodic descendant support under matched temporal summaries."
+    ),
+    assert(
       "timescale.timeline_parity",
       Number(episodicCountRow?.count ?? "0") === Number(episodicTimelineCountRow?.count ?? "0"),
       `Expected episodic_timeline to mirror episodic_memory row counts, got episodic=${episodicCountRow?.count ?? "0"}, timeline=${episodicTimelineCountRow?.count ?? "0"}.`

@@ -40,7 +40,7 @@ This package currently provides:
 BM25 prerequisite:
 
 - ParadeDB `pg_search` must be installed in the local PostgreSQL 18 instance before BM25 mode will work
-- default lexical mode is now BM25 with FTS fallback
+- default lexical mode is native FTS; BM25 is opt-in for comparison and tuning
 
 Lexical env controls:
 
@@ -73,7 +73,7 @@ Expected behavior:
 - same or better exact lexical precision than default FTS on the current benchmark set
 - no results for clearly unknown lexical probes
 - active-truth preference lookups still resolve cleanly
-- BM25 is now the default lexical branch; force `fts` only if you want to compare or debug fallback behavior
+- BM25 now clears the seeded lexical suite without fallback, but it is still opt-in until token-burn tuning is tighter than the current FTS baseline
 
 Outputs:
 
@@ -246,14 +246,16 @@ npm run decay:semantic -- --namespace personal_refined2 --inactivity-hours 24 --
 ## Current Honest Limits
 
 - retrieval is hybrid today, but the fusion kernel is still app-side
-- ParadeDB BM25 is now the default lexical branch, with native FTS as guarded fallback
+- native FTS is still the runtime default lexical branch
+- ParadeDB BM25 is the stronger opt-in lexical branch and no longer falls back on the seeded corpus
 - the procedural/current-truth branch still uses an FTS bridge even in BM25 mode because that behavior is currently more reliable than pure BM25 for state rows
 - relationship extraction is still heuristic; adjudication is deterministic threshold/rule-based (no LLM judge yet)
 - raw binary artifacts are stored, and the new derivation queue is the safe path for OCR/transcription/caption work when no live external service is connected
 - the current safe multimodal path is artifact registration plus queued derivation jobs, with embeddings handled as a second queued stage
 - relative-time resolution is still limited
-- time-bounded queries now infer year/month/day windows and can pull parent-linked temporal ancestor context
-- the current expanded lexical suite passes `13/13` for both FTS and BM25 on the seeded local corpus
+- time-bounded queries now infer year/month/day windows, pull parent-linked temporal ancestor context, and attach bounded descendant episodic support
+- the current expanded lexical suite passes `14/14` for both FTS and BM25 on the seeded local corpus
+- BM25 still returns a slightly fatter tail than FTS on the current benchmark set, so it stays opt-in until token-burn tuning is tighter
 
 ## Live Producer Security
 
