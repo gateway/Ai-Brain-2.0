@@ -1,4 +1,4 @@
-import type { FragmentRecord, SceneRecord } from "../types.js";
+import type { FragmentRecord, SceneRecord, TimeGranularity } from "../types.js";
 
 const SENTENCE_SPLIT = /(?<=[.!?])\s+/u;
 const MONTH_INDEX = new Map<string, number>([
@@ -18,6 +18,173 @@ const MONTH_INDEX = new Map<string, number>([
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
+}
+
+function clampPositiveInteger(value: string): number | null {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return null;
+  }
+
+  return Math.round(numeric);
+}
+
+function approximateQuantity(raw: string): number | null {
+  const normalized = raw.toLowerCase();
+  if (/^\d+$/u.test(normalized)) {
+    return clampPositiveInteger(normalized);
+  }
+
+  if (normalized === "few" || normalized === "a few") {
+    return 3;
+  }
+
+  if (normalized === "couple" || normalized === "a couple") {
+    return 2;
+  }
+
+  if (normalized === "several") {
+    return 4;
+  }
+
+  return null;
+}
+
+function shiftIsoDate(isoString: string, amount: number, unit: "days" | "weeks" | "months" | "years"): string | null {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const shifted = new Date(date);
+  if (unit === "days") {
+    shifted.setUTCDate(shifted.getUTCDate() - amount);
+  } else if (unit === "weeks") {
+    shifted.setUTCDate(shifted.getUTCDate() - amount * 7);
+  } else if (unit === "months") {
+    shifted.setUTCMonth(shifted.getUTCMonth() - amount);
+  } else {
+    shifted.setUTCFullYear(shifted.getUTCFullYear() - amount);
+  }
+
+  return shifted.toISOString();
+}
+
+interface TimeAnchor {
+  readonly occurredAt: string;
+  readonly timeExpressionText?: string;
+  readonly timeStart?: string;
+  readonly timeEnd?: string;
+  readonly timeGranularity: TimeGranularity;
+  readonly timeConfidence: number;
+  readonly isRelativeTime: boolean;
+}
+
+function inferTimeAnchor(text: string, fallbackOccurredAt: string, capturedAt: string): TimeAnchor {
+  const monthYearMatch = text.match(
+    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/i
+  );
+
+  if (monthYearMatch) {
+    const month = MONTH_INDEX.get(monthYearMatch[1].toLowerCase());
+    const year = Number(monthYearMatch[2]);
+
+    if (month !== undefined && Number.isFinite(year)) {
+      const timeStart = new Date(Date.UTC(year, month, 1)).toISOString();
+      const timeEnd = new Date(Date.UTC(year, month + 1, 1)).toISOString();
+      return {
+        occurredAt: timeStart,
+        timeExpressionText: monthYearMatch[0],
+        timeStart,
+        timeEnd,
+        timeGranularity: "month",
+        timeConfidence: 0.96,
+        isRelativeTime: false
+      };
+    }
+  }
+
+  const yearMatch = text.match(/\b(19\d{2}|20\d{2}|21\d{2})\b/u);
+  if (yearMatch) {
+    const year = Number(yearMatch[1]);
+    if (Number.isFinite(year)) {
+      const timeStart = new Date(Date.UTC(year, 0, 1)).toISOString();
+      const timeEnd = new Date(Date.UTC(year + 1, 0, 1)).toISOString();
+      return {
+        occurredAt: timeStart,
+        timeExpressionText: yearMatch[1],
+        timeStart,
+        timeEnd,
+        timeGranularity: "year",
+        timeConfidence: 0.92,
+        isRelativeTime: false
+      };
+    }
+  }
+
+  const durationMatch = text.match(
+    /\b(?:for|about|for about|for around|been here for|been doing that for|working for)\s+(?:(about|around)\s+)?(\d+|few|a few|couple|a couple|several)\s+(day|days|week|weeks|month|months|year|years)\b/iu
+  );
+  if (durationMatch) {
+    const quantity = approximateQuantity(durationMatch[2] ?? "");
+    const unit = (durationMatch[3] ?? "").toLowerCase();
+    const expression = durationMatch[0];
+    const isPresentAnchored = /\b(?:been here|been doing that|for .* now|just recently|recently)\b/iu.test(text);
+
+    if (quantity) {
+      const normalizedUnit = unit.startsWith("day")
+        ? "days"
+        : unit.startsWith("week")
+          ? "weeks"
+          : unit.startsWith("month")
+            ? "months"
+            : "years";
+
+      if (isPresentAnchored) {
+        const timeStart = shiftIsoDate(capturedAt, quantity, normalizedUnit);
+        if (timeStart) {
+          return {
+            occurredAt: timeStart,
+            timeExpressionText: expression,
+            timeStart,
+            timeEnd: capturedAt,
+            timeGranularity: "relative_duration",
+            timeConfidence: 0.7,
+            isRelativeTime: true
+          };
+        }
+      }
+
+      return {
+        occurredAt: fallbackOccurredAt,
+        timeExpressionText: expression,
+        timeGranularity: "relative_duration",
+        timeConfidence: 0.55,
+        isRelativeTime: true
+      };
+    }
+  }
+
+  const recentMatch = text.match(/\b(just recently|recently)\b/iu);
+  if (recentMatch) {
+    const timeStart = shiftIsoDate(capturedAt, 30, "days");
+    return {
+      occurredAt: timeStart ?? fallbackOccurredAt,
+      timeExpressionText: recentMatch[1],
+      timeStart: timeStart ?? undefined,
+      timeEnd: capturedAt,
+      timeGranularity: "relative_recent",
+      timeConfidence: 0.4,
+      isRelativeTime: true
+    };
+  }
+
+  return {
+    occurredAt: fallbackOccurredAt,
+    timeGranularity: "unknown",
+    timeConfidence: 0.2,
+    isRelativeTime: false
+  };
 }
 
 function isMetadataParagraph(paragraph: string): boolean {
@@ -42,33 +209,8 @@ function isMetadataParagraph(paragraph: string): boolean {
   return lines.every((line) => /^(Captured|Namespace intent|Source channel)\s*:/iu.test(line));
 }
 
-function inferOccurredAt(text: string, fallbackOccurredAt: string): string {
-  const monthYearMatch = text.match(
-    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/i
-  );
-
-  if (monthYearMatch) {
-    const month = MONTH_INDEX.get(monthYearMatch[1].toLowerCase());
-    const year = Number(monthYearMatch[2]);
-
-    if (month !== undefined && Number.isFinite(year)) {
-      return new Date(Date.UTC(year, month, 1)).toISOString();
-    }
-  }
-
-  const yearMatch = text.match(/\b(19\d{2}|20\d{2}|21\d{2})\b/u);
-  if (yearMatch) {
-    const year = Number(yearMatch[1]);
-    if (Number.isFinite(year)) {
-      return new Date(Date.UTC(year, 0, 1)).toISOString();
-    }
-  }
-
-  return fallbackOccurredAt;
-}
-
-export function splitIntoFragments(text: string, occurredAt: string): FragmentRecord[] {
-  const scenes = splitIntoScenes(text, occurredAt);
+export function splitIntoFragments(text: string, occurredAt: string, capturedAt = occurredAt): FragmentRecord[] {
+  const scenes = splitIntoScenes(text, occurredAt, capturedAt);
   const fragments: FragmentRecord[] = [];
   let fragmentIndex = 0;
 
@@ -99,7 +241,7 @@ export function splitIntoFragments(text: string, occurredAt: string): FragmentRe
         text: fragmentText,
         charStart: safeStart,
         charEnd,
-        occurredAt: inferOccurredAt(fragmentText, scene.occurredAt),
+        occurredAt: inferTimeAnchor(fragmentText, scene.occurredAt, capturedAt).occurredAt,
         importanceScore: inferImportance(fragmentText),
         tags: inferTags(fragmentText)
       });
@@ -112,7 +254,7 @@ export function splitIntoFragments(text: string, occurredAt: string): FragmentRe
   return fragments;
 }
 
-export function splitIntoScenes(text: string, occurredAt: string): SceneRecord[] {
+export function splitIntoScenes(text: string, occurredAt: string, capturedAt = occurredAt): SceneRecord[] {
   const normalized = text.replace(/\r\n/g, "\n").trim();
   if (!normalized) {
     return [];
@@ -132,14 +274,21 @@ export function splitIntoScenes(text: string, occurredAt: string): SceneRecord[]
     const charStart = normalized.indexOf(paragraph, cursor);
     const safeStart = charStart >= 0 ? charStart : cursor;
     const charEnd = safeStart + paragraph.length;
+    const timeAnchor = inferTimeAnchor(paragraph, occurredAt, capturedAt);
 
     scenes.push({
       sceneIndex,
       text: paragraph,
       charStart: safeStart,
       charEnd,
-      occurredAt: inferOccurredAt(paragraph, occurredAt),
-      sceneKind: "paragraph"
+      occurredAt: timeAnchor.occurredAt,
+      sceneKind: "paragraph",
+      timeExpressionText: timeAnchor.timeExpressionText,
+      timeStart: timeAnchor.timeStart,
+      timeEnd: timeAnchor.timeEnd,
+      timeGranularity: timeAnchor.timeGranularity,
+      timeConfidence: timeAnchor.timeConfidence,
+      isRelativeTime: timeAnchor.isRelativeTime
     });
 
     sceneIndex += 1;

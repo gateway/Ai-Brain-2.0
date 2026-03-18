@@ -39,13 +39,21 @@ export interface FragmentRecord {
   readonly tags?: string[];
 }
 
+export type TimeGranularity = "instant" | "day" | "month" | "year" | "relative_duration" | "relative_recent" | "unknown";
+
 export interface SceneRecord {
   readonly sceneIndex: number;
   readonly text: string;
   readonly charStart?: number;
   readonly charEnd?: number;
   readonly occurredAt: string;
-  readonly sceneKind: "paragraph";
+  readonly sceneKind: "paragraph" | "story_event";
+  readonly timeExpressionText?: string;
+  readonly timeStart?: string;
+  readonly timeEnd?: string;
+  readonly timeGranularity?: TimeGranularity;
+  readonly timeConfidence?: number;
+  readonly isRelativeTime?: boolean;
 }
 
 export interface ProvenancePointer {

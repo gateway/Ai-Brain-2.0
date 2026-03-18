@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg";
-import type { SceneRecord } from "../types.js";
+import type { SceneRecord, TimeGranularity } from "../types.js";
 
 type EntityType = "self" | "person" | "place" | "org" | "project" | "concept" | "unknown";
 
@@ -20,6 +20,27 @@ interface NarrativeClaim {
   readonly confidence: number;
   readonly status: "pending" | "accepted" | "abstained";
   readonly metadata?: Record<string, unknown>;
+}
+
+interface ResolvedNarrativeClaim extends NarrativeClaim {
+  readonly subjectEntityId: string | null;
+  readonly objectEntityId: string | null;
+  readonly resolvedSubjectType?: EntityType;
+  readonly resolvedObjectType?: EntityType;
+}
+
+interface NarrativeEventDraft {
+  readonly eventKind: string;
+  readonly eventLabel: string;
+  readonly timeExpressionText?: string;
+  readonly timeStart?: string;
+  readonly timeEnd?: string;
+  readonly timeGranularity: TimeGranularity;
+  readonly timeConfidence: number;
+  readonly isRelativeTime: boolean;
+  readonly primarySubjectEntityId?: string | null;
+  readonly primaryLocationEntityId?: string | null;
+  readonly metadata: Record<string, unknown>;
 }
 
 interface StageNarrativeClaimsInput {
@@ -653,6 +674,122 @@ function extractClaimsFromScene(
   };
 }
 
+function toPredicateLabel(predicate: string): string {
+  return predicate.replaceAll("_", " ");
+}
+
+function inferEventKind(sceneText: string, claims: readonly ResolvedNarrativeClaim[]): string {
+  const lowered = sceneText.toLowerCase();
+  const predicates = new Set(claims.filter((claim) => claim.status === "accepted").map((claim) => claim.predicate));
+
+  if (
+    predicates.has("lives_in") ||
+    predicates.has("lived_in") ||
+    predicates.has("currently_in") ||
+    predicates.has("from") ||
+    /\b(?:live|lived|living|move back|destination thailand visa|dtv)\b/u.test(lowered)
+  ) {
+    if (
+      !(predicates.has("works_at") || predicates.has("works_with") || predicates.has("runs")) ||
+      /\b(?:chiang mai|koh samui|danang|thailand|vietnam)\b/u.test(lowered)
+    ) {
+      return "life_update";
+    }
+  }
+
+  if (
+    predicates.has("works_at") ||
+    predicates.has("works_with") ||
+    predicates.has("runs") ||
+    /\b(?:cto|fractional cto|company|memoir engine|zoom|application)\b/u.test(lowered)
+  ) {
+    return "work";
+  }
+
+  if (
+    predicates.has("friend_of") ||
+    predicates.has("with") ||
+    predicates.has("hikes_with") ||
+    /\b(?:met|friends|introduced|group|hiking)\b/u.test(lowered)
+  ) {
+    return "social";
+  }
+
+  return "story_scene";
+}
+
+function buildEventLabel(sceneText: string, claims: readonly ResolvedNarrativeClaim[]): string {
+  const predicatePriority = ["works_at", "works_with", "runs", "lives_in", "lived_in", "currently_in", "friend_of", "with", "hikes_with", "from"];
+  const acceptedClaims = claims.filter(
+    (claim) => claim.status === "accepted" && claim.subjectName && claim.objectName && claim.predicate !== "self_name"
+  );
+  const primaryClaim =
+    predicatePriority
+      .map((predicate) => acceptedClaims.find((claim) => claim.predicate === predicate))
+      .find(Boolean) ?? acceptedClaims[0];
+
+  if (primaryClaim?.subjectName && primaryClaim.objectName) {
+    return normalizeWhitespace(
+      `${primaryClaim.subjectName} ${toPredicateLabel(primaryClaim.predicate)} ${primaryClaim.objectName}`
+    );
+  }
+
+  return normalizeWhitespace(splitSentences(sceneText)[0] ?? sceneText).slice(0, 160);
+}
+
+function buildNarrativeEventDraft(scene: SceneRecord, claims: readonly ResolvedNarrativeClaim[]): NarrativeEventDraft {
+  const primarySubject = claims.find(
+    (claim) =>
+      claim.status === "accepted" &&
+      claim.subjectEntityId &&
+      (claim.resolvedSubjectType === "self" || claim.resolvedSubjectType === "person")
+  );
+  const primaryLocation = claims.find(
+    (claim) =>
+      claim.status === "accepted" &&
+      claim.objectEntityId &&
+      claim.resolvedObjectType === "place"
+  );
+
+  return {
+    eventKind: inferEventKind(scene.text, claims),
+    eventLabel: buildEventLabel(scene.text, claims),
+    timeExpressionText: scene.timeExpressionText,
+    timeStart: scene.timeStart,
+    timeEnd: scene.timeEnd,
+    timeGranularity: scene.timeGranularity ?? "unknown",
+    timeConfidence: scene.timeConfidence ?? 0.2,
+    isRelativeTime: scene.isRelativeTime ?? false,
+    primarySubjectEntityId: primarySubject?.subjectEntityId ?? null,
+    primaryLocationEntityId: primaryLocation?.objectEntityId ?? null,
+    metadata: {
+      scene_kind: scene.sceneKind,
+      accepted_claim_count: claims.filter((claim) => claim.status === "accepted").length,
+      total_claim_count: claims.length
+    }
+  };
+}
+
+function eventMemberRoleForEntityType(entityType: EntityType | undefined, position: "subject" | "object"): string {
+  if (position === "subject" && (entityType === "self" || entityType === "person")) {
+    return "subject";
+  }
+
+  if (entityType === "place") {
+    return "location";
+  }
+
+  if (entityType === "org") {
+    return "organization";
+  }
+
+  if (entityType === "project") {
+    return "project";
+  }
+
+  return "participant";
+}
+
 async function upsertEntity(
   client: PoolClient,
   namespaceId: string,
@@ -707,6 +844,127 @@ async function upsertEntity(
   return entityId;
 }
 
+async function upsertNarrativeEvent(
+  client: PoolClient,
+  options: {
+    readonly namespaceId: string;
+    readonly artifactId: string;
+    readonly observationId: string;
+    readonly eventIndex: number;
+    readonly sourceSceneId: string;
+    readonly event: NarrativeEventDraft;
+  }
+): Promise<string> {
+  const result = await client.query<{ id: string }>(
+    `
+      INSERT INTO narrative_events (
+        namespace_id,
+        artifact_id,
+        artifact_observation_id,
+        event_index,
+        source_scene_id,
+        event_kind,
+        event_label,
+        time_expression_text,
+        time_start,
+        time_end,
+        time_granularity,
+        time_confidence,
+        is_relative_time,
+        primary_subject_entity_id,
+        primary_location_entity_id,
+        metadata
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
+      ON CONFLICT (artifact_observation_id, event_index)
+      DO UPDATE SET
+        source_scene_id = EXCLUDED.source_scene_id,
+        event_kind = EXCLUDED.event_kind,
+        event_label = EXCLUDED.event_label,
+        time_expression_text = EXCLUDED.time_expression_text,
+        time_start = EXCLUDED.time_start,
+        time_end = EXCLUDED.time_end,
+        time_granularity = EXCLUDED.time_granularity,
+        time_confidence = EXCLUDED.time_confidence,
+        is_relative_time = EXCLUDED.is_relative_time,
+        primary_subject_entity_id = EXCLUDED.primary_subject_entity_id,
+        primary_location_entity_id = EXCLUDED.primary_location_entity_id,
+        metadata = narrative_events.metadata || EXCLUDED.metadata,
+        updated_at = now()
+      RETURNING id
+    `,
+    [
+      options.namespaceId,
+      options.artifactId,
+      options.observationId,
+      options.eventIndex,
+      options.sourceSceneId,
+      options.event.eventKind,
+      options.event.eventLabel,
+      options.event.timeExpressionText ?? null,
+      options.event.timeStart ?? null,
+      options.event.timeEnd ?? null,
+      options.event.timeGranularity,
+      options.event.timeConfidence,
+      options.event.isRelativeTime,
+      options.event.primarySubjectEntityId ?? null,
+      options.event.primaryLocationEntityId ?? null,
+      JSON.stringify(options.event.metadata)
+    ]
+  );
+
+  const eventId = result.rows[0]?.id;
+  if (!eventId) {
+    throw new Error(`Failed to upsert narrative event ${options.eventIndex}`);
+  }
+
+  return eventId;
+}
+
+async function upsertNarrativeEventMember(
+  client: PoolClient,
+  options: {
+    readonly namespaceId: string;
+    readonly eventId: string;
+    readonly entityId: string;
+    readonly memberRole: string;
+    readonly confidence: number;
+    readonly sourceSceneId: string;
+    readonly sourceMemoryId: string | null;
+    readonly metadata?: Record<string, unknown>;
+  }
+): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO narrative_event_members (
+        namespace_id,
+        event_id,
+        entity_id,
+        member_role,
+        confidence,
+        source_scene_id,
+        source_memory_id,
+        metadata
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+      ON CONFLICT (event_id, entity_id, member_role, source_scene_id, source_memory_id)
+      DO UPDATE SET
+        confidence = GREATEST(narrative_event_members.confidence, EXCLUDED.confidence),
+        metadata = narrative_event_members.metadata || EXCLUDED.metadata
+    `,
+    [
+      options.namespaceId,
+      options.eventId,
+      options.entityId,
+      options.memberRole,
+      options.confidence,
+      options.sourceSceneId,
+      options.sourceMemoryId,
+      JSON.stringify(options.metadata ?? {})
+    ]
+  );
+}
+
 export async function stageNarrativeClaims(
   client: PoolClient,
   input: StageNarrativeClaimsInput
@@ -730,14 +988,26 @@ export async function stageNarrativeClaims(
           scene_text,
           occurred_at,
           captured_at,
+          time_expression_text,
+          time_start,
+          time_end,
+          time_granularity,
+          time_confidence,
+          is_relative_time,
           metadata
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)
         ON CONFLICT (artifact_observation_id, scene_index)
         DO UPDATE SET
           scene_text = EXCLUDED.scene_text,
           occurred_at = EXCLUDED.occurred_at,
           captured_at = EXCLUDED.captured_at,
+          time_expression_text = EXCLUDED.time_expression_text,
+          time_start = EXCLUDED.time_start,
+          time_end = EXCLUDED.time_end,
+          time_granularity = EXCLUDED.time_granularity,
+          time_confidence = EXCLUDED.time_confidence,
+          is_relative_time = EXCLUDED.is_relative_time,
           metadata = narrative_scenes.metadata || EXCLUDED.metadata,
           updated_at = now()
         RETURNING id
@@ -751,9 +1021,17 @@ export async function stageNarrativeClaims(
         scene.text,
         scene.occurredAt,
         input.capturedAt,
+        scene.timeExpressionText ?? null,
+        scene.timeStart ?? null,
+        scene.timeEnd ?? null,
+        scene.timeGranularity ?? "unknown",
+        scene.timeConfidence ?? 0.2,
+        scene.isRelativeTime ?? false,
         JSON.stringify({
           fragment_count: sceneSource?.sourceMemoryIds.length ?? 0,
-          extraction_method: "deterministic_scene_claims"
+          extraction_method: "deterministic_scene_claims",
+          source_memory_ids: sceneSource?.sourceMemoryIds ?? [],
+          source_chunk_ids: sceneSource?.sourceChunkIds ?? []
         })
       ]
     );
@@ -764,6 +1042,8 @@ export async function stageNarrativeClaims(
     }
 
     const { claims, aliases } = extractClaimsFromScene(scene.text, knownSelfName, namespaceAliases);
+    const resolvedClaims: ResolvedNarrativeClaim[] = [];
+
     for (const claim of claims) {
       const normalizedKnownSelf = knownSelfName ? normalizeName(knownSelfName) : null;
       const normalizedSubject = claim.subjectName ? normalizeName(claim.subjectName) : null;
@@ -811,11 +1091,46 @@ export async function stageNarrativeClaims(
         }
       }
 
+      resolvedClaims.push({
+        ...claim,
+        subjectEntityId,
+        objectEntityId,
+        resolvedSubjectType: subjectType,
+        resolvedObjectType: objectType
+      });
+    }
+
+    const narrativeEvent = buildNarrativeEventDraft(scene, resolvedClaims);
+    const eventId = await upsertNarrativeEvent(client, {
+      namespaceId: input.namespaceId,
+      artifactId: input.artifactId,
+      observationId: input.observationId,
+      eventIndex: scene.sceneIndex,
+      sourceSceneId: sceneId,
+      event: narrativeEvent
+    });
+
+    await client.query(
+      `
+        UPDATE narrative_scenes
+        SET source_event_id = $2
+        WHERE id = $1
+      `,
+      [sceneId, eventId]
+    );
+
+    for (const claim of resolvedClaims) {
+      const subjectEntityId = claim.subjectEntityId;
+      const objectEntityId = claim.objectEntityId;
+      const subjectType = claim.resolvedSubjectType;
+      const objectType = claim.resolvedObjectType;
+
       await client.query(
         `
           INSERT INTO claim_candidates (
             namespace_id,
             source_scene_id,
+            source_event_id,
             source_memory_id,
             source_chunk_id,
             subject_entity_id,
@@ -830,30 +1145,43 @@ export async function stageNarrativeClaims(
             confidence,
             status,
             occurred_at,
+            time_expression_text,
+            time_start,
+            time_end,
+            time_granularity,
+            time_confidence,
+            is_relative_time,
             extraction_method,
             metadata
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'deterministic_scene_claims', $17::jsonb)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'deterministic_scene_claims', $24::jsonb)
         `,
         [
           input.namespaceId,
           sceneId,
+          eventId,
           sceneSource?.sourceMemoryIds[0] ?? null,
           sceneSource?.sourceChunkIds[0] ?? null,
           subjectEntityId,
           objectEntityId,
-            claim.claimType,
-            claim.subjectName ?? null,
-            subjectType ?? null,
-            claim.predicate,
-            claim.objectName ?? null,
-            objectType ?? null,
+          claim.claimType,
+          claim.subjectName ?? null,
+          subjectType ?? null,
+          claim.predicate,
+          claim.objectName ?? null,
+          objectType ?? null,
           normalizeWhitespace(
             [claim.subjectName ?? "", claim.predicate, claim.objectName ?? ""].filter(Boolean).join(" ")
           ),
           claim.confidence,
           claim.status,
           scene.occurredAt,
+          scene.timeExpressionText ?? null,
+          scene.timeStart ?? null,
+          scene.timeEnd ?? null,
+          scene.timeGranularity ?? "unknown",
+          scene.timeConfidence ?? 0.2,
+          scene.isRelativeTime ?? false,
           JSON.stringify(claim.metadata ?? {})
         ]
       );
@@ -890,9 +1218,22 @@ export async function stageNarrativeClaims(
             claim.confidence,
             scene.occurredAt,
             JSON.stringify({ extractor: "deterministic_scene_claims", entity_type: claim.subjectType ?? null })
-            
           ]
         );
+
+        await upsertNarrativeEventMember(client, {
+          namespaceId: input.namespaceId,
+          eventId,
+          entityId: subjectEntityId,
+          memberRole: eventMemberRoleForEntityType(subjectType, "subject"),
+          confidence: claim.confidence,
+          sourceSceneId: sceneId,
+          sourceMemoryId: sceneSource?.sourceMemoryIds[0] ?? null,
+          metadata: {
+            extractor: "deterministic_scene_claims",
+            predicate: claim.predicate
+          }
+        });
       }
 
       if (objectEntityId && claim.objectName) {
@@ -923,12 +1264,26 @@ export async function stageNarrativeClaims(
             sceneSource?.sourceMemoryIds[0] ?? null,
             sceneSource?.sourceChunkIds[0] ?? null,
             claim.objectName,
-            objectType === "place" ? "location" : objectType === "project" ? "project" : "participant",
+            objectType === "place" ? "location" : objectType === "project" ? "project" : objectType === "org" ? "organization" : "participant",
             claim.confidence,
             scene.occurredAt,
             JSON.stringify({ extractor: "deterministic_scene_claims", entity_type: objectType ?? null })
           ]
         );
+
+        await upsertNarrativeEventMember(client, {
+          namespaceId: input.namespaceId,
+          eventId,
+          entityId: objectEntityId,
+          memberRole: eventMemberRoleForEntityType(objectType, "object"),
+          confidence: claim.confidence,
+          sourceSceneId: sceneId,
+          sourceMemoryId: sceneSource?.sourceMemoryIds[0] ?? null,
+          metadata: {
+            extractor: "deterministic_scene_claims",
+            predicate: claim.predicate
+          }
+        });
       }
 
       if (
@@ -948,6 +1303,7 @@ export async function stageNarrativeClaims(
               predicate,
               object_entity_id,
               source_scene_id,
+              source_event_id,
               source_memory_id,
               source_chunk_id,
               confidence,
@@ -955,7 +1311,7 @@ export async function stageNarrativeClaims(
               valid_from,
               metadata
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10::jsonb)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, $11::jsonb)
             ON CONFLICT (subject_entity_id, predicate, object_entity_id, source_memory_id, source_chunk_id)
             DO UPDATE SET
               confidence = GREATEST(relationship_candidates.confidence, EXCLUDED.confidence),
@@ -967,6 +1323,7 @@ export async function stageNarrativeClaims(
             claim.predicate,
             objectEntityId,
             sceneId,
+            eventId,
             sceneSource?.sourceMemoryIds[0] ?? null,
             sceneSource?.sourceChunkIds[0] ?? null,
             claim.confidence,
@@ -974,6 +1331,9 @@ export async function stageNarrativeClaims(
             JSON.stringify({
               extractor: "deterministic_scene_claims",
               claim_type: claim.claimType,
+              source_event_id: eventId,
+              event_kind: narrativeEvent.eventKind,
+              event_label: narrativeEvent.eventLabel,
               ...claim.metadata
             })
           ]
@@ -1024,7 +1384,8 @@ export async function stageNarrativeClaims(
             }),
             JSON.stringify({
               extractor: "deterministic_scene_claims",
-              scene_id: sceneId
+              scene_id: sceneId,
+              event_id: eventId
             })
           ]
         );

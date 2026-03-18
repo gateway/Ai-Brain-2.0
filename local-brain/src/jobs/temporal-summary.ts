@@ -301,6 +301,8 @@ export async function runTemporalSummaryScaffold(
             namespace_id,
             temporal_node_id,
             source_memory_id,
+            source_scene_id,
+            source_event_id,
             member_role,
             metadata
           )
@@ -308,9 +310,21 @@ export async function runTemporalSummaryScaffold(
             $1,
             $2,
             member_id,
+            linked.scene_id,
+            linked.event_id,
             'summary_input',
             $3::jsonb
           FROM unnest($4::uuid[]) AS member_id
+          LEFT JOIN LATERAL (
+            SELECT
+              cc.source_scene_id AS scene_id,
+              cc.source_event_id AS event_id
+            FROM claim_candidates cc
+            WHERE cc.namespace_id = $1
+              AND cc.source_memory_id = member_id
+            ORDER BY cc.created_at ASC
+            LIMIT 1
+          ) AS linked ON TRUE
           ON CONFLICT DO NOTHING
         `,
         [

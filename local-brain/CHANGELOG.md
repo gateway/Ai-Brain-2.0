@@ -2,6 +2,11 @@
 
 ## 2026-03-18
 
+- Added explicit event-aware relationship priors with `narrative_events` and `narrative_event_members`, so freeform personal stories can now represent people, places, orgs/projects, times, and events without forcing structured input.
+- Added scene- and claim-level time anchor fields, including preserved relative-time expressions, basic relative-duration anchoring, and event-level temporal metadata.
+- Updated scene-aware narrative ingestion to build event containers, event memberships, and event-linked relationship candidates from the same raw source evidence.
+- Linked temporal summary members back to available scene/event provenance where claim-stage evidence exists.
+- Re-ran the user-supplied freeform friend/story narrative through a clean namespace and documented the loop in `brain-spec/local/44-relationship-priors-event-loop.md`.
 - Added a `scene + claim` narrative staging layer for freeform personal-story ingestion with new `narrative_scenes` and `claim_candidates` tables.
 - Added explicit `org` entities so companies like `Icelandic Air` no longer have to masquerade as people or projects.
 - Moved personal-story relationship extraction off the fragment-local heuristic path and into deterministic scene-aware claim extraction with abstention support.
