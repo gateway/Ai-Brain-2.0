@@ -1,0 +1,39 @@
+{
+  "name": "temporal_prefix_subject_guard",
+  "namespace_seed": "temporal_prefix_subject_guard",
+  "files": [
+    {
+      "path": "story.md",
+      "source_type": "markdown_session",
+      "source_channel": "golden-story:temporal-prefix",
+      "captured_at": "2026-03-18T12:00:00Z"
+    }
+  ],
+  "queries": [
+    {
+      "name": "june_location_query",
+      "query": "Where was Steve living in June 2026?",
+      "expect_top_types": ["episodic_memory", "temporal_nodes"],
+      "expect_top_includes": ["Steve", "Chiang Mai", "Thailand"]
+    }
+  ],
+  "expected": {
+    "entities_present": [
+      { "name": "Steve", "type": "self" },
+      { "name": "Gumi", "type": "person" },
+      { "name": "Chiang Mai", "type": "place" },
+      { "name": "Thailand", "type": "place" },
+      { "name": "Two Way", "type": "project" }
+    ],
+    "entities_absent": ["In June"],
+    "graph_edges_present": [
+      { "subject": "Steve", "predicate": "lives_in", "object": "Chiang Mai" },
+      { "subject": "Steve", "predicate": "lives_in", "object": "Thailand" },
+      { "subject": "Gumi", "predicate": "runs", "object": "Two Way" }
+    ],
+    "graph_edges_absent": [
+      { "subject": "In June", "predicate": "lives_in", "object": "Chiang Mai" },
+      { "subject": "In June", "predicate": "lives_in", "object": "Thailand" }
+    ]
+  }
+}

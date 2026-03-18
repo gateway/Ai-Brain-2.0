@@ -1128,12 +1128,12 @@ async function loadPlaceContainmentSupportRows(
           AND ea.normalized_alias = ANY($2::text[])
       ),
       descendant_places AS (
-        SELECT mp.id AS entity_id, 0 AS hops
+        SELECT mp.id AS entity_id, 0 AS hops, ARRAY[mp.id]::uuid[] AS path
         FROM matched_places mp
 
         UNION ALL
 
-        SELECT rm.subject_entity_id AS entity_id, dp.hops + 1 AS hops
+        SELECT rm.subject_entity_id AS entity_id, dp.hops + 1 AS hops, dp.path || rm.subject_entity_id
         FROM descendant_places dp
         JOIN relationship_memory rm
           ON rm.namespace_id = $1
@@ -1142,6 +1142,7 @@ async function loadPlaceContainmentSupportRows(
          AND rm.status = 'active'
          AND rm.valid_until IS NULL
         WHERE dp.hops < 4
+          AND NOT (rm.subject_entity_id = ANY(dp.path))
       ),
       ranked_descendants AS (
         SELECT entity_id, MIN(hops) AS hops

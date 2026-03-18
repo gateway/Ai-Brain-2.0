@@ -2,6 +2,11 @@
 
 ## 2026-03-18
 
+- Fixed temporal-prefix subject pollution so leading phrases like `In June 2026 ...` no longer become fake person nodes during narrative extraction.
+- Added a new golden-story regression case, `temporal_prefix_subject_guard`, to lock that fix in and verify `Steve -> lives_in -> Chiang Mai` without creating an `In June` entity.
+- Hardened place-containment recursive retrieval with path-based cycle protection instead of only a depth cap.
+- Cleaned the legacy bad `In June` person rows out of the local `personal` and `eval_*` namespaces so the relationship graph stops surfacing stale polluted edges.
+- Switched the console and live graph labels fully to a standard system font stack instead of the previous Geist-specific font wiring.
 - Added `relationship_priors` plus `neighbor_signatures` so accepted graph history and co-occurrence can bias new alias/relationship extraction without becoming a second truth store.
 - Added recursive place-containment support with `contained_in` relationship candidates plus retrieval-time descendant expansion, so a query for a parent place can surface child-place episodic evidence.
 - Strengthened scene/event time anchoring with prior-scene carryover, `captured_at`-anchored relative expressions like `last Friday` / `two months ago`, and persisted anchor-basis metadata.

@@ -120,12 +120,49 @@ const PLACE_CONTAINMENT = new Map<string, string>([
   ["Mexico City", "Mexico"]
 ]);
 
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December"
+] as const;
+
+const WEEKDAY_NAMES = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday"
+] as const;
+
 const STOP_PERSON_NAMES = new Set([
   "He",
   "She",
   "They",
   "I",
   "We",
+  "In",
+  "On",
+  "At",
+  "By",
+  "During",
+  "After",
+  "Before",
+  "Earlier",
+  "Later",
+  "Last",
+  "Next",
+  "This",
   "Thailand",
   "Vietnam",
   "Iceland",
@@ -230,6 +267,32 @@ function looksLikePersonName(value: string): boolean {
   }
 
   return tokens.every((token) => /^[A-Z][a-z]+$/u.test(token));
+}
+
+function stripLeadingTemporalPhrase(value: string): string {
+  const cleaned = normalizeWhitespace(value);
+  if (!cleaned) {
+    return cleaned;
+  }
+
+  const monthPattern = MONTH_NAMES.join("|");
+  const weekdayPattern = WEEKDAY_NAMES.join("|");
+  const patterns = [
+    new RegExp(`^(?:In|On|By|Around|During)\\s+(?:${monthPattern})(?:\\s+\\d{4})?[,:]?\\s+`, "u"),
+    new RegExp(`^(?:In|On|By|Around|During)\\s+(?:${weekdayPattern})[,:]?\\s+`, "u"),
+    /^(?:Last|Next|This)\s+(?:week|month|year|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)[,:]?\s+/u,
+    /^\d+\s+(?:day|days|week|weeks|month|months|year|years)\s+(?:later|after|before|ago)[,:]?\s+/u,
+    /^(?:Earlier|Later)\s+that\s+(?:day|week|month|year)[,:]?\s+/u
+  ];
+
+  for (const pattern of patterns) {
+    const stripped = cleaned.replace(pattern, "");
+    if (stripped !== cleaned) {
+      return normalizeWhitespace(stripped);
+    }
+  }
+
+  return cleaned;
 }
 
 function levenshteinDistance(left: string, right: string): number {
@@ -570,7 +633,7 @@ function resolvePersonName(
     return direct;
   }
 
-  return titleCase(cleaned);
+  return looksLikePersonName(cleaned) ? titleCase(cleaned) : undefined;
 }
 
 function extractClaimsFromScene(
@@ -594,15 +657,16 @@ function extractClaimsFromScene(
 
   for (const sentence of sentences) {
     const sentenceText = expandContractions(sentence);
+    const sentenceTextForSubject = stripLeadingTemporalPhrase(sentenceText);
     const selfMatch = sentenceText.match(/\bmy name is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/iu);
     if (selfMatch) {
       resolvedSelfName = normalizeWhitespace(selfMatch[1] ?? "");
     }
 
-    const sentencePeople = extractExplicitPeople(sentenceText, aliasPairs).map((name) =>
+    const sentencePeople = extractExplicitPeople(sentenceTextForSubject, aliasPairs).map((name) =>
       resolvePersonName(name, aliasMap, resolvedSelfName, explicitPeople)
     );
-    const leadingPersonToken = normalizeWhitespace(sentenceText.match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/u)?.[1] ?? "");
+    const leadingPersonToken = normalizeWhitespace(sentenceTextForSubject.match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/u)?.[1] ?? "");
     const leadingSubject =
       leadingPersonToken && looksLikePersonName(leadingPersonToken)
         ? resolvePersonName(leadingPersonToken, aliasMap, resolvedSelfName, explicitPeople) ?? leadingPersonToken
@@ -757,7 +821,7 @@ function extractClaimsFromScene(
       }
     }
 
-    const fromMatch = sentenceText.match(/^(?:((?!(?:He|She|They)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She|They))\b.*?\bis\s+from\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})\b/u);
+    const fromMatch = sentenceTextForSubject.match(/^(?:((?!(?:He|She|They)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She|They))\b.*?\bis\s+from\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})\b/u);
     if (fromMatch) {
       const rawSubject = fromMatch[2] ? lastPerson : fromMatch[1];
       const person = resolvePersonName(rawSubject, aliasMap, resolvedSelfName, explicitPeople);
@@ -777,7 +841,7 @@ function extractClaimsFromScene(
       }
     }
 
-    const passportMatch = sentenceText.match(/^(?:((?!(?:He|She)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She))\b.*?\b([A-Z][A-Za-z]+)\s+passport\b/u);
+    const passportMatch = sentenceTextForSubject.match(/^(?:((?!(?:He|She)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She))\b.*?\b([A-Z][A-Za-z]+)\s+passport\b/u);
     if (passportMatch) {
       const rawSubject = passportMatch[2] ? lastPerson : passportMatch[1];
       const person = resolvePersonName(rawSubject, aliasMap, resolvedSelfName, explicitPeople);
@@ -796,7 +860,7 @@ function extractClaimsFromScene(
       }
     }
 
-    const pilotForMatch = sentenceText.match(/^(?:((?!(?:He|She)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She))\b.*?\bpilot\s+for\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z.&-]+){0,3})\b/u);
+    const pilotForMatch = sentenceTextForSubject.match(/^(?:((?!(?:He|She)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She))\b.*?\bpilot\s+for\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z.&-]+){0,3})\b/u);
     if (pilotForMatch) {
       const rawSubject = pilotForMatch[2] ? lastPerson : pilotForMatch[1];
       const person = resolvePersonName(rawSubject, aliasMap, resolvedSelfName, explicitPeople);
@@ -817,7 +881,7 @@ function extractClaimsFromScene(
       }
     }
 
-    const companyMatch = sentenceText.match(/^(?:((?!(?:He|She)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She))\b.*?\bruns\s+(?:a\s+company\s+called\s+)?([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4})\b/u);
+    const companyMatch = sentenceTextForSubject.match(/^(?:((?!(?:He|She)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She))\b.*?\bruns\s+(?:a\s+company\s+called\s+)?([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4})\b/u);
     if (companyMatch) {
       const rawSubject = companyMatch[2] ? lastPerson : companyMatch[1];
       const person = resolvePersonName(rawSubject, aliasMap, resolvedSelfName, explicitPeople);
@@ -1054,7 +1118,7 @@ function extractClaimsFromScene(
       }
     }
 
-    const livedPlacesMatch = sentenceText.match(/\b((?!(?:He|She|They)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+has\s+lived\s+in\s+([A-Z][A-Za-z]+)(?:\s+and\s+([A-Z][A-Za-z]+))?\b/u);
+    const livedPlacesMatch = sentenceTextForSubject.match(/\b((?!(?:He|She|They)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+has\s+lived\s+in\s+([A-Z][A-Za-z]+)(?:\s+and\s+([A-Z][A-Za-z]+))?\b/u);
     if (livedPlacesMatch) {
       const person = resolvePersonName(livedPlacesMatch[1], aliasMap, resolvedSelfName, explicitPeople);
       const places = [canonicalizePlace(livedPlacesMatch[2] ?? ""), canonicalizePlace(livedPlacesMatch[3] ?? "")].filter(Boolean) as string[];
@@ -1074,7 +1138,7 @@ function extractClaimsFromScene(
       }
     }
 
-    const currentlyInMatch = sentenceText.match(/^(?:((?!(?:He|She)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She))\b.*?\bis\s+currently\s+in\s+([A-Z][A-Za-z]+(?:,\s*[A-Z][A-Za-z]+)?(?:\s+[A-Z][A-Za-z]+){0,2})\b/u);
+    const currentlyInMatch = sentenceTextForSubject.match(/^(?:((?!(?:He|She)\b)[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|(He|She))\b.*?\bis\s+currently\s+in\s+([A-Z][A-Za-z]+(?:,\s*[A-Z][A-Za-z]+)?(?:\s+[A-Z][A-Za-z]+){0,2})\b/u);
     if (currentlyInMatch) {
       const rawSubject = currentlyInMatch[2] ? lastPerson : currentlyInMatch[1];
       const person = resolvePersonName(rawSubject, aliasMap, resolvedSelfName, explicitPeople);
