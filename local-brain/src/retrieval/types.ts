@@ -26,8 +26,12 @@ export interface RecallPlan {
   readonly lexicalTerms: readonly string[];
   readonly targetLayers: readonly TemporalQueryLayer[];
   readonly maxTemporalDepth: number;
+  readonly ancestorLayerBudgets: TemporalLayerBudgetMap;
   readonly descendantLayerBudgets: TemporalLayerBudgetMap;
   readonly supportMemberBudget: number;
+  readonly temporalSufficiencyEpisodicThreshold: number;
+  readonly temporalSufficiencyTemporalThreshold: number;
+  readonly temporalSupportMaxTokens: number;
   readonly branchPreference: RecallBranchPreference;
   readonly candidateLimitMultiplier: number;
   readonly episodicWeight: number;
@@ -55,6 +59,9 @@ export interface RecallResponse {
     readonly lexicalCandidateCount: number;
     readonly vectorCandidateCount: number;
     readonly fusedResultCount: number;
+    readonly temporalAncestorCount?: number;
+    readonly temporalDescendantSupportCount?: number;
+    readonly temporalGateTriggered?: boolean;
     readonly planner: RecallPlan;
   };
 }

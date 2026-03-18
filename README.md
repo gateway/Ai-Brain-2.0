@@ -32,7 +32,7 @@ Verified local runtime slice in [local-brain/README.md](local-brain/README.md):
 - second-stage vector sync worker for replayable embedding backfill
 - stdio MCP server for local assistant/tool integration
 - hybrid retrieval with lexical fallback
-- ParadeDB BM25 lexical branch implemented, benchmarked, and available as an opt-in lexical provider
+- ParadeDB BM25 lexical branch implemented, benchmarked, and now the default lexical provider on the local track
 - TMT-style temporal planner for historical recall
 - preference supersession
 - deterministic relationship adjudication
@@ -73,14 +73,16 @@ Latest verified run log:
 - [brain-spec/local/30-timescale-vectorscale-pgai-live-producers-run-log.md](brain-spec/local/30-timescale-vectorscale-pgai-live-producers-run-log.md)
 - [brain-spec/local/33-multimodal-vector-sync-runtime-log.md](brain-spec/local/33-multimodal-vector-sync-runtime-log.md)
 - [brain-spec/local/38-bm25-tmt-optimization-run-log.md](brain-spec/local/38-bm25-tmt-optimization-run-log.md)
+- [brain-spec/local/40-bm25-default-and-tmt-closure.md](brain-spec/local/40-bm25-default-and-tmt-closure.md)
+- [brain-spec/local/41-local-brain-status-after-bm25-closure.md](brain-spec/local/41-local-brain-status-after-bm25-closure.md)
 - [brain-spec/local/39-operator-console-run-log.md](brain-spec/local/39-operator-console-run-log.md)
 - [local-brain/CHANGELOG.md](local-brain/CHANGELOG.md)
 
 ## Honest Current Limits
 
-- the default lexical branch is still native PostgreSQL full-text search
-- ParadeDB BM25 is implemented and now clears the expanded `14/14` lexical suite with zero fallback on the seeded local corpus
-- BM25 is still kept behind an explicit env switch for now because it returns a slightly fatter tail than FTS on the current benchmark corpus, so token-burn tuning is not finished yet
+- the default lexical branch is now ParadeDB BM25
+- the expanded lexical suite now clears `14/14` for both FTS and BM25, BM25 fallback is `0`, and BM25 token delta is `-17` versus FTS on the seeded local corpus
+- native PostgreSQL FTS still remains as the guarded lexical fallback and as the procedural-memory bridge inside BM25 mode
 - the `procedural_memory` branch still uses native FTS inside BM25 mode because that path currently preserves active-truth lookups better on live data
 - the hybrid fusion kernel is still app-side, not the final SQL-first kernel
 - Timescale is implemented as a sidecar hypertable mirror for episodic time-scans, not as an in-place conversion of the authoritative `episodic_memory` table
@@ -90,7 +92,7 @@ Latest verified run log:
 - the `external` provider path is now testable locally with a mock server, but real OCR/STT/caption quality still depends on a real backend
 - provider adapters are wired, but live provider execution still requires API keys or a reachable external AI endpoint
 - relative-time understanding is still limited
-- TMT is stronger now through parent-linked temporal nodes and ancestor expansion, but it is still not a full best-effort hierarchical descent stack
+- TMT is stronger now through parent-linked temporal nodes, ancestor budgeting, and bounded descendant support, but it is still not a full best-effort hierarchical descent stack
 
 ## Next High-Value Moves
 
@@ -98,5 +100,5 @@ Latest verified run log:
 - expand the MCP server so assistants can actively use more of the brain
 - strengthen temporal/TMT retrieval behavior for long-horizon recall
 - move hybrid retrieval from transitional app-side RRF to a SQL-first fused kernel
-- benchmark BM25 / ParadeDB against the current lexical branch before switching
+- expand the lexical benchmark beyond the seeded corpus with noisier holdout data
 - deepen the operator console with timeline, relationships, and a later graph view once relationship semantics stabilize

@@ -2,6 +2,10 @@
 
 ## 2026-03-18
 
+- Promoted ParadeDB BM25 to the runtime default lexical branch after the strengthened lexical suite cleared `14/14`, fallback stayed at `0`, and BM25 token delta improved to `-17` versus FTS on the seeded benchmark corpus.
+- Kept native PostgreSQL FTS as the guarded fallback and as the `procedural_memory` bridge inside BM25 mode so active-truth preference/state lookups remain correct.
+- Hardened retrieval pruning so narrow date queries now prefer the evidentiary episodic leaf over broader temporal rollups, while broad year queries still surface temporal summaries plus bounded support.
+- Added deterministic temporal ancestor budgets, temporal sufficiency gating, and stronger benchmark assertions for max result count and temporal overlap.
 - Added the first `brain-console` operator dashboard using `Next.js`, `Tailwind CSS`, and `shadcn/ui`, with overview, query, eval, benchmark, jobs, and artifact detail pages.
 - Added `GET /ops/overview` so the console can read queue and memory-health counts without duplicating backend logic.
 - Returned the runtime lexical default to native FTS after BM25 tuning proved correct but still slightly heavier on token tail than the current FTS baseline; BM25 remains implemented and benchmarked behind `BRAIN_LEXICAL_PROVIDER=bm25`.

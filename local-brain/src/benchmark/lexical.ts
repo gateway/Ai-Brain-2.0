@@ -16,6 +16,8 @@ interface BenchmarkCase {
   readonly expectTopMemoryType?: string;
   readonly expectTopMemoryTypes?: readonly string[];
   readonly expectZeroResults?: boolean;
+  readonly maxResultCount?: number;
+  readonly expectTopOverlapMin?: number;
   readonly maxApproxTokens?: number;
 }
 
@@ -29,6 +31,7 @@ interface BenchmarkCaseResult {
   readonly lexicalFallbackReason?: string;
   readonly topMemoryType?: string;
   readonly topContent?: string;
+  readonly topOverlap?: number;
   readonly approxTokens: number;
   readonly failureReasons: readonly string[];
 }
@@ -62,6 +65,54 @@ function approxTokenCount(text: string): number {
   return text.split(/\s+/u).filter(Boolean).length;
 }
 
+function parseIsoTimestamp(value: string | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function computeTopWindowOverlap(
+  top: Awaited<ReturnType<typeof searchMemory>>["results"][number] | undefined,
+  timeStart: string | undefined,
+  timeEnd: string | undefined
+): number | undefined {
+  if (!top || !timeStart || !timeEnd) {
+    return undefined;
+  }
+
+  const queryStart = parseIsoTimestamp(timeStart);
+  const queryEnd = parseIsoTimestamp(timeEnd);
+  if (queryStart === null || queryEnd === null || queryEnd <= queryStart) {
+    return undefined;
+  }
+
+  if (top.memoryType === "temporal_nodes") {
+    const periodStart = parseIsoTimestamp(typeof top.provenance.period_start === "string" ? top.provenance.period_start : undefined);
+    const periodEnd = parseIsoTimestamp(typeof top.provenance.period_end === "string" ? top.provenance.period_end : undefined);
+    if (periodStart === null || periodEnd === null || periodEnd <= periodStart) {
+      return undefined;
+    }
+
+    const overlapStart = Math.max(queryStart, periodStart);
+    const overlapEnd = Math.min(queryEnd, periodEnd);
+    if (overlapEnd <= overlapStart) {
+      return 0;
+    }
+
+    return (overlapEnd - overlapStart) / (periodEnd - periodStart);
+  }
+
+  const occurredAt = parseIsoTimestamp(top.occurredAt ?? undefined);
+  if (occurredAt === null) {
+    return undefined;
+  }
+
+  return occurredAt >= queryStart && occurredAt <= queryEnd ? 1 : 0;
+}
+
 function makeBenchmarkEmbedding(seed = 0): number[] {
   const vector = new Array<number>(1536).fill(0);
   vector[seed % vector.length] = 1;
@@ -82,6 +133,7 @@ const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     timeEnd: "2025-12-31T23:59:59Z",
     expectTopIncludes: ["Japan", "Sarah", "2025"],
     expectTopMemoryTypes: ["episodic_memory", "temporal_nodes"],
+    expectTopOverlapMin: 0.5,
     maxApproxTokens: 140
   },
   {
@@ -89,6 +141,7 @@ const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     query: "What was I doing in Japan in 2025?",
     expectTopIncludes: ["Japan"],
     expectTopMemoryTypes: ["episodic_memory", "temporal_nodes"],
+    expectTopOverlapMin: 0.5,
     maxApproxTokens: 160
   },
   {
@@ -96,6 +149,7 @@ const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     query: "Kyoto Sarah Ken shared dinners",
     expectTopIncludes: ["Kyoto", "Sarah", "Ken"],
     expectTopMemoryType: "episodic_memory",
+    maxResultCount: 1,
     maxApproxTokens: 140
   },
   {
@@ -132,6 +186,7 @@ const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     query: "CVE-2026-3172 buffer overflow",
     expectTopIncludes: ["CVE-2026-3172", "buffer overflow"],
     expectTopMemoryType: "semantic_memory",
+    maxResultCount: 1,
     maxApproxTokens: 120
   },
   {
@@ -168,6 +223,7 @@ const BENCHMARK_CASES: readonly BenchmarkCase[] = [
     expectTopIncludes: ["Sara Alvarez", "Kyoto dinner"],
     rejectTopIncludes: ["Sarah and Ken"],
     expectTopMemoryType: "episodic_memory",
+    maxResultCount: 1,
     maxApproxTokens: 120
   },
   {
@@ -540,6 +596,9 @@ async function runOne(
 
     const top = response.results[0];
     const topContent = top?.content ?? "";
+    const effectiveTimeStart = testCase.timeStart ?? response.meta.planner.inferredTimeStart;
+    const effectiveTimeEnd = testCase.timeEnd ?? response.meta.planner.inferredTimeEnd;
+    const topOverlap = computeTopWindowOverlap(top, effectiveTimeStart, effectiveTimeEnd);
     const approxTokens = approxTokenCount(response.results.map((item) => item.content).join(" "));
     const failureReasons: string[] = [];
 
@@ -577,6 +636,16 @@ async function runOne(
       failureReasons.push(`approx tokens ${approxTokens} exceeded ${testCase.maxApproxTokens}`);
     }
 
+    if (typeof testCase.maxResultCount === "number" && response.results.length > testCase.maxResultCount) {
+      failureReasons.push(`result count ${response.results.length} exceeded ${testCase.maxResultCount}`);
+    }
+
+    if (typeof testCase.expectTopOverlapMin === "number") {
+      if (typeof topOverlap !== "number" || topOverlap < testCase.expectTopOverlapMin) {
+        failureReasons.push(`top overlap ${typeof topOverlap === "number" ? topOverlap.toFixed(3) : "n/a"} below ${testCase.expectTopOverlapMin}`);
+      }
+    }
+
     return {
       name: testCase.name,
       provider,
@@ -587,6 +656,7 @@ async function runOne(
       lexicalFallbackReason: response.meta.lexicalFallbackReason,
       topMemoryType: top?.memoryType,
       topContent,
+      topOverlap,
       approxTokens,
       failureReasons
     };
@@ -638,6 +708,7 @@ function toMarkdown(report: LexicalBenchmarkReport): string {
     lines.push(`- Effective lexical provider: ${item.effectiveLexicalProvider}`);
     lines.push(`- Lexical fallback used: ${item.lexicalFallbackUsed}`);
     lines.push(`- Top memory type: ${item.topMemoryType ?? "n/a"}`);
+    lines.push(`- Top overlap: ${typeof item.topOverlap === "number" ? item.topOverlap.toFixed(3) : "n/a"}`);
     lines.push(`- Approx tokens: ${item.approxTokens}`);
     lines.push(`- Top content: ${item.topContent ?? ""}`);
     if (item.lexicalFallbackReason) {

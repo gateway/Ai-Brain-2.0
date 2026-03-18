@@ -209,6 +209,39 @@ function buildDescendantBudgets(intent: RecallIntent): TemporalLayerBudgetMap {
   };
 }
 
+function buildAncestorBudgets(intent: RecallIntent): TemporalLayerBudgetMap {
+  if (intent === "complex") {
+    return {
+      session: 0,
+      day: 2,
+      week: 2,
+      month: 2,
+      year: 1,
+      profile: 0
+    };
+  }
+
+  if (intent === "hybrid") {
+    return {
+      session: 0,
+      day: 1,
+      week: 1,
+      month: 1,
+      year: 0,
+      profile: 0
+    };
+  }
+
+  return {
+    session: 0,
+    day: 1,
+    week: 0,
+    month: 0,
+    year: 0,
+    profile: 0
+  };
+}
+
 function extractLexicalTerms(queryText: string, temporalFocus: boolean): readonly string[] {
   const tokens = tokenizeQuery(queryText);
   const scored = new Map<
@@ -318,6 +351,7 @@ export function planRecallQuery(query: RecallQuery): RecallPlan {
   const isBroadTemporal = temporalGranularity === "year" || temporalGranularity === "broad";
   const targetLayers = targetLayersForGranularity(intent, temporalGranularity);
   const lexicalTerms = extractLexicalTerms(queryText, hasTemporalCue);
+  const ancestorLayerBudgets = buildAncestorBudgets(intent);
   const descendantLayerBudgets = buildDescendantBudgets(intent);
 
   return {
@@ -329,8 +363,12 @@ export function planRecallQuery(query: RecallQuery): RecallPlan {
     lexicalTerms,
     targetLayers,
     maxTemporalDepth: targetLayers.length,
+    ancestorLayerBudgets,
     descendantLayerBudgets,
     supportMemberBudget: intent === "complex" ? 8 : intent === "hybrid" ? 6 : 3,
+    temporalSufficiencyEpisodicThreshold: intent === "complex" ? 4 : intent === "hybrid" ? 3 : 2,
+    temporalSufficiencyTemporalThreshold: intent === "complex" ? 1 : intent === "hybrid" ? 1 : 0,
+    temporalSupportMaxTokens: intent === "complex" ? 180 : intent === "hybrid" ? 120 : 80,
     branchPreference: hasTemporalCue ? "episodic_then_temporal" : "lexical_first",
     candidateLimitMultiplier: !hasTemporalCue ? 4 : isNarrowWindow ? 4 : isBroadTemporal ? 6 : 5,
     episodicWeight: !hasTemporalCue ? 1 : isNarrowWindow ? 1.35 : isBroadTemporal ? 1.05 : 1.2,

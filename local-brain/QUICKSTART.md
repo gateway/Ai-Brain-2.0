@@ -40,7 +40,8 @@ This package currently provides:
 BM25 prerequisite:
 
 - ParadeDB `pg_search` must be installed in the local PostgreSQL 18 instance before BM25 mode will work
-- default lexical mode is native FTS; BM25 is opt-in for comparison and tuning
+- default lexical mode is BM25
+- native FTS remains available with `BRAIN_LEXICAL_PROVIDER=fts` for comparison and debugging
 
 Lexical env controls:
 
@@ -54,18 +55,18 @@ cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
 npm run eval
 ```
 
-BM25 / ParadeDB validation run:
+Default lexical validation run:
 
 ```bash
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
-BRAIN_LEXICAL_PROVIDER=bm25 npm run eval
+npm run eval
 ```
 
-BM25 lexical smoke:
+Forced FTS comparison run:
 
 ```bash
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
-BRAIN_LEXICAL_PROVIDER=bm25 npm run search -- "Japan 2025 Sarah" --namespace personal --time-start 2025-01-01T00:00:00Z --time-end 2025-12-31T23:59:59Z
+BRAIN_LEXICAL_PROVIDER=fts npm run eval
 ```
 
 Expected behavior:
@@ -73,7 +74,8 @@ Expected behavior:
 - same or better exact lexical precision than default FTS on the current benchmark set
 - no results for clearly unknown lexical probes
 - active-truth preference lookups still resolve cleanly
-- BM25 now clears the seeded lexical suite without fallback, but it is still opt-in until token-burn tuning is tighter than the current FTS baseline
+- BM25 now clears the strengthened lexical suite without fallback and is the runtime default lexical provider
+- native FTS remains available as a comparison override and guarded fallback
 
 Outputs:
 
@@ -270,8 +272,8 @@ npm run decay:semantic -- --namespace personal_refined2 --inactivity-hours 24 --
 ## Current Honest Limits
 
 - retrieval is hybrid today, but the fusion kernel is still app-side
-- native FTS is still the runtime default lexical branch
-- ParadeDB BM25 is the stronger opt-in lexical branch and no longer falls back on the seeded corpus
+- BM25 is now the runtime default lexical branch
+- ParadeDB BM25 no longer falls back on the seeded corpus and now beats FTS on token total in the strengthened benchmark
 - the procedural/current-truth branch still uses an FTS bridge even in BM25 mode because that behavior is currently more reliable than pure BM25 for state rows
 - relationship extraction is still heuristic; adjudication is deterministic threshold/rule-based (no LLM judge yet)
 - raw binary artifacts are stored, and the new derivation queue is the safe path for OCR/transcription/caption work when no live external service is connected
@@ -279,7 +281,7 @@ npm run decay:semantic -- --namespace personal_refined2 --inactivity-hours 24 --
 - relative-time resolution is still limited
 - time-bounded queries now infer year/month/day windows, pull parent-linked temporal ancestor context, and attach bounded descendant episodic support
 - the current expanded lexical suite passes `14/14` for both FTS and BM25 on the seeded local corpus
-- BM25 still returns a slightly fatter tail than FTS on the current benchmark set, so it stays opt-in until token-burn tuning is tighter
+- native FTS remains available as explicit override and guarded fallback, but BM25 is no longer feature-gated on the local track
 
 ## Live Producer Security
 

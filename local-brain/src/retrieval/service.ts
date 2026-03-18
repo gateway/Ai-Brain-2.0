@@ -3,7 +3,7 @@ import { queryRows } from "../db/client.js";
 import { getProviderAdapter } from "../providers/registry.js";
 import { ProviderError } from "../providers/types.js";
 import type { ArtifactId, RecallResult } from "../types.js";
-import { isRelationshipStyleExactQuery } from "./query-signals.js";
+import { isPrecisionLexicalQuery, isRelationshipStyleExactQuery } from "./query-signals.js";
 import { planRecallQuery } from "./planner.js";
 import type {
   ArtifactDetail,
@@ -175,6 +175,88 @@ function toIsoString(value: string | Date | null | undefined): string | null {
   }
 
   return value;
+}
+
+function parseIsoTimestamp(value: unknown): number | null {
+  if (typeof value !== "string" || !value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function temporalLayerSpecificityBonus(layer: unknown): number {
+  switch (layer) {
+    case "day":
+      return 0.18;
+    case "week":
+      return 0.14;
+    case "month":
+      return 0.1;
+    case "year":
+      return 0.06;
+    case "session":
+      return 0.04;
+    case "profile":
+      return 0.02;
+    default:
+      return 0;
+  }
+}
+
+function temporalWindowAlignmentMultiplier(
+  row: Pick<SearchRow, "memory_type" | "occurred_at" | "provenance">,
+  timeStart: string | null,
+  timeEnd: string | null
+): number {
+  if (!timeStart || !timeEnd) {
+    return 1;
+  }
+
+  const queryStart = parseIsoTimestamp(timeStart);
+  const queryEnd = parseIsoTimestamp(timeEnd);
+  if (queryStart === null || queryEnd === null || queryEnd <= queryStart) {
+    return 1;
+  }
+
+  if (row.memory_type === "episodic_memory") {
+    const occurredAt = parseIsoTimestamp(toIsoString(row.occurred_at));
+    if (occurredAt === null) {
+      return 1;
+    }
+    return occurredAt >= queryStart && occurredAt <= queryEnd ? 1.12 : 0.45;
+  }
+
+  if (row.memory_type !== "temporal_nodes") {
+    return 1;
+  }
+
+  const periodStart = parseIsoTimestamp(typeof row.provenance.period_start === "string" ? row.provenance.period_start : null);
+  const periodEnd = parseIsoTimestamp(typeof row.provenance.period_end === "string" ? row.provenance.period_end : null);
+  if (periodStart === null || periodEnd === null || periodEnd <= periodStart) {
+    return 1;
+  }
+
+  const overlapStart = Math.max(periodStart, queryStart);
+  const overlapEnd = Math.min(periodEnd, queryEnd);
+  if (overlapEnd <= overlapStart) {
+    return 0.35;
+  }
+
+  const overlapRatio = (overlapEnd - overlapStart) / (queryEnd - queryStart);
+  const specificityBonus = temporalLayerSpecificityBonus(row.provenance.layer);
+  return 0.7 + Math.min(overlapRatio, 1) * 0.5 + specificityBonus;
+}
+
+function hasNarrowTimeWindow(timeStart: string | null, timeEnd: string | null): boolean {
+  const start = parseIsoTimestamp(timeStart);
+  const end = parseIsoTimestamp(timeEnd);
+  if (start === null || end === null || end <= start) {
+    return false;
+  }
+
+  return (end - start) / (1000 * 60 * 60 * 24) <= 45;
 }
 
 function buildRecallResult(
@@ -387,7 +469,8 @@ function proceduralLexicalDocument(): string {
 function lexicalBranchWeight(
   branch: string,
   planner: ReturnType<typeof planRecallQuery>,
-  relationshipExactFocus: boolean
+  relationshipExactFocus: boolean,
+  precisionLexicalFocus: boolean
 ): number {
   if (relationshipExactFocus) {
     switch (branch) {
@@ -399,6 +482,21 @@ function lexicalBranchWeight(
         return 0.72;
       case "memory_candidate":
         return 0.7;
+      default:
+        return 1;
+    }
+  }
+
+  if (precisionLexicalFocus) {
+    switch (branch) {
+      case "episodic_memory":
+      case "artifact_derivation":
+      case "semantic_memory":
+        return 1.1;
+      case "memory_candidate":
+        return 0.55;
+      case "temporal_nodes":
+        return planner.temporalSummaryWeight * 0.92;
       default:
         return 1;
     }
@@ -424,7 +522,9 @@ function pruneRankedResults(
     rrfScore: number;
   }[],
   planner: ReturnType<typeof planRecallQuery>,
-  relationshipExactFocus: boolean
+  relationshipExactFocus: boolean,
+  precisionLexicalFocus: boolean,
+  narrowTemporalWindow: boolean
 ): readonly {
   row: SearchRow;
   lexicalRank?: number;
@@ -440,21 +540,41 @@ function pruneRankedResults(
   const topType = rows[0]?.row.memory_type;
   const hasTemporal = rows.some((item) => item.row.memory_type === "temporal_nodes");
   const hasEpisodic = rows.some((item) => item.row.memory_type === "episodic_memory");
+  const proceduralRows = rows.filter((item) => item.row.memory_type === "procedural_memory");
+
+  if (!planner.temporalFocus && proceduralRows.length > 0 && (topType === "procedural_memory" || topType === "semantic_memory")) {
+    return proceduralRows.slice(0, 1);
+  }
 
   if (relationshipExactFocus && topType === "episodic_memory") {
-    return rows.filter((item) => item.row.memory_type === "episodic_memory");
+    return rows.filter((item) => item.row.memory_type === "episodic_memory").slice(0, 1);
   }
 
   if (topType === "procedural_memory") {
-    return rows.filter((item) => item.row.memory_type === "procedural_memory");
+    return rows.filter((item) => item.row.memory_type === "procedural_memory").slice(0, 1);
   }
 
   if (topType === "artifact_derivation") {
-    return rows.filter((item) => item.row.memory_type === "artifact_derivation");
+    return rows.filter((item) => item.row.memory_type === "artifact_derivation").slice(0, 1);
+  }
+
+  if (precisionLexicalFocus && !planner.temporalFocus) {
+    if (topType === "episodic_memory" || topType === "semantic_memory") {
+      return rows.filter((item) => item.row.memory_type === topType).slice(0, 1);
+    }
   }
 
   if (planner.temporalFocus && hasTemporal && hasEpisodic) {
-    return rows.filter((item) => item.row.memory_type !== "memory_candidate");
+    if (narrowTemporalWindow) {
+      const episodicRows = rows.filter((item) => item.row.memory_type === "episodic_memory").slice(0, 2);
+      const temporalRows = rows.filter((item) => item.row.memory_type === "temporal_nodes").slice(0, 1);
+      return [...episodicRows, ...temporalRows];
+    }
+
+    const temporalRows = rows.filter((item) => item.row.memory_type === "temporal_nodes").slice(0, 1);
+    const episodicRows = rows.filter((item) => item.row.memory_type === "episodic_memory").slice(0, 2);
+    const artifactRows = rows.filter((item) => item.row.memory_type === "artifact_derivation").slice(0, 1);
+    return [...temporalRows, ...episodicRows, ...artifactRows];
   }
 
   return rows.filter((item) => item.row.memory_type !== "memory_candidate");
@@ -466,7 +586,10 @@ function rankLexicalSources(
   hasTimeWindow: boolean,
   temporalFocus: boolean,
   relationshipExactFocus: boolean,
-  planner: ReturnType<typeof planRecallQuery>
+  precisionLexicalFocus: boolean,
+  planner: ReturnType<typeof planRecallQuery>,
+  timeStart: string | null,
+  timeEnd: string | null
 ): RankedSearchRow[] {
   const accumulator = new Map<string, { row: RankedSearchRow; score: number }>();
 
@@ -476,7 +599,9 @@ function rankLexicalSources(
       const key = resultKey(row);
       const current = accumulator.get(key) ?? { row, score: 0 };
       current.row = row;
-      current.score += lexicalBranchWeight(source.branch, planner, relationshipExactFocus) / (20 + index + 1);
+      const branchWeight = lexicalBranchWeight(source.branch, planner, relationshipExactFocus, precisionLexicalFocus);
+      const temporalAlignment = temporalWindowAlignmentMultiplier(row, timeStart, timeEnd);
+      current.score += (branchWeight * temporalAlignment) / (20 + index + 1);
       accumulator.set(key, current);
     }
   }
@@ -491,13 +616,50 @@ function rankLexicalSources(
     .slice(0, candidateLimit);
 }
 
+function buildLayerBudgetCase(
+  budgets: ReturnType<typeof planRecallQuery>["descendantLayerBudgets"] | ReturnType<typeof planRecallQuery>["ancestorLayerBudgets"]
+): string {
+  return `CASE layer
+    WHEN 'session' THEN ${Math.max(0, budgets.session)}
+    WHEN 'day' THEN ${Math.max(0, budgets.day)}
+    WHEN 'week' THEN ${Math.max(0, budgets.week)}
+    WHEN 'month' THEN ${Math.max(0, budgets.month)}
+    WHEN 'year' THEN ${Math.max(0, budgets.year)}
+    WHEN 'profile' THEN ${Math.max(0, budgets.profile)}
+    ELSE 0
+  END`;
+}
+
+function approxResultTokenCount(rows: readonly RankedSearchRow[]): number {
+  return rows.reduce((sum, row) => sum + row.content.split(/\s+/u).filter(Boolean).length, 0);
+}
+
+function hasSufficientTemporalEvidence(
+  rows: readonly RankedSearchRow[],
+  planner: ReturnType<typeof planRecallQuery>
+): boolean {
+  const episodicCount = rows.filter((row) => row.memory_type === "episodic_memory").length;
+  const temporalCount = rows.filter((row) => row.memory_type === "temporal_nodes").length;
+  const tokenCount = approxResultTokenCount(rows);
+
+  if (episodicCount >= planner.temporalSufficiencyEpisodicThreshold) {
+    return true;
+  }
+
+  if (temporalCount >= planner.temporalSufficiencyTemporalThreshold && tokenCount >= planner.temporalSupportMaxTokens) {
+    return true;
+  }
+
+  return false;
+}
+
 async function loadTemporalHierarchyRows(
   namespaceId: string,
   seedRows: readonly RankedSearchRow[],
   candidateLimit: number,
   timeStart: string | null,
   timeEnd: string | null,
-  maxTemporalDepth: number
+  planner: ReturnType<typeof planRecallQuery>
 ): Promise<RankedSearchRow[]> {
   const episodicIds = seedRows
     .filter((row) => row.memory_type === "episodic_memory")
@@ -512,6 +674,7 @@ async function loadTemporalHierarchyRows(
     return [];
   }
 
+  const ancestorBudgetCase = buildLayerBudgetCase(planner.ancestorLayerBudgets);
   const rows = await queryRows<SearchRow>(
     `
       WITH RECURSIVE seed_nodes AS (
@@ -566,6 +729,20 @@ async function loadTemporalHierarchyRows(
         JOIN ancestry ON ancestry.parent_id = parent.id
         WHERE parent.namespace_id = $1
           AND ancestry.hops < $6
+      ),
+      ranked_ancestry AS (
+        SELECT
+          ancestry.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY ancestry.layer
+            ORDER BY ancestry.hops ASC, ancestry.depth DESC, ancestry.period_end DESC, ancestry.id
+          ) AS layer_rank
+        FROM ancestry
+      ),
+      selected_ancestry AS (
+        SELECT *
+        FROM ranked_ancestry
+        WHERE layer_rank <= ${ancestorBudgetCase}
       )
       SELECT DISTINCT ON (id)
         id AS memory_id,
@@ -587,14 +764,20 @@ async function loadTemporalHierarchyRows(
           'generated_by', generated_by,
           'metadata', metadata
         ) AS provenance
-      FROM ancestry
+      FROM selected_ancestry
       ORDER BY id, hops ASC, depth DESC, period_end DESC
       LIMIT $7
     `,
-    [namespaceId, episodicIds, temporalIds, timeStart, timeEnd, Math.max(maxTemporalDepth, 1), candidateLimit]
+    [namespaceId, episodicIds, temporalIds, timeStart, timeEnd, Math.max(planner.maxTemporalDepth, 1), candidateLimit]
   );
 
-  return toRankedRows(rows).sort((left, right) => compareLexical(left, right, Boolean(timeStart || timeEnd), true));
+  return toRankedRows(rows)
+    .map((row) => ({
+      ...row,
+      raw_score: row.scoreValue * temporalWindowAlignmentMultiplier(row, timeStart, timeEnd),
+      scoreValue: row.scoreValue * temporalWindowAlignmentMultiplier(row, timeStart, timeEnd)
+    }))
+    .sort((left, right) => compareLexical(left, right, Boolean(timeStart || timeEnd), true));
 }
 
 function allowedDescendantLayers(
@@ -604,17 +787,6 @@ function allowedDescendantLayers(
     (layer): layer is "day" | "week" | "month" =>
       (layer === "day" || layer === "week" || layer === "month") && planner.descendantLayerBudgets[layer] > 0
   );
-}
-
-function buildLayerBudgetCase(
-  budgets: ReturnType<typeof planRecallQuery>["descendantLayerBudgets"]
-): string {
-  return `CASE d.layer
-    WHEN 'day' THEN ${Math.max(0, budgets.day)}
-    WHEN 'week' THEN ${Math.max(0, budgets.week)}
-    WHEN 'month' THEN ${Math.max(0, budgets.month)}
-    ELSE 0
-  END`;
 }
 
 async function loadTemporalDescendantSupportRows(
@@ -634,7 +806,12 @@ async function loadTemporalDescendantSupportRows(
     return [];
   }
 
-  const layerBudgetCase = buildLayerBudgetCase(planner.descendantLayerBudgets);
+  const layerBudgetCase = `CASE d.layer
+    WHEN 'day' THEN ${Math.max(0, planner.descendantLayerBudgets.day)}
+    WHEN 'week' THEN ${Math.max(0, planner.descendantLayerBudgets.week)}
+    WHEN 'month' THEN ${Math.max(0, planner.descendantLayerBudgets.month)}
+    ELSE 0
+  END`;
   const rows = await queryRows<SearchRow>(
     `
       WITH RECURSIVE descendants AS (
@@ -770,7 +947,13 @@ async function loadTemporalDescendantSupportRows(
     ]
   );
 
-  return toRankedRows(rows).sort((left, right) => compareLexical(left, right, Boolean(timeStart || timeEnd), true));
+  return toRankedRows(rows)
+    .map((row) => ({
+      ...row,
+      raw_score: row.scoreValue * temporalWindowAlignmentMultiplier(row, timeStart, timeEnd),
+      scoreValue: row.scoreValue * temporalWindowAlignmentMultiplier(row, timeStart, timeEnd)
+    }))
+    .sort((left, right) => compareLexical(left, right, Boolean(timeStart || timeEnd), true));
 }
 
 async function loadFtsLexicalRows(
@@ -1001,7 +1184,8 @@ async function loadBm25LexicalRows(
   timeEnd: string | null,
   planner: ReturnType<typeof planRecallQuery>,
   hasTimeWindow: boolean,
-  relationshipExactFocus: boolean
+  relationshipExactFocus: boolean,
+  precisionLexicalFocus: boolean
 ): Promise<RankedSearchRow[]> {
   const plannerTerms = planner.lexicalTerms.filter((term) => {
     const normalized = term.toLowerCase();
@@ -1232,7 +1416,10 @@ async function loadBm25LexicalRows(
     hasTimeWindow,
     planner.temporalFocus,
     relationshipExactFocus,
-    planner
+    precisionLexicalFocus,
+    planner,
+    timeStart,
+    timeEnd
   );
 }
 
@@ -1288,10 +1475,16 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
   const queryText = query.query.trim();
   const planner = planRecallQuery(query);
   const relationshipExactFocus = isRelationshipStyleExactQuery(queryText);
+  const precisionLexicalFocus = (!query.queryEmbedding || query.queryEmbedding.length === 0) && (isPrecisionLexicalQuery(queryText) || relationshipExactFocus);
   const timeStart = query.timeStart ?? planner.inferredTimeStart ?? null;
   const timeEnd = query.timeEnd ?? planner.inferredTimeEnd ?? null;
   const hasTimeWindow = Boolean(timeStart || timeEnd);
-  const candidateLimit = Math.max(limit * planner.candidateLimitMultiplier, 20);
+  const narrowTemporalWindow = hasNarrowTimeWindow(timeStart, timeEnd);
+  const candidateLimit = precisionLexicalFocus
+    ? Math.max(Math.min(limit * 2, 12), 8)
+    : planner.temporalFocus
+      ? Math.max(limit * planner.candidateLimitMultiplier, 12)
+      : Math.max(limit * planner.candidateLimitMultiplier, 20);
   const [queryEmbeddingResult, lexicalResult] = await Promise.all([
     resolveQueryEmbedding(query),
     (async () => {
@@ -1323,7 +1516,8 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
             timeEnd,
             planner,
             hasTimeWindow,
-            relationshipExactFocus
+            relationshipExactFocus,
+            precisionLexicalFocus
           ),
           provider: "bm25" as LexicalProvider,
           fallbackUsed: false,
@@ -1360,22 +1554,25 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       candidateLimit,
       timeStart,
       timeEnd,
-      planner.maxTemporalDepth
+      planner
     );
     if (ancestryRows.length > 0) {
       lexicalRows = mergeUniqueRows(lexicalRows, ancestryRows, candidateLimit, hasTimeWindow, planner.temporalFocus);
     }
 
-    const descendantRows = await loadTemporalDescendantSupportRows(
-      query.namespaceId,
-      lexicalRows,
-      candidateLimit,
-      timeStart,
-      timeEnd,
-      planner
-    );
-    if (descendantRows.length > 0) {
-      lexicalRows = mergeUniqueRows(lexicalRows, descendantRows, candidateLimit, hasTimeWindow, planner.temporalFocus);
+    const temporalGateTriggered = !hasSufficientTemporalEvidence(lexicalRows, planner);
+    if (temporalGateTriggered) {
+      const descendantRows = await loadTemporalDescendantSupportRows(
+        query.namespaceId,
+        lexicalRows,
+        candidateLimit,
+        timeStart,
+        timeEnd,
+        planner
+      );
+      if (descendantRows.length > 0) {
+        lexicalRows = mergeUniqueRows(lexicalRows, descendantRows, candidateLimit, hasTimeWindow, planner.temporalFocus);
+      }
     }
   }
 
@@ -1515,7 +1712,7 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       return resultKey(left.row).localeCompare(resultKey(right.row));
     });
 
-  const results = pruneRankedResults(rankedResults, planner, relationshipExactFocus)
+  const results = pruneRankedResults(rankedResults, planner, relationshipExactFocus, precisionLexicalFocus, narrowTemporalWindow)
     .slice(0, limit)
     .map((row) =>
       buildRecallResult(row.row, row.rrfScore, {
@@ -1541,6 +1738,9 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       lexicalCandidateCount: lexicalRows.length,
       vectorCandidateCount: vectorRows.length,
       fusedResultCount: results.length,
+      temporalAncestorCount: lexicalRows.filter((row) => row.provenance.tier === "temporal_ancestor").length,
+      temporalDescendantSupportCount: lexicalRows.filter((row) => row.provenance.tier === "temporal_descendant_support").length,
+      temporalGateTriggered: (planner.temporalFocus || hasTimeWindow) ? !hasSufficientTemporalEvidence(lexicalRows, planner) : false,
       planner
     }
   };

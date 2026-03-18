@@ -81,7 +81,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     artifactRoot,
     producerInboxRoot,
     namespaceDefault: env.BRAIN_NAMESPACE_DEFAULT ?? "personal",
-    lexicalProvider: env.BRAIN_LEXICAL_PROVIDER === "bm25" ? "bm25" : "fts",
+    lexicalProvider: env.BRAIN_LEXICAL_PROVIDER === "fts" ? "fts" : "bm25",
     lexicalFallbackEnabled: parseBoolean(env.BRAIN_LEXICAL_FALLBACK_ENABLED, true),
     embeddingProvider: env.BRAIN_EMBEDDING_PROVIDER ?? "openrouter",
     embeddingModel: env.BRAIN_EMBEDDING_MODEL ?? "text-embedding-default",

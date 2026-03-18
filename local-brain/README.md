@@ -35,7 +35,7 @@ Current working slice:
 - parent-linked temporal nodes for the first real TMT ancestry chain
 - deterministic relationship adjudication into `relationship_memory`
 - deterministic semantic forgetting/decay loop with archival thresholds
-- ParadeDB BM25 lexical branch implemented, benchmarked, and available as an opt-in lexical provider
+- ParadeDB BM25 lexical branch implemented, benchmarked, and now the default lexical provider
 
 This is not the full brain yet. It is the first implementation slice that
 proves the substrate, schema, and file ingestion loop without Docker.
@@ -66,8 +66,9 @@ Lexical env switches:
 
 - `BRAIN_LEXICAL_PROVIDER=fts|bm25`
 - `BRAIN_LEXICAL_FALLBACK_ENABLED=true|false`
-- default lexical mode is `fts`
-- if BM25 is selected and fails, retrieval falls back to native FTS unless fallback is disabled
+- default lexical mode is `bm25`
+- use `BRAIN_LEXICAL_PROVIDER=fts` to force native PostgreSQL full-text for comparison/debugging
+- if BM25 fails, retrieval falls back to native FTS unless fallback is disabled
 
 ## Ingest A File
 
@@ -172,25 +173,34 @@ OPENROUTER_API_KEY=... npm run search -- "Kyoto shrine companion notes" --namesp
 
 Current retrieval behavior:
 
-- native PostgreSQL full-text search is the default lexical branch
-- ParadeDB BM25 is available with `BRAIN_LEXICAL_PROVIDER=bm25`
+- ParadeDB BM25 is the default lexical branch
+- native PostgreSQL full-text remains available with `BRAIN_LEXICAL_PROVIDER=fts`
 - `semantic_memory` and embedded `artifact_derivations` drive the vector branch
 - RRF fusion runs in the app today
 - if no embedding provider or query embedding is available, search degrades safely to lexical-only
 - time-bounded queries infer a temporal planning window and bias episodic plus temporal summaries ahead of flatter lexical hits
 - the planner now distinguishes year, month, and day-granularity temporal windows before retrieval
 - parent-linked `temporal_nodes` plus bounded descendant episodic support now add real TMT-style context instead of only flat summary scans
+- ancestor expansion is now budgeted per layer and descendant support is gated so broad year queries still get temporal context without over-expanding narrow date lookups
 - time-windowed queries bias historical episodic evidence above speculative candidate rows
 - BM25 currently covers `episodic_memory`, `semantic_memory`, `memory_candidates`, `artifact_derivations`, and `temporal_nodes`
 - `procedural_memory` stays on an FTS bridge inside BM25 mode for now, because that path is still more trustworthy for active-truth preference/state lookups
-- the expanded lexical benchmark now passes `14/14` for both FTS and BM25, and BM25 no longer falls back on the seeded corpus
-- BM25 is still kept opt-in because it returns a slightly larger lexical tail than FTS on the current benchmark set, so token-burn tuning is not fully settled
+- the expanded lexical benchmark now passes `14/14` for both FTS and BM25
+- BM25 no longer falls back on the seeded corpus and now returns a lower token total than FTS on the strengthened benchmark set
+- exact relationship recall, active-truth preference recall, and narrow date lookups were all re-verified before flipping BM25 to the runtime default
 
-Example BM25 search:
+Example search with the default lexical provider:
 
 ```bash
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
-BRAIN_LEXICAL_PROVIDER=bm25 npm run search -- "Japan 2025 Sarah" --namespace personal --time-start 2025-01-01T00:00:00Z --time-end 2025-12-31T23:59:59Z
+npm run search -- "Japan 2025 Sarah" --namespace personal --time-start 2025-01-01T00:00:00Z --time-end 2025-12-31T23:59:59Z
+```
+
+Example forced FTS comparison:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+BRAIN_LEXICAL_PROVIDER=fts npm run search -- "Japan 2025 Sarah" --namespace personal --time-start 2025-01-01T00:00:00Z --time-end 2025-12-31T23:59:59Z
 ```
 
 Relationship lookup:
@@ -413,6 +423,6 @@ curl -s -X POST http://127.0.0.1:8787/derive/provider \
 - fully automated `pgai` vectorizer ownership beyond controlled sidecar evaluation
 - provider-backed multimodal derivation execution against a real external AI endpoint remains targeted first through the `external` adapter
 - signed Slack/Discord production deployments with allowlists, attachment auth, and retry hardening
-- BM25 remains opt-in at runtime; the default lexical branch is native FTS until BM25 tail-size/token-burn tuning is tighter
+- BM25 is now the runtime default lexical branch; native FTS remains available as an explicit override and guarded fallback
 - LLM adjudication for relationship and conflict refinement
 - deeper TMT descent with per-level budgets, profile/session layers, and recall gating
