@@ -7,7 +7,7 @@ import { runCandidateConsolidation } from "../jobs/consolidation.js";
 import { ProducerRequestError, ingestDiscordRelayRequest, ingestSlackEventsRequest } from "../producers/live.js";
 import { ingestWebhookPayload } from "../producers/webhook.js";
 import { getArtifactDetail, getRelationships, searchMemory, timelineMemory } from "../retrieval/service.js";
-import { getOpsOverview } from "../ops/service.js";
+import { getOpsOverview, getOpsRelationshipGraph, getOpsTimelineView } from "../ops/service.js";
 
 interface JsonResponse {
   readonly statusCode: number;
@@ -102,6 +102,34 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
 
   if (request.method === "GET" && url.pathname === "/ops/overview") {
     const result = await getOpsOverview();
+
+    return {
+      statusCode: 200,
+      body: result
+    };
+  }
+
+  if (request.method === "GET" && url.pathname === "/ops/timeline") {
+    const result = await getOpsTimelineView(
+      requireString(url.searchParams.get("namespace_id"), "namespace_id"),
+      requireString(url.searchParams.get("time_start"), "time_start"),
+      requireString(url.searchParams.get("time_end"), "time_end"),
+      optionalNumber(url.searchParams.get("limit")) ?? 40
+    );
+
+    return {
+      statusCode: 200,
+      body: result
+    };
+  }
+
+  if (request.method === "GET" && url.pathname === "/ops/graph") {
+    const result = await getOpsRelationshipGraph(requireString(url.searchParams.get("namespace_id"), "namespace_id"), {
+      entityName: optionalString(url.searchParams.get("entity_name")),
+      timeStart: optionalString(url.searchParams.get("time_start")),
+      timeEnd: optionalString(url.searchParams.get("time_end")),
+      limit: optionalNumber(url.searchParams.get("limit")) ?? 36
+    });
 
     return {
       statusCode: 200,

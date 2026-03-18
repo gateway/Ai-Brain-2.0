@@ -16,6 +16,7 @@ test("planner keeps year-only historical queries broad and summary-biased", () =
   assert.equal(plan.branchPreference, "episodic_then_temporal");
   assert.equal(plan.candidateLimitMultiplier, 6);
   assert.ok(plan.temporalSummaryWeight > plan.episodicWeight);
+  assert.deepEqual(plan.descendantExpansionOrder, ["month", "week", "day"]);
 });
 
 test("planner narrows month-level queries to the month and keeps episodic recall dominant", () => {
@@ -31,6 +32,7 @@ test("planner narrows month-level queries to the month and keeps episodic recall
   assert.equal(plan.branchPreference, "episodic_then_temporal");
   assert.equal(plan.candidateLimitMultiplier, 4);
   assert.ok(plan.episodicWeight > plan.temporalSummaryWeight);
+  assert.deepEqual(plan.descendantExpansionOrder, ["week", "day"]);
 });
 
 test("planner narrows day-level queries to the day window", () => {
@@ -45,6 +47,7 @@ test("planner narrows day-level queries to the day window", () => {
   assert.equal(plan.inferredTimeEnd, "2025-06-12T23:59:59.999Z");
   assert.equal(plan.candidateLimitMultiplier, 4);
   assert.equal(plan.branchPreference, "episodic_then_temporal");
+  assert.deepEqual(plan.descendantExpansionOrder, []);
 });
 
 test("planner leaves non-temporal queries in the simple lexical path", () => {
@@ -59,4 +62,5 @@ test("planner leaves non-temporal queries in the simple lexical path", () => {
   assert.equal(plan.candidateLimitMultiplier, 4);
   assert.equal(plan.inferredTimeStart, undefined);
   assert.equal(plan.inferredTimeEnd, undefined);
+  assert.deepEqual(plan.descendantExpansionOrder, ["day"]);
 });

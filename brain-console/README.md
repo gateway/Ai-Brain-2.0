@@ -15,6 +15,8 @@ It is intentionally a developer/operator surface, not the final end-user product
 - runtime health from the local brain HTTP server
 - lexical status and BM25/FTS posture
 - live query runs with planner and provenance details
+- timeline browsing with rolled-up temporal summaries and supporting episodic evidence
+- relationship graph browsing with clickable entity refocus and edge inspection
 - latest eval report
 - latest lexical benchmark report
 - queue and memory-health overview
@@ -54,6 +56,8 @@ Then open:
 - `/console/eval`
 - `/console/benchmark`
 - `/console/jobs`
+- `/console/timeline`
+- `/console/relationships`
 - `/console/artifacts/[id]`
 
 ## Current Operator Actions
@@ -69,6 +73,16 @@ Why:
 
 - it keeps the operator workflow cheap while the brain semantics are still moving
 - it makes BM25/FTS, temporal recall, provenance, and job state visible without inventing a second backend
-- it avoids overcommitting to a graph UI before relationship semantics are stable enough to deserve it
+- it avoids overcommitting to a client-heavy graph UI before relationship semantics are stable enough to deserve it
 
-Relationship graph and richer timeline visualization can come later once the data model is settled enough to trust visually.
+What exists now is the safe middle ground:
+
+- a themed operator atlas
+- a clickable SVG relationship graph backed by live runtime data
+- a timeline page that shows both rolled-up temporal nodes and supporting episodic leaves
+
+What still comes later:
+
+- richer temporal containment diagnostics
+- supersession and causal overlays in the graph
+- heavier interactive graph exploration if the relationship semantics justify it

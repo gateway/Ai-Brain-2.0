@@ -15,6 +15,7 @@ import type {
   RelationshipQuery,
   RelationshipResponse,
   RelationshipResult,
+  TemporalDescendantLayer,
   TimelineQuery,
   TimelineResponse
 } from "./types.js";
@@ -634,19 +635,130 @@ function approxResultTokenCount(rows: readonly RankedSearchRow[]): number {
   return rows.reduce((sum, row) => sum + row.content.split(/\s+/u).filter(Boolean).length, 0);
 }
 
-function hasSufficientTemporalEvidence(
-  rows: readonly RankedSearchRow[],
-  planner: ReturnType<typeof planRecallQuery>
-): boolean {
-  const episodicCount = rows.filter((row) => row.memory_type === "episodic_memory").length;
-  const temporalCount = rows.filter((row) => row.memory_type === "temporal_nodes").length;
-  const tokenCount = approxResultTokenCount(rows);
+function isTemporalDescendantSupportRow(row: Pick<SearchRow, "memory_type" | "provenance">): boolean {
+  return (
+    row.memory_type === "episodic_memory" &&
+    (row.provenance.tier === "temporal_descendant_support" ||
+      (typeof row.provenance.temporal_support === "object" && row.provenance.temporal_support !== null))
+  );
+}
 
-  if (episodicCount >= planner.temporalSufficiencyEpisodicThreshold) {
+function rowMatchesTemporalWindow(
+  row: Pick<SearchRow, "memory_type" | "occurred_at" | "provenance">,
+  timeStart: string | null,
+  timeEnd: string | null
+): boolean {
+  if (!timeStart && !timeEnd) {
     return true;
   }
 
-  if (temporalCount >= planner.temporalSufficiencyTemporalThreshold && tokenCount >= planner.temporalSupportMaxTokens) {
+  const queryStart = parseIsoTimestamp(timeStart);
+  const queryEnd = parseIsoTimestamp(timeEnd);
+  if (queryStart === null || queryEnd === null || queryEnd <= queryStart) {
+    return true;
+  }
+
+  if (row.memory_type === "temporal_nodes") {
+    const periodStart = parseIsoTimestamp(typeof row.provenance.period_start === "string" ? row.provenance.period_start : null);
+    const periodEnd = parseIsoTimestamp(typeof row.provenance.period_end === "string" ? row.provenance.period_end : null);
+    if (periodStart === null || periodEnd === null) {
+      return true;
+    }
+
+    return periodEnd >= queryStart && periodStart <= queryEnd;
+  }
+
+  const occurredAt = parseIsoTimestamp(toIsoString(row.occurred_at));
+  if (occurredAt === null) {
+    return true;
+  }
+
+  return occurredAt >= queryStart && occurredAt <= queryEnd;
+}
+
+function directTemporalSeedLayers(rows: readonly RankedSearchRow[]): ReadonlySet<TemporalDescendantLayer | "year"> {
+  const layers = new Set<TemporalDescendantLayer | "year">();
+
+  for (const row of rows) {
+    if (row.memory_type !== "temporal_nodes" || row.provenance.tier !== "temporal_summary") {
+      continue;
+    }
+
+    const layer = row.provenance.layer;
+    if (layer === "year" || layer === "month" || layer === "week" || layer === "day") {
+      layers.add(layer);
+    }
+  }
+
+  return layers;
+}
+
+function determineTemporalDescendantPasses(
+  rows: readonly RankedSearchRow[],
+  planner: ReturnType<typeof planRecallQuery>
+): readonly (readonly TemporalDescendantLayer[])[] {
+  const seedLayers = directTemporalSeedLayers(rows);
+  const passes: TemporalDescendantLayer[][] = [];
+
+  for (const layer of planner.descendantExpansionOrder) {
+    if (layer === "month" && seedLayers.has("year") && planner.descendantLayerBudgets.month > 0) {
+      passes.push(["month"]);
+      continue;
+    }
+
+    if (layer === "week" && (seedLayers.has("year") || seedLayers.has("month")) && planner.descendantLayerBudgets.week > 0) {
+      passes.push(["week"]);
+      continue;
+    }
+
+    if (
+      layer === "day" &&
+      (seedLayers.has("year") || seedLayers.has("month") || seedLayers.has("week")) &&
+      planner.descendantLayerBudgets.day > 0
+    ) {
+      passes.push(["day"]);
+    }
+  }
+
+  return passes;
+}
+
+function hasSufficientTemporalEvidence(
+  rows: readonly RankedSearchRow[],
+  planner: ReturnType<typeof planRecallQuery>,
+  timeStart: string | null,
+  timeEnd: string | null
+): boolean {
+  const directEpisodicCount = rows.filter(
+    (row) =>
+      row.memory_type === "episodic_memory" &&
+      !isTemporalDescendantSupportRow(row) &&
+      rowMatchesTemporalWindow(row, timeStart, timeEnd)
+  ).length;
+  const supportedEpisodicCount = rows.filter(
+    (row) => isTemporalDescendantSupportRow(row) && rowMatchesTemporalWindow(row, timeStart, timeEnd)
+  ).length;
+  const temporalCount = rows.filter(
+    (row) => row.memory_type === "temporal_nodes" && rowMatchesTemporalWindow(row, timeStart, timeEnd)
+  ).length;
+  const supportTokenCount = approxResultTokenCount(rows.filter((row) => isTemporalDescendantSupportRow(row)));
+
+  if (directEpisodicCount >= planner.temporalSufficiencyEpisodicThreshold) {
+    return true;
+  }
+
+  if (
+    directEpisodicCount + supportedEpisodicCount >= planner.temporalSufficiencyEpisodicThreshold &&
+    temporalCount >= planner.temporalSufficiencyTemporalThreshold
+  ) {
+    return true;
+  }
+
+  if (
+    supportedEpisodicCount > 0 &&
+    temporalCount >= planner.temporalSufficiencyTemporalThreshold &&
+    supportTokenCount >= planner.temporalSupportMaxTokens
+  ) {
     return true;
   }
 
@@ -780,27 +892,18 @@ async function loadTemporalHierarchyRows(
     .sort((left, right) => compareLexical(left, right, Boolean(timeStart || timeEnd), true));
 }
 
-function allowedDescendantLayers(
-  planner: ReturnType<typeof planRecallQuery>
-): readonly ("day" | "week" | "month")[] {
-  return planner.targetLayers.filter(
-    (layer): layer is "day" | "week" | "month" =>
-      (layer === "day" || layer === "week" || layer === "month") && planner.descendantLayerBudgets[layer] > 0
-  );
-}
-
 async function loadTemporalDescendantSupportRows(
   namespaceId: string,
   seedRows: readonly RankedSearchRow[],
   candidateLimit: number,
   timeStart: string | null,
   timeEnd: string | null,
-  planner: ReturnType<typeof planRecallQuery>
+  planner: ReturnType<typeof planRecallQuery>,
+  layers: readonly TemporalDescendantLayer[]
 ): Promise<RankedSearchRow[]> {
   const temporalIds = [...new Set(
     seedRows.filter((row) => row.memory_type === "temporal_nodes").map((row) => row.memory_id)
   )].slice(0, Math.min(candidateLimit, 6));
-  const layers = allowedDescendantLayers(planner);
 
   if (temporalIds.length === 0 || layers.length === 0 || planner.supportMemberBudget <= 0) {
     return [];
@@ -1547,7 +1650,11 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
     })()
   ]);
   let lexicalRows = lexicalResult.rows;
+  let temporalGateTriggered = false;
+  let temporalLayersUsed: readonly TemporalDescendantLayer[] = [];
   if (planner.temporalFocus || hasTimeWindow) {
+    const temporalLayerAccumulator = new Set<TemporalDescendantLayer>();
+
     const ancestryRows = await loadTemporalHierarchyRows(
       query.namespaceId,
       lexicalRows,
@@ -1560,20 +1667,32 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       lexicalRows = mergeUniqueRows(lexicalRows, ancestryRows, candidateLimit, hasTimeWindow, planner.temporalFocus);
     }
 
-    const temporalGateTriggered = !hasSufficientTemporalEvidence(lexicalRows, planner);
+    const descendantPasses = determineTemporalDescendantPasses(lexicalRows, planner);
+    temporalGateTriggered = !hasSufficientTemporalEvidence(lexicalRows, planner, timeStart, timeEnd) && descendantPasses.length > 0;
     if (temporalGateTriggered) {
-      const descendantRows = await loadTemporalDescendantSupportRows(
-        query.namespaceId,
-        lexicalRows,
-        candidateLimit,
-        timeStart,
-        timeEnd,
-        planner
-      );
-      if (descendantRows.length > 0) {
-        lexicalRows = mergeUniqueRows(lexicalRows, descendantRows, candidateLimit, hasTimeWindow, planner.temporalFocus);
+      for (const passLayers of descendantPasses) {
+        const descendantRows = await loadTemporalDescendantSupportRows(
+          query.namespaceId,
+          lexicalRows,
+          candidateLimit,
+          timeStart,
+          timeEnd,
+          planner,
+          passLayers
+        );
+        if (descendantRows.length > 0) {
+          lexicalRows = mergeUniqueRows(lexicalRows, descendantRows, candidateLimit, hasTimeWindow, planner.temporalFocus);
+          for (const layer of passLayers) {
+            temporalLayerAccumulator.add(layer);
+          }
+        }
+
+        if (hasSufficientTemporalEvidence(lexicalRows, planner, timeStart, timeEnd)) {
+          break;
+        }
       }
     }
+    temporalLayersUsed = [...temporalLayerAccumulator];
   }
 
   let vectorRows: RankedSearchRow[] = [];
@@ -1740,7 +1859,9 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       fusedResultCount: results.length,
       temporalAncestorCount: lexicalRows.filter((row) => row.provenance.tier === "temporal_ancestor").length,
       temporalDescendantSupportCount: lexicalRows.filter((row) => row.provenance.tier === "temporal_descendant_support").length,
-      temporalGateTriggered: (planner.temporalFocus || hasTimeWindow) ? !hasSufficientTemporalEvidence(lexicalRows, planner) : false,
+      temporalGateTriggered,
+      temporalLayersUsed,
+      temporalSupportTokenCount: approxResultTokenCount(lexicalRows.filter((row) => isTemporalDescendantSupportRow(row))),
       planner
     }
   };

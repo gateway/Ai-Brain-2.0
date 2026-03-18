@@ -128,5 +128,12 @@
   }
   body {
     min-height: 100vh;
+    background-attachment: fixed;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--chart-1) 55%, white);
+    color: var(--foreground);
   }
 }

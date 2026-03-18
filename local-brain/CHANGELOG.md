@@ -2,6 +2,10 @@
 
 ## 2026-03-18
 
+- Added `GET /ops/timeline` and `GET /ops/graph` so the operator console can inspect chronological episodic evidence, temporal rollups, and active relationship memory without duplicating backend logic.
+- Added themed operator console pages for `/console/timeline` and `/console/relationships`, including a clickable server-rendered relationship graph, timeline cards, and temporal summary inspection.
+- Deepened deterministic TMT descent so broad temporal queries now expand by layer (`month -> week -> day`) and stop early when sufficiency checks say the current evidence is already enough.
+- Fixed the console runtime data contract so `/console/query`, `/console/timeline`, and `/console/relationships` consume the actual local-brain response shapes instead of assuming an ad hoc interface.
 - Promoted ParadeDB BM25 to the runtime default lexical branch after the strengthened lexical suite cleared `14/14`, fallback stayed at `0`, and BM25 token delta improved to `-17` versus FTS on the seeded benchmark corpus.
 - Kept native PostgreSQL FTS as the guarded fallback and as the `procedural_memory` bridge inside BM25 mode so active-truth preference/state lookups remain correct.
 - Hardened retrieval pruning so narrow date queries now prefer the evidentiary episodic leaf over broader temporal rollups, while broad year queries still surface temporal summaries plus bounded support.

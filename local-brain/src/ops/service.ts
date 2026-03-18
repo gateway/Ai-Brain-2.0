@@ -10,6 +10,42 @@ interface QueueStatusRow {
   readonly count: string;
 }
 
+interface TimelineRow {
+  readonly memory_id: string;
+  readonly content: string;
+  readonly occurred_at: string;
+  readonly artifact_id: string | null;
+  readonly source_uri: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+interface TemporalSummaryRow {
+  readonly temporal_node_id: string;
+  readonly layer: "session" | "day" | "week" | "month" | "year" | "profile";
+  readonly summary_text: string;
+  readonly period_start: string;
+  readonly period_end: string;
+  readonly source_count: number;
+  readonly depth: number | null;
+  readonly parent_id: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+interface RelationshipGraphRow {
+  readonly relationship_id: string;
+  readonly subject_entity_id: string;
+  readonly subject_name: string;
+  readonly subject_type: string;
+  readonly object_entity_id: string;
+  readonly object_name: string;
+  readonly object_type: string;
+  readonly predicate: string;
+  readonly confidence: number | string | null;
+  readonly valid_from: string;
+  readonly source_candidate_id: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
 export interface QueueSummary {
   readonly pending: number;
   readonly processing: number;
@@ -31,6 +67,64 @@ export interface OpsOverview {
     readonly relationshipMemoryActive: number;
     readonly semanticDecayEvents: number;
   };
+}
+
+export interface OpsTimelineItem {
+  readonly memoryId: string;
+  readonly content: string;
+  readonly occurredAt: string;
+  readonly artifactId?: string | null;
+  readonly sourceUri?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface OpsTemporalSummary {
+  readonly temporalNodeId: string;
+  readonly layer: "session" | "day" | "week" | "month" | "year" | "profile";
+  readonly summaryText: string;
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  readonly sourceCount: number;
+  readonly depth?: number | null;
+  readonly parentId?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface OpsTimelineView {
+  readonly namespaceId: string;
+  readonly timeStart: string;
+  readonly timeEnd: string;
+  readonly timeline: readonly OpsTimelineItem[];
+  readonly summaries: readonly OpsTemporalSummary[];
+}
+
+export interface OpsRelationshipGraphNode {
+  readonly id: string;
+  readonly name: string;
+  readonly entityType: string;
+  readonly degree: number;
+  readonly mentionCount: number;
+  readonly isSelected: boolean;
+}
+
+export interface OpsRelationshipGraphEdge {
+  readonly id: string;
+  readonly subjectId: string;
+  readonly objectId: string;
+  readonly subjectName: string;
+  readonly objectName: string;
+  readonly predicate: string;
+  readonly confidence: number;
+  readonly validFrom: string;
+  readonly sourceCandidateId?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface OpsRelationshipGraph {
+  readonly namespaceId: string;
+  readonly selectedEntity?: string;
+  readonly nodes: readonly OpsRelationshipGraphNode[];
+  readonly edges: readonly OpsRelationshipGraphEdge[];
 }
 
 function toCount(rows: readonly CountRow[]): number {
@@ -162,5 +256,224 @@ export async function getOpsOverview(): Promise<OpsOverview> {
       relationshipMemoryActive: toCount(relationshipMemoryRows),
       semanticDecayEvents: toCount(semanticDecayRows)
     }
+  };
+}
+
+export async function getOpsTimelineView(
+  namespaceId: string,
+  timeStart: string,
+  timeEnd: string,
+  limit = 40
+): Promise<OpsTimelineView> {
+  const [timelineRows, summaryRows] = await Promise.all([
+    queryRows<TimelineRow>(
+      `
+      SELECT
+        et.memory_id,
+        et.content,
+        et.occurred_at::text,
+        et.artifact_id,
+        a.uri AS source_uri,
+        et.metadata
+      FROM episodic_timeline et
+      LEFT JOIN artifacts a ON a.id = et.artifact_id
+      WHERE et.namespace_id = $1
+        AND et.occurred_at >= $2::timestamptz
+        AND et.occurred_at <= $3::timestamptz
+      ORDER BY et.occurred_at ASC
+      LIMIT $4
+      `,
+      [namespaceId, timeStart, timeEnd, limit]
+    ),
+    queryRows<TemporalSummaryRow>(
+      `
+      WITH ranked AS (
+        SELECT
+          tn.id AS temporal_node_id,
+          tn.layer,
+          tn.summary_text,
+          tn.period_start::text,
+          tn.period_end::text,
+          tn.source_count,
+          tn.depth,
+          tn.parent_id,
+          tn.metadata,
+          ROW_NUMBER() OVER (
+            PARTITION BY tn.layer
+            ORDER BY tn.period_start DESC, tn.source_count DESC, tn.id
+          ) AS layer_rank
+        FROM temporal_nodes tn
+        WHERE tn.namespace_id = $1
+          AND tn.period_end >= $2::timestamptz
+          AND tn.period_start <= $3::timestamptz
+      )
+      SELECT *
+      FROM ranked
+      WHERE layer_rank <= 3
+      ORDER BY
+        CASE layer
+          WHEN 'year' THEN 1
+          WHEN 'month' THEN 2
+          WHEN 'week' THEN 3
+          WHEN 'day' THEN 4
+          WHEN 'session' THEN 5
+          WHEN 'profile' THEN 6
+          ELSE 7
+        END,
+        period_start ASC
+      `
+      ,
+      [namespaceId, timeStart, timeEnd]
+    )
+  ]);
+
+  return {
+    namespaceId,
+    timeStart,
+    timeEnd,
+    timeline: timelineRows.map((row) => ({
+      memoryId: row.memory_id,
+      content: row.content,
+      occurredAt: row.occurred_at,
+      artifactId: row.artifact_id,
+      sourceUri: row.source_uri,
+      metadata: row.metadata
+    })),
+    summaries: summaryRows.map((row) => ({
+      temporalNodeId: row.temporal_node_id,
+      layer: row.layer,
+      summaryText: row.summary_text,
+      periodStart: row.period_start,
+      periodEnd: row.period_end,
+      sourceCount: row.source_count,
+      depth: row.depth,
+      parentId: row.parent_id,
+      metadata: row.metadata
+    }))
+  };
+}
+
+export async function getOpsRelationshipGraph(
+  namespaceId: string,
+  options?: {
+    readonly entityName?: string;
+    readonly timeStart?: string;
+    readonly timeEnd?: string;
+    readonly limit?: number;
+  }
+): Promise<OpsRelationshipGraph> {
+  const entityName = options?.entityName?.trim();
+  const limit = options?.limit ?? 36;
+  const rows = await queryRows<RelationshipGraphRow>(
+    `
+    SELECT
+      rm.id AS relationship_id,
+      rm.subject_entity_id::text,
+      subject.canonical_name AS subject_name,
+      subject.entity_type AS subject_type,
+      rm.object_entity_id::text,
+      object_entity.canonical_name AS object_name,
+      object_entity.entity_type AS object_type,
+      rm.predicate,
+      rm.confidence,
+      rm.valid_from::text,
+      rm.source_candidate_id::text,
+      rm.metadata
+    FROM relationship_memory rm
+    JOIN entities subject ON subject.id = rm.subject_entity_id
+    JOIN entities object_entity ON object_entity.id = rm.object_entity_id
+    WHERE rm.namespace_id = $1
+      AND rm.status = 'active'
+      AND rm.valid_until IS NULL
+      AND ($2::timestamptz IS NULL OR rm.valid_from >= $2::timestamptz)
+      AND ($3::timestamptz IS NULL OR rm.valid_from <= $3::timestamptz)
+      AND (
+        $4::text IS NULL
+        OR lower(subject.canonical_name) = lower($4::text)
+        OR lower(object_entity.canonical_name) = lower($4::text)
+      )
+    ORDER BY rm.confidence DESC, rm.valid_from DESC
+    LIMIT $5
+    `,
+    [namespaceId, options?.timeStart ?? null, options?.timeEnd ?? null, entityName ?? null, limit]
+  );
+
+  const mentionRows = await queryRows<{ readonly entity_id: string; readonly mention_count: string }>(
+    `
+    SELECT
+      entity_id::text,
+      COUNT(*)::text AS mention_count
+    FROM memory_entity_mentions
+    WHERE namespace_id = $1
+      AND ($2::timestamptz IS NULL OR occurred_at >= $2::timestamptz)
+      AND ($3::timestamptz IS NULL OR occurred_at <= $3::timestamptz)
+    GROUP BY entity_id
+    `,
+    [namespaceId, options?.timeStart ?? null, options?.timeEnd ?? null]
+  );
+
+  const mentionCountByEntity = new Map(mentionRows.map((row) => [row.entity_id, Number(row.mention_count)] as const));
+  const degreeByEntity = new Map<string, number>();
+  const nodes = new Map<string, OpsRelationshipGraphNode>();
+
+  for (const row of rows) {
+    degreeByEntity.set(row.subject_entity_id, (degreeByEntity.get(row.subject_entity_id) ?? 0) + 1);
+    degreeByEntity.set(row.object_entity_id, (degreeByEntity.get(row.object_entity_id) ?? 0) + 1);
+  }
+
+  for (const row of rows) {
+    if (!nodes.has(row.subject_entity_id)) {
+      nodes.set(row.subject_entity_id, {
+        id: row.subject_entity_id,
+        name: row.subject_name,
+        entityType: row.subject_type,
+        degree: degreeByEntity.get(row.subject_entity_id) ?? 0,
+        mentionCount: mentionCountByEntity.get(row.subject_entity_id) ?? 0,
+        isSelected: Boolean(entityName) && row.subject_name.toLowerCase() === entityName?.toLowerCase()
+      });
+    }
+
+    if (!nodes.has(row.object_entity_id)) {
+      nodes.set(row.object_entity_id, {
+        id: row.object_entity_id,
+        name: row.object_name,
+        entityType: row.object_type,
+        degree: degreeByEntity.get(row.object_entity_id) ?? 0,
+        mentionCount: mentionCountByEntity.get(row.object_entity_id) ?? 0,
+        isSelected: Boolean(entityName) && row.object_name.toLowerCase() === entityName?.toLowerCase()
+      });
+    }
+  }
+
+  const graphNodes = [...nodes.values()].sort((left, right) => {
+    const selectedDelta = Number(right.isSelected) - Number(left.isSelected);
+    if (selectedDelta !== 0) {
+      return selectedDelta;
+    }
+
+    const degreeDelta = right.degree - left.degree;
+    if (degreeDelta !== 0) {
+      return degreeDelta;
+    }
+
+    return left.name.localeCompare(right.name);
+  });
+
+  return {
+    namespaceId,
+    selectedEntity: entityName || undefined,
+    nodes: graphNodes,
+    edges: rows.map((row) => ({
+      id: row.relationship_id,
+      subjectId: row.subject_entity_id,
+      objectId: row.object_entity_id,
+      subjectName: row.subject_name,
+      objectName: row.object_name,
+      predicate: row.predicate,
+      confidence: Number(row.confidence ?? 0),
+      validFrom: row.valid_from,
+      sourceCandidateId: row.source_candidate_id,
+      metadata: row.metadata
+    }))
   };
 }

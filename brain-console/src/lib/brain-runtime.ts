@@ -91,17 +91,43 @@ export interface SearchResultItem {
 
 export interface SearchResult {
   readonly planner?: {
-    readonly queryType?: string;
-    readonly inferredYear?: number;
+    readonly intent?: string;
     readonly timeStart?: string;
     readonly timeEnd?: string;
     readonly branchPreference?: string;
     readonly lexicalTerms?: readonly string[];
+    readonly temporalGateTriggered?: boolean;
   };
   readonly provider?: string;
   readonly lexicalProvider?: string;
   readonly lexicalFallbackUsed?: boolean;
   readonly results: readonly SearchResultItem[];
+}
+
+interface RuntimeRecallResult {
+  readonly memoryId: string;
+  readonly memoryType: string;
+  readonly content: string;
+  readonly occurredAt?: string;
+  readonly score?: number;
+  readonly provenance?: Record<string, unknown>;
+}
+
+interface RuntimeSearchResponse {
+  readonly results: readonly RuntimeRecallResult[];
+  readonly meta: {
+    readonly lexicalProvider: "fts" | "bm25";
+    readonly lexicalFallbackUsed: boolean;
+    readonly queryEmbeddingProvider?: string;
+    readonly planner?: {
+      readonly intent?: string;
+      readonly inferredTimeStart?: string;
+      readonly inferredTimeEnd?: string;
+      readonly branchPreference?: string;
+      readonly lexicalTerms?: readonly string[];
+    };
+    readonly temporalGateTriggered?: boolean;
+  };
 }
 
 export interface OpsOverview {
@@ -129,6 +155,64 @@ export interface OpsOverview {
     readonly relationshipMemoryActive: number;
     readonly semanticDecayEvents: number;
   };
+}
+
+export interface OpsTimelineItem {
+  readonly memoryId: string;
+  readonly content: string;
+  readonly occurredAt: string;
+  readonly artifactId?: string | null;
+  readonly sourceUri?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface OpsTemporalSummary {
+  readonly temporalNodeId: string;
+  readonly layer: "session" | "day" | "week" | "month" | "year" | "profile";
+  readonly summaryText: string;
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  readonly sourceCount: number;
+  readonly depth?: number | null;
+  readonly parentId?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface OpsTimelineView {
+  readonly namespaceId: string;
+  readonly timeStart: string;
+  readonly timeEnd: string;
+  readonly timeline: readonly OpsTimelineItem[];
+  readonly summaries: readonly OpsTemporalSummary[];
+}
+
+export interface OpsRelationshipGraphNode {
+  readonly id: string;
+  readonly name: string;
+  readonly entityType: string;
+  readonly degree: number;
+  readonly mentionCount: number;
+  readonly isSelected: boolean;
+}
+
+export interface OpsRelationshipGraphEdge {
+  readonly id: string;
+  readonly subjectId: string;
+  readonly objectId: string;
+  readonly subjectName: string;
+  readonly objectName: string;
+  readonly predicate: string;
+  readonly confidence: number;
+  readonly validFrom: string;
+  readonly sourceCandidateId?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface OpsRelationshipGraph {
+  readonly namespaceId: string;
+  readonly selectedEntity?: string;
+  readonly nodes: readonly OpsRelationshipGraphNode[];
+  readonly edges: readonly OpsRelationshipGraphEdge[];
 }
 
 async function readJsonFile<T>(segments: readonly string[]): Promise<T> {
@@ -185,6 +269,27 @@ export async function getLatestBenchmark(): Promise<{ readonly json: BenchmarkRe
   return { json, markdown };
 }
 
+export async function getConsoleDefaults(): Promise<{
+  readonly namespaceId: string;
+  readonly timeStart: string;
+  readonly timeEnd: string;
+}> {
+  try {
+    const { json } = await getLatestEval();
+    return {
+      namespaceId: json.namespaceId,
+      timeStart: "2025-01-01T00:00:00Z",
+      timeEnd: "2025-12-31T23:59:59Z"
+    };
+  } catch {
+    return {
+      namespaceId: "personal",
+      timeStart: "2025-01-01T00:00:00Z",
+      timeEnd: "2025-12-31T23:59:59Z"
+    };
+  }
+}
+
 export async function searchBrain(input: {
   readonly namespaceId: string;
   readonly query: string;
@@ -219,11 +324,81 @@ export async function searchBrain(input: {
     params.set("limit", input.limit);
   }
 
-  return fetchJson<SearchResult>("/search", params);
+  const response = await fetchJson<RuntimeSearchResponse>("/search", params);
+
+  return {
+    provider: response.meta.queryEmbeddingProvider,
+    lexicalProvider: response.meta.lexicalProvider,
+    lexicalFallbackUsed: response.meta.lexicalFallbackUsed,
+    planner: {
+      intent: response.meta.planner?.intent,
+      timeStart: response.meta.planner?.inferredTimeStart,
+      timeEnd: response.meta.planner?.inferredTimeEnd,
+      branchPreference: response.meta.planner?.branchPreference,
+      lexicalTerms: response.meta.planner?.lexicalTerms,
+      temporalGateTriggered: response.meta.temporalGateTriggered
+    },
+    results: response.results.map((item) => ({
+      id: item.memoryId,
+      memoryType: item.memoryType,
+      content: item.content,
+      occurredAt: item.occurredAt,
+      score: item.score,
+      sourceUri: typeof item.provenance?.source_uri === "string" ? item.provenance.source_uri : undefined,
+      lexicalProvider: response.meta.lexicalProvider,
+      lexicalFallbackUsed: response.meta.lexicalFallbackUsed
+    }))
+  };
 }
 
 export async function getArtifactDetail(artifactId: string): Promise<ArtifactDetail> {
   return fetchJson<ArtifactDetail>(`/artifacts/${artifactId}`);
+}
+
+export async function getTimelineView(input: {
+  readonly namespaceId: string;
+  readonly timeStart: string;
+  readonly timeEnd: string;
+  readonly limit?: string;
+}): Promise<OpsTimelineView> {
+  const params = new URLSearchParams({
+    namespace_id: input.namespaceId,
+    time_start: input.timeStart,
+    time_end: input.timeEnd
+  });
+
+  if (input.limit) {
+    params.set("limit", input.limit);
+  }
+
+  return fetchJson<OpsTimelineView>("/ops/timeline", params);
+}
+
+export async function getRelationshipGraph(input: {
+  readonly namespaceId: string;
+  readonly entityName?: string;
+  readonly timeStart?: string;
+  readonly timeEnd?: string;
+  readonly limit?: string;
+}): Promise<OpsRelationshipGraph> {
+  const params = new URLSearchParams({
+    namespace_id: input.namespaceId
+  });
+
+  if (input.entityName) {
+    params.set("entity_name", input.entityName);
+  }
+  if (input.timeStart) {
+    params.set("time_start", input.timeStart);
+  }
+  if (input.timeEnd) {
+    params.set("time_end", input.timeEnd);
+  }
+  if (input.limit) {
+    params.set("limit", input.limit);
+  }
+
+  return fetchJson<OpsRelationshipGraph>("/ops/graph", params);
 }
 
 export function getRuntimeBaseUrl(): string {

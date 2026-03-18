@@ -459,6 +459,16 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
       "Expected temporal recall to bring back bounded episodic descendant support under matched temporal summaries."
     ),
     assert(
+      "temporal.layer_gating",
+      Boolean(
+        japanTemporalContext.meta.temporalGateTriggered &&
+          (japanTemporalContext.meta.temporalLayersUsed?.includes("month") ||
+            japanTemporalContext.meta.temporalLayersUsed?.includes("week") ||
+            japanTemporalContext.meta.temporalLayersUsed?.includes("day"))
+      ),
+      `Expected temporal recall metadata to report gated descendant expansion layers, got ${JSON.stringify(japanTemporalContext.meta.temporalLayersUsed ?? [])}.`
+    ),
+    assert(
       "timescale.timeline_parity",
       Number(episodicCountRow?.count ?? "0") === Number(episodicTimelineCountRow?.count ?? "0"),
       `Expected episodic_timeline to mirror episodic_memory row counts, got episodic=${episodicCountRow?.count ?? "0"}, timeline=${episodicTimelineCountRow?.count ?? "0"}.`

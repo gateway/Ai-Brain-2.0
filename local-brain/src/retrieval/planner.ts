@@ -1,4 +1,11 @@
-import type { RecallIntent, RecallPlan, RecallQuery, TemporalLayerBudgetMap, TemporalQueryLayer } from "./types.js";
+import type {
+  RecallIntent,
+  RecallPlan,
+  RecallQuery,
+  TemporalDescendantLayer,
+  TemporalLayerBudgetMap,
+  TemporalQueryLayer
+} from "./types.js";
 
 const MONTH_LOOKUP = new Map<string, number>([
   ["january", 0],
@@ -331,6 +338,24 @@ function targetLayersForGranularity(
   return ["week", "day"];
 }
 
+function descendantExpansionOrderForGranularity(
+  granularity: "none" | "day" | "month" | "year" | "broad"
+): readonly TemporalDescendantLayer[] {
+  if (granularity === "year" || granularity === "broad") {
+    return ["month", "week", "day"];
+  }
+
+  if (granularity === "month") {
+    return ["week", "day"];
+  }
+
+  if (granularity === "none") {
+    return ["day"];
+  }
+
+  return [];
+}
+
 export function planRecallQuery(query: RecallQuery): RecallPlan {
   const queryText = query.query.trim();
   const tokenizedQuery = tokenizeQuery(queryText);
@@ -350,6 +375,7 @@ export function planRecallQuery(query: RecallQuery): RecallPlan {
   const isNarrowWindow = temporalGranularity === "day" || temporalGranularity === "month";
   const isBroadTemporal = temporalGranularity === "year" || temporalGranularity === "broad";
   const targetLayers = targetLayersForGranularity(intent, temporalGranularity);
+  const descendantExpansionOrder = descendantExpansionOrderForGranularity(temporalGranularity);
   const lexicalTerms = extractLexicalTerms(queryText, hasTemporalCue);
   const ancestorLayerBudgets = buildAncestorBudgets(intent);
   const descendantLayerBudgets = buildDescendantBudgets(intent);
@@ -362,6 +388,7 @@ export function planRecallQuery(query: RecallQuery): RecallPlan {
     yearHints,
     lexicalTerms,
     targetLayers,
+    descendantExpansionOrder,
     maxTemporalDepth: targetLayers.length,
     ancestorLayerBudgets,
     descendantLayerBudgets,

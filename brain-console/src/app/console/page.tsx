@@ -71,15 +71,15 @@ export default async function ConsoleOverviewPage() {
           </CardHeader>
           <CardContent className="space-y-4 text-sm leading-6 text-slate-700">
             <div className="flex flex-wrap gap-2">
-              <Badge variant="outline">FTS default</Badge>
-              <Badge variant="outline">BM25 benchmarked</Badge>
+              <Badge variant="outline">BM25 default</Badge>
+              <Badge variant="outline">FTS guarded fallback</Badge>
               <Badge variant="outline">RRF active</Badge>
               <Badge variant="outline">Timescale sidecar live</Badge>
               <Badge variant="outline">TMT summaries linked</Badge>
             </div>
             <p>
-              BM25 is implemented and benchmarked, but the runtime default is still conservative until the token tail
-              is fully acceptable for operator use. The console makes that visible instead of hiding it.
+              BM25 is now the local lexical default because it cleared the strengthened suite with lower token burn than
+              FTS. The console keeps the proof visible instead of hiding that decision in docs.
             </p>
             <div className="grid gap-3 md:grid-cols-2">
               <Link
@@ -90,8 +90,22 @@ export default async function ConsoleOverviewPage() {
                 <span className="font-mono text-xs uppercase tracking-[0.3em]">search</span>
               </Link>
               <Link
-                href="/console/benchmark"
+                href="/console/timeline"
                 className="flex w-full items-center justify-between rounded-2xl border border-slate-900/15 bg-white px-4 py-3 text-sm font-medium text-slate-900 hover:bg-slate-50"
+              >
+                <span>Open temporal atlas</span>
+                <span className="font-mono text-xs uppercase tracking-[0.3em]">tmt</span>
+              </Link>
+              <Link
+                href="/console/relationships"
+                className="flex w-full items-center justify-between rounded-2xl border border-slate-900/15 bg-white px-4 py-3 text-sm font-medium text-slate-900 hover:bg-slate-50"
+              >
+                <span>Open relationship graph</span>
+                <span className="font-mono text-xs uppercase tracking-[0.3em]">graph</span>
+              </Link>
+              <Link
+                href="/console/benchmark"
+                className="flex w-full items-center justify-between rounded-2xl border border-slate-900/15 bg-white px-4 py-3 text-sm font-medium text-slate-900 hover:bg-slate-50 md:col-span-2"
               >
                 <span>Inspect lexical benchmark</span>
                 <span className="font-mono text-xs uppercase tracking-[0.3em]">bm25</span>

@@ -15,6 +15,7 @@ export interface RecallQuery {
 export type RecallIntent = "simple" | "hybrid" | "complex";
 export type RecallBranchPreference = "lexical_first" | "episodic_then_temporal";
 export type TemporalQueryLayer = "session" | "day" | "week" | "month" | "year" | "profile";
+export type TemporalDescendantLayer = Extract<TemporalQueryLayer, "day" | "week" | "month">;
 export type TemporalLayerBudgetMap = Readonly<Record<TemporalQueryLayer, number>>;
 
 export interface RecallPlan {
@@ -25,6 +26,7 @@ export interface RecallPlan {
   readonly yearHints: readonly string[];
   readonly lexicalTerms: readonly string[];
   readonly targetLayers: readonly TemporalQueryLayer[];
+  readonly descendantExpansionOrder: readonly TemporalDescendantLayer[];
   readonly maxTemporalDepth: number;
   readonly ancestorLayerBudgets: TemporalLayerBudgetMap;
   readonly descendantLayerBudgets: TemporalLayerBudgetMap;
@@ -62,6 +64,8 @@ export interface RecallResponse {
     readonly temporalAncestorCount?: number;
     readonly temporalDescendantSupportCount?: number;
     readonly temporalGateTriggered?: boolean;
+    readonly temporalLayersUsed?: readonly TemporalDescendantLayer[];
+    readonly temporalSupportTokenCount?: number;
     readonly planner: RecallPlan;
   };
 }

@@ -18,7 +18,7 @@ Current working slice:
 - staged semantic/procedural candidate writes
 - entity and relationship staging
 - hybrid retrieval service with lexical fallback
-- small TMT planner helper with query classification plus year/month/day window expansion
+- deeper TMT planner with query classification, year/month/day window expansion, deterministic descendant layer order, and sufficiency gating
 - preference supersession into semantic and procedural memory
 - timeline and relationship CLI queries
 - webhook producer ingestion (generic/slack/discord payload adapters)
@@ -33,6 +33,7 @@ Current working slice:
 - queue-first derivation route (`POST /derive/queue`)
 - deterministic temporal summary scaffolding (`day`/`week`/`month`/`year`)
 - parent-linked temporal nodes for the first real TMT ancestry chain
+- timeline and relationship ops surfaces for the console (`GET /ops/timeline`, `GET /ops/graph`)
 - deterministic relationship adjudication into `relationship_memory`
 - deterministic semantic forgetting/decay loop with archival thresholds
 - ParadeDB BM25 lexical branch implemented, benchmarked, and now the default lexical provider
@@ -182,12 +183,19 @@ Current retrieval behavior:
 - the planner now distinguishes year, month, and day-granularity temporal windows before retrieval
 - parent-linked `temporal_nodes` plus bounded descendant episodic support now add real TMT-style context instead of only flat summary scans
 - ancestor expansion is now budgeted per layer and descendant support is gated so broad year queries still get temporal context without over-expanding narrow date lookups
+- temporal descent now proceeds one layer at a time (`month -> week -> day` for year-level queries) and stops early when the current evidence is already sufficient
 - time-windowed queries bias historical episodic evidence above speculative candidate rows
 - BM25 currently covers `episodic_memory`, `semantic_memory`, `memory_candidates`, `artifact_derivations`, and `temporal_nodes`
 - `procedural_memory` stays on an FTS bridge inside BM25 mode for now, because that path is still more trustworthy for active-truth preference/state lookups
 - the expanded lexical benchmark now passes `14/14` for both FTS and BM25
 - BM25 no longer falls back on the seeded corpus and now returns a lower token total than FTS on the strengthened benchmark set
 - exact relationship recall, active-truth preference recall, and narrow date lookups were all re-verified before flipping BM25 to the runtime default
+
+Operator console-backed ops endpoints:
+
+- `GET /ops/overview`
+- `GET /ops/timeline?namespace_id=...&time_start=...&time_end=...&limit=...`
+- `GET /ops/graph?namespace_id=...&entity_name=...&time_start=...&time_end=...&limit=...`
 
 Example search with the default lexical provider:
 

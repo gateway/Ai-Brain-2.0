@@ -124,7 +124,8 @@ export default async function QueryPage({ searchParams }: { readonly searchParam
                 <div className="flex flex-wrap gap-2">
                   <StatusBadge value={result.lexicalProvider ?? "unknown"} />
                   <StatusBadge value={result.lexicalFallbackUsed ? "fallback used" : "no fallback"} />
-                  {result.planner?.queryType ? <StatusBadge value={result.planner.queryType} /> : null}
+                  {result.planner?.intent ? <StatusBadge value={result.planner.intent} /> : null}
+                  {result.planner?.temporalGateTriggered ? <StatusBadge value="temporal support used" /> : null}
                 </div>
                 <p>Branch preference: {result.planner?.branchPreference ?? "not reported"}</p>
                 <p>

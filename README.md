@@ -50,6 +50,9 @@ Latest verified run log:
 - [Expanded lexical benchmark and TMT hardening](brain-spec/local/36-benchmark-and-tmt-hardening.md)
 - [Next.js dev console proposal](brain-spec/local/37-nextjs-dev-console-proposal.md)
 - [Operator console implementation and proof](brain-spec/local/39-operator-console-run-log.md)
+- [BM25 closure and TMT hardening](brain-spec/local/40-bm25-default-and-tmt-closure.md)
+- [Local status after BM25 closure](brain-spec/local/41-local-brain-status-after-bm25-closure.md)
+- [Timeline, relationship graph, and console atlas slice](brain-spec/local/42-console-timeline-relationship-slice.md)
 
 ## Main Folders
 
@@ -101,4 +104,4 @@ Latest verified run log:
 - strengthen temporal/TMT retrieval behavior for long-horizon recall
 - move hybrid retrieval from transitional app-side RRF to a SQL-first fused kernel
 - expand the lexical benchmark beyond the seeded corpus with noisier holdout data
-- deepen the operator console with timeline, relationships, and a later graph view once relationship semantics stabilize
+- deepen the operator console with richer per-layer TMT debugging, temporal containment checks, and later graph semantics like supersession/causality overlays
