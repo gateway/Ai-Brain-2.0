@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { withTransaction } from "../db/client.js";
+import { refreshRelationshipPriors } from "./relationship-priors.js";
 import type { JobRunContext } from "./types.js";
 
 interface RelationshipCandidateRow {
@@ -107,7 +108,7 @@ export async function runRelationshipAdjudication(
   const acceptThreshold = Math.min(1, Math.max(0.01, options?.acceptThreshold ?? 0.6));
   const rejectThreshold = Math.min(acceptThreshold, Math.max(0, options?.rejectThreshold ?? 0.4));
 
-  return withTransaction(async (client) => {
+  const summary = await withTransaction(async (client) => {
     const candidates = await client.query<RelationshipCandidateRow>(
       `
         SELECT
@@ -347,4 +348,7 @@ export async function runRelationshipAdjudication(
       rejected
     };
   });
+
+  await refreshRelationshipPriors(namespaceId);
+  return summary;
 }

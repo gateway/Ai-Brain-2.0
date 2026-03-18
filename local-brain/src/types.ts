@@ -39,7 +39,8 @@ export interface FragmentRecord {
   readonly tags?: string[];
 }
 
-export type TimeGranularity = "instant" | "day" | "month" | "year" | "relative_duration" | "relative_recent" | "unknown";
+export type TimeGranularity = "instant" | "day" | "week" | "month" | "year" | "relative_duration" | "relative_recent" | "unknown";
+export type TimeAnchorBasis = "explicit" | "captured_at" | "prior_scene" | "prior_event" | "fallback";
 
 export interface SceneRecord {
   readonly sceneIndex: number;
@@ -54,6 +55,9 @@ export interface SceneRecord {
   readonly timeGranularity?: TimeGranularity;
   readonly timeConfidence?: number;
   readonly isRelativeTime?: boolean;
+  readonly anchorBasis?: TimeAnchorBasis;
+  readonly anchorSceneIndex?: number;
+  readonly anchorConfidence?: number;
 }
 
 export interface ProvenancePointer {

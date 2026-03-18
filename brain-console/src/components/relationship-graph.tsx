@@ -163,10 +163,7 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<Core | null>(null);
   const initialFocusId = useMemo(
-    () =>
-      graph.nodes.find((node) => node.isSelected)?.id ??
-      graph.nodes[0]?.id ??
-      null,
+    () => graph.nodes.find((node) => node.isSelected)?.id ?? null,
     [graph.nodes]
   );
   const [focusId, setFocusId] = useState<string | null>(initialFocusId);
@@ -178,6 +175,7 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
   const visibleIds = useMemo(() => visibleNodeIds(graph, focusId, depth), [graph, focusId, depth]);
   const visibleNodeCount = [...visibleIds].length;
   const visibleEdgeCount = graph.edges.filter((edge) => visibleIds.has(edge.subjectId) && visibleIds.has(edge.objectId)).length;
+  const rootLabel = focusNode?.name ?? "whole atlas";
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -199,7 +197,7 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
           "text-wrap": "wrap",
           "text-max-width": 120,
           "font-size": 12,
-          "font-family": "var(--font-space-grotesk)",
+          "font-family": "var(--font-geist-sans)",
           "text-valign": "center",
           "text-halign": "center",
           "overlay-opacity": 0,
@@ -348,10 +346,13 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.34em] text-slate-400">Interactive graph atlas</p>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-300">
-            Pan, zoom, click a node to re-root around it, expand its neighborhood, then reset back to the primary graph.
+            Start wide, click a node like Steve to re-root around it, expand its neighborhood, then reset back to the primary graph.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200">
+            root {rootLabel}
+          </span>
           <button
             type="button"
             onClick={expandFocus}
@@ -371,7 +372,7 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
             onClick={showWholeGraph}
             className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200 transition hover:border-white/14 hover:bg-white/8"
           >
-            Show all
+            Show whole atlas
           </button>
           <button
             type="button"

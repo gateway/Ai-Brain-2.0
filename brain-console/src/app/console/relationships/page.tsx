@@ -80,12 +80,12 @@ export default async function RelationshipsPage({ searchParams }: { readonly sea
     <ConsoleShell
       currentPath="/console/relationships"
       title="Relationships"
-      subtitle="Inspect people, places, projects, and the edges that bind them. The graph is now the primary surface instead of an afterthought beside a stack of cards."
+      subtitle="Inspect people, places, projects, and the edges that bind them. Start with the whole atlas, click into a root like Steve, and expand outward without losing provenance."
     >
       <ConsoleSection
         eyebrow="Relationship controls"
         title="Set the window, then move inside the graph"
-        description="The query frame stays explicit, but the graph itself now does the exploratory work. Keep the namespace and time window narrow enough that the atlas remains meaningful."
+        description="The query frame stays explicit, but the graph itself now does the exploratory work. Use a wide window to see the whole atlas, then narrow or re-root when the graph gets dense."
         action={<span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.28em] text-slate-300">graph atlas</span>}
       >
         <form method="GET" className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
@@ -165,7 +165,7 @@ export default async function RelationshipsPage({ searchParams }: { readonly sea
                   edges {graph.edges.length}
                 </Badge>
                 <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-200">
-                  pan / zoom / click / reset
+                  show atlas / click root / expand / reset
                 </Badge>
               </div>
               <RelationshipGraph graph={graph} />

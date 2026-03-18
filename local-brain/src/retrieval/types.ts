@@ -66,6 +66,7 @@ export interface RecallResponse {
     readonly temporalGateTriggered?: boolean;
     readonly temporalLayersUsed?: readonly TemporalDescendantLayer[];
     readonly temporalSupportTokenCount?: number;
+    readonly placeContainmentSupportCount?: number;
     readonly planner: RecallPlan;
   };
 }

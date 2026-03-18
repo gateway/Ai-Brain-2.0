@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-03-18T08:40:04.251Z",
+  "generatedAt": "2026-03-18T10:07:05.110Z",
   "totalCases": 4,
   "passedCases": 4,
   "failedCases": 0,
   "cases": [
     {
       "name": "negative_control_no_people",
-      "namespaceId": "narrative_negative_control_no_people_mmvsjbnv",
+      "namespaceId": "narrative_negative_control_no_people_mmvvn83v",
       "passed": true,
       "scores": {
         "entity_presence": 1,
@@ -19,7 +19,7 @@
     },
     {
       "name": "personal_story_relationships",
-      "namespaceId": "narrative_personal_story_relationships_mmvsjbts",
+      "namespaceId": "narrative_personal_story_relationships_mmvvn88q",
       "passed": true,
       "scores": {
         "entity_presence": 1,
@@ -32,7 +32,7 @@
     },
     {
       "name": "preference_supersession",
-      "namespaceId": "narrative_preference_supersession_mmvsjbx9",
+      "namespaceId": "narrative_preference_supersession_mmvvn8ct",
       "passed": true,
       "scores": {
         "entity_presence": 1,
@@ -45,7 +45,7 @@
     },
     {
       "name": "project_state_and_spec",
-      "namespaceId": "narrative_project_state_and_spec_mmvsjbz2",
+      "namespaceId": "narrative_project_state_and_spec_mmvvn8eq",
       "passed": true,
       "scores": {
         "entity_presence": 1,

@@ -11,7 +11,10 @@ type AmbiguityType =
   | "undefined_kinship"
   | "vague_place"
   | "alias_collision"
-  | "unknown_reference";
+  | "unknown_reference"
+  | "asr_correction"
+  | "kinship_resolution"
+  | "place_grounding";
 
 interface ClarificationSummaryRow {
   readonly ambiguity_type: string | null;
@@ -240,7 +243,7 @@ function inferFollowUpAmbiguity(candidate: ClaimCandidateRow): {
     if (KINSHIP_TERMS.has(normalized)) {
       return {
         targetRole: check.role,
-        type: "undefined_kinship",
+        type: "kinship_resolution",
         reason: `The ${check.role} reference "${rawText}" still needs a concrete person.`,
         rawText
       };
@@ -249,7 +252,7 @@ function inferFollowUpAmbiguity(candidate: ClaimCandidateRow): {
     if (VAGUE_PLACE_PHRASES.some((pattern) => pattern.test(rawText))) {
       return {
         targetRole: check.role,
-        type: "vague_place",
+        type: "place_grounding",
         reason: `The ${check.role} reference "${rawText}" still needs a concrete place.`,
         rawText
       };
@@ -442,7 +445,10 @@ export async function getClarificationInbox(namespaceId: string, limit = 40): Pr
         ambiguityType: row.ambiguity_type,
         ambiguityReason: row.ambiguity_reason,
         suggestedMatches:
-          row.ambiguity_type === "possible_misspelling" || row.ambiguity_type === "alias_collision"
+          row.ambiguity_type === "possible_misspelling" ||
+          row.ambiguity_type === "alias_collision" ||
+          row.ambiguity_type === "place_grounding" ||
+          row.ambiguity_type === "kinship_resolution"
             ? parseSuggestedMatches(row.metadata)
             : [],
         occurredAt: row.occurred_at,

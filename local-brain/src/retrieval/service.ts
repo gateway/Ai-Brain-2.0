@@ -1098,6 +1098,94 @@ async function loadTemporalDescendantSupportRows(
     .sort((left, right) => compareLexical(left, right, Boolean(timeStart || timeEnd), true));
 }
 
+async function loadPlaceContainmentSupportRows(
+  namespaceId: string,
+  lexicalTerms: readonly string[],
+  candidateLimit: number,
+  timeStart: string | null,
+  timeEnd: string | null,
+  temporalFocus: boolean
+): Promise<RankedSearchRow[]> {
+  const normalizedTerms = [...new Set(lexicalTerms.map((term) => term.trim().toLowerCase()).filter(Boolean))];
+  if (normalizedTerms.length === 0) {
+    return [];
+  }
+
+  const rows = await queryRows<SearchRow>(
+    `
+      WITH RECURSIVE matched_places AS (
+        SELECT DISTINCT e.id
+        FROM entities e
+        WHERE e.namespace_id = $1
+          AND e.entity_type = 'place'
+          AND e.normalized_name = ANY($2::text[])
+        UNION
+        SELECT DISTINCT ea.entity_id
+        FROM entity_aliases ea
+        JOIN entities e ON e.id = ea.entity_id
+        WHERE e.namespace_id = $1
+          AND e.entity_type = 'place'
+          AND ea.normalized_alias = ANY($2::text[])
+      ),
+      descendant_places AS (
+        SELECT mp.id AS entity_id, 0 AS hops
+        FROM matched_places mp
+
+        UNION ALL
+
+        SELECT rm.subject_entity_id AS entity_id, dp.hops + 1 AS hops
+        FROM descendant_places dp
+        JOIN relationship_memory rm
+          ON rm.namespace_id = $1
+         AND rm.object_entity_id = dp.entity_id
+         AND rm.predicate = 'contained_in'
+         AND rm.status = 'active'
+         AND rm.valid_until IS NULL
+        WHERE dp.hops < 4
+      ),
+      ranked_descendants AS (
+        SELECT entity_id, MIN(hops) AS hops
+        FROM descendant_places
+        GROUP BY entity_id
+      )
+      SELECT DISTINCT ON (e.id)
+        e.id AS memory_id,
+        'episodic_memory'::text AS memory_type,
+        e.content,
+        (1.0 / (28 + rd.hops))::double precision AS raw_score,
+        e.artifact_id,
+        e.occurred_at,
+        e.namespace_id,
+        jsonb_build_object(
+          'tier', 'place_containment_support',
+          'matched_place_entity_id', mem.entity_id,
+          'containment_hops', rd.hops,
+          'artifact_observation_id', e.artifact_observation_id,
+          'source_chunk_id', e.source_chunk_id,
+          'source_offset', e.source_offset,
+          'source_uri', a.uri,
+          'metadata', e.metadata
+        ) AS provenance
+      FROM ranked_descendants rd
+      JOIN memory_entity_mentions mem
+        ON mem.namespace_id = $1
+       AND mem.entity_id = rd.entity_id
+       AND mem.mention_role = 'location'
+      JOIN episodic_memory e
+        ON e.id = mem.source_memory_id
+       AND e.namespace_id = $1
+      LEFT JOIN artifacts a ON a.id = e.artifact_id
+      WHERE ($3::timestamptz IS NULL OR e.occurred_at >= $3)
+        AND ($4::timestamptz IS NULL OR e.occurred_at <= $4)
+      ORDER BY e.id, rd.hops ASC, e.occurred_at DESC
+      LIMIT $5
+    `,
+    [namespaceId, normalizedTerms, timeStart, timeEnd, candidateLimit]
+  );
+
+  return toRankedRows(rows).sort((left, right) => compareLexical(left, right, Boolean(timeStart || timeEnd), temporalFocus));
+}
+
 async function loadFtsLexicalRows(
   namespaceId: string,
   queryText: string,
@@ -1690,6 +1778,17 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
     })()
   ]);
   let lexicalRows = lexicalResult.rows;
+  const placeContainmentSupportRows = await loadPlaceContainmentSupportRows(
+    query.namespaceId,
+    planner.lexicalTerms,
+    candidateLimit,
+    timeStart,
+    timeEnd,
+    planner.temporalFocus
+  );
+  if (placeContainmentSupportRows.length > 0) {
+    lexicalRows = mergeUniqueRows(lexicalRows, placeContainmentSupportRows, candidateLimit, hasTimeWindow, planner.temporalFocus);
+  }
   let temporalGateTriggered = false;
   let temporalLayersUsed: readonly TemporalDescendantLayer[] = [];
   if (planner.temporalFocus || hasTimeWindow) {
@@ -1902,6 +2001,7 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       temporalGateTriggered,
       temporalLayersUsed,
       temporalSupportTokenCount: approxResultTokenCount(lexicalRows.filter((row) => isTemporalDescendantSupportRow(row))),
+      placeContainmentSupportCount: lexicalRows.filter((row) => row.provenance.tier === "place_containment_support").length,
       planner
     }
   };
@@ -2054,43 +2154,82 @@ export async function getRelationships(query: RelationshipQuery): Promise<Relati
           AND ea.normalized_alias = $2
       )
       SELECT
-        rc.id AS relationship_id,
+        relationship_id,
         subject_entity.canonical_name AS subject_name,
-        rc.predicate,
+        predicate,
         object_entity.canonical_name AS object_name,
-        rc.confidence,
-        rc.source_memory_id,
-        et.occurred_at,
-        rc.namespace_id,
-        jsonb_build_object(
-          'tier', 'relationship_candidate',
-          'status', rc.status,
-          'source_chunk_id', rc.source_chunk_id,
-          'source_uri', a.uri,
-          'source_offset', et.source_offset,
-          'metadata', rc.metadata
-        ) AS provenance
-      FROM relationship_candidates rc
-      INNER JOIN entities subject_entity ON subject_entity.id = rc.subject_entity_id
-      INNER JOIN entities object_entity ON object_entity.id = rc.object_entity_id
-      LEFT JOIN episodic_timeline et ON et.memory_id = rc.source_memory_id
-      LEFT JOIN artifacts a ON a.id = et.artifact_id
-      WHERE rc.namespace_id = $1
-        AND rc.status IN ('pending', 'accepted')
-        AND ($3::text IS NULL OR rc.predicate = $3)
-        AND ($4::timestamptz IS NULL OR et.occurred_at >= $4)
-        AND ($5::timestamptz IS NULL OR et.occurred_at <= $5)
+        confidence,
+        source_memory_id,
+        occurred_at,
+        relationships.namespace_id,
+        provenance
+      FROM (
+        SELECT
+          rm.id AS relationship_id,
+          rm.subject_entity_id,
+          rm.predicate,
+          rm.object_entity_id,
+          rm.confidence,
+          NULL::uuid AS source_memory_id,
+          rm.valid_from AS occurred_at,
+          rm.namespace_id,
+          jsonb_build_object(
+            'tier', 'relationship_memory',
+            'status', rm.status,
+            'source_candidate_id', rm.source_candidate_id,
+            'metadata', rm.metadata
+          ) AS provenance
+        FROM relationship_memory rm
+        WHERE rm.namespace_id = $1
+          AND rm.status = 'active'
+          AND rm.valid_until IS NULL
+
+        UNION ALL
+
+        SELECT
+          rc.id AS relationship_id,
+          rc.subject_entity_id,
+          rc.predicate,
+          rc.object_entity_id,
+          rc.confidence,
+          rc.source_memory_id,
+          COALESCE(et.occurred_at, rc.valid_from, rc.created_at) AS occurred_at,
+          rc.namespace_id,
+          jsonb_build_object(
+            'tier', 'relationship_candidate',
+            'status', rc.status,
+            'source_chunk_id', rc.source_chunk_id,
+            'source_uri', a.uri,
+            'source_offset', et.source_offset,
+            'metadata', rc.metadata
+          ) AS provenance
+        FROM relationship_candidates rc
+        LEFT JOIN episodic_timeline et ON et.memory_id = rc.source_memory_id
+        LEFT JOIN artifacts a ON a.id = et.artifact_id
+        WHERE rc.namespace_id = $1
+          AND rc.status IN ('pending', 'accepted')
+      ) relationships
+      INNER JOIN entities subject_entity ON subject_entity.id = relationships.subject_entity_id
+      INNER JOIN entities object_entity ON object_entity.id = relationships.object_entity_id
+      WHERE ($3::text IS NULL OR relationships.predicate = $3)
+        AND ($4::timestamptz IS NULL OR relationships.occurred_at >= $4)
+        AND ($5::timestamptz IS NULL OR relationships.occurred_at <= $5)
         AND (
-          rc.subject_entity_id IN (SELECT id FROM matched_entities)
-          OR rc.object_entity_id IN (SELECT id FROM matched_entities)
+          relationships.subject_entity_id IN (SELECT id FROM matched_entities)
+          OR relationships.object_entity_id IN (SELECT id FROM matched_entities)
           OR EXISTS (
             SELECT 1
-            FROM memory_entity_mentions mem
-            WHERE mem.source_memory_id = rc.source_memory_id
-              AND mem.entity_id IN (SELECT id FROM matched_entities)
+            FROM relationship_priors rp
+            WHERE rp.namespace_id = $1
+              AND (
+                (rp.entity_a_id = relationships.subject_entity_id AND rp.entity_b_id IN (SELECT id FROM matched_entities))
+                OR (rp.entity_b_id = relationships.subject_entity_id AND rp.entity_a_id IN (SELECT id FROM matched_entities))
+                OR (rp.entity_a_id = relationships.object_entity_id AND rp.entity_b_id IN (SELECT id FROM matched_entities))
+                OR (rp.entity_b_id = relationships.object_entity_id AND rp.entity_a_id IN (SELECT id FROM matched_entities))
+              )
           )
         )
-      ORDER BY rc.confidence DESC, et.occurred_at DESC NULLS LAST
+      ORDER BY confidence DESC, occurred_at DESC NULLS LAST
       LIMIT $6
     `,
     [query.namespaceId, normalizedEntityName, query.predicate ?? null, query.timeStart ?? null, query.timeEnd ?? null, limit]

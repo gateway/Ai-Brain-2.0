@@ -5,6 +5,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { getClarificationInbox, getConsoleDefaults } from "@/lib/brain-runtime";
 
+function ambiguityLabel(value: string): string {
+  return value.replace(/_/g, " ");
+}
+
+function defaultEntityType(ambiguityType: string): string {
+  if (ambiguityType === "vague_place" || ambiguityType === "place_grounding") {
+    return "place";
+  }
+
+  return "person";
+}
+
 export default async function ConsoleInboxPage({
   searchParams
 }: {
@@ -42,7 +54,7 @@ export default async function ConsoleInboxPage({
             <Card key={type} className="border-slate-900/10 bg-white/80">
               <CardHeader className="pb-2">
                 <CardDescription>Ambiguity Type</CardDescription>
-                <CardTitle className="text-lg">{type.replace(/_/g, " ")}</CardTitle>
+                <CardTitle className="text-lg">{ambiguityLabel(type)}</CardTitle>
               </CardHeader>
               <CardContent>
                 <StatusBadge value={`${total}`} />
@@ -65,7 +77,7 @@ export default async function ConsoleInboxPage({
             inbox.items.map((item) => (
               <section key={item.candidateId} className="rounded-[28px] border border-slate-900/10 bg-white/90 p-5 shadow-sm">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="outline">{item.ambiguityType.replace(/_/g, " ")}</Badge>
+                  <Badge variant="outline">{ambiguityLabel(item.ambiguityType)}</Badge>
                   <Badge variant="outline">{item.targetRole}</Badge>
                   <StatusBadge value={`confidence ${item.confidence.toFixed(2)}`} />
                   <StatusBadge value={`prior ${item.priorScore.toFixed(2)}`} />
@@ -101,13 +113,18 @@ export default async function ConsoleInboxPage({
                     <input type="hidden" name="candidate_id" value={item.candidateId} />
                     <input type="hidden" name="target_role" value={item.targetRole} />
                     <label className="grid gap-1 text-sm text-slate-700">
-                      <span>Canonical name</span>
-                      <Input name="canonical_name" defaultValue={item.suggestedMatches[0] ?? item.rawText} required />
+                      <span>{item.ambiguityType === "place_grounding" ? "Link or create place" : "Canonical name"}</span>
+                      <Input
+                        name="canonical_name"
+                        defaultValue={item.suggestedMatches[0] ?? item.rawText}
+                        placeholder={item.ambiguityType === "place_grounding" ? "Chiang Mai" : "Benjamin Williams"}
+                        required
+                      />
                     </label>
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className="grid gap-1 text-sm text-slate-700">
                         <span>Entity type</span>
-                        <Input name="entity_type" defaultValue={item.ambiguityType === "vague_place" ? "place" : "person"} required />
+                        <Input name="entity_type" defaultValue={defaultEntityType(item.ambiguityType)} required />
                       </label>
                       <label className="grid gap-1 text-sm text-slate-700">
                         <span>Extra aliases</span>
@@ -122,7 +139,7 @@ export default async function ConsoleInboxPage({
                       type="submit"
                       className="inline-flex w-fit items-center rounded-2xl bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
                     >
-                      Resolve and reprocess
+                      Link and reprocess
                     </button>
                   </form>
 

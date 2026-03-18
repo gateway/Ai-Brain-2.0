@@ -1,4 +1,4 @@
-import type { FragmentRecord, SceneRecord, TimeGranularity } from "../types.js";
+import type { FragmentRecord, SceneRecord, TimeAnchorBasis, TimeGranularity } from "../types.js";
 
 const SENTENCE_SPLIT = /(?<=[.!?])\s+/u;
 const MONTH_INDEX = new Map<string, number>([
@@ -78,9 +78,138 @@ interface TimeAnchor {
   readonly timeGranularity: TimeGranularity;
   readonly timeConfidence: number;
   readonly isRelativeTime: boolean;
+  readonly anchorBasis: TimeAnchorBasis;
+  readonly anchorSceneIndex?: number;
+  readonly anchorConfidence: number;
 }
 
-function inferTimeAnchor(text: string, fallbackOccurredAt: string, capturedAt: string): TimeAnchor {
+function startOfUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function startOfUtcWeek(date: Date): Date {
+  const day = date.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const shifted = new Date(date);
+  shifted.setUTCDate(shifted.getUTCDate() + diff);
+  return startOfUtcDay(shifted);
+}
+
+function startOfUtcMonth(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+function startOfUtcYear(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+}
+
+function addUtcDays(date: Date, days: number): Date {
+  const shifted = new Date(date);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted;
+}
+
+function addUtcMonths(date: Date, months: number): Date {
+  const shifted = new Date(date);
+  shifted.setUTCMonth(shifted.getUTCMonth() + months);
+  return shifted;
+}
+
+function addUtcYears(date: Date, years: number): Date {
+  const shifted = new Date(date);
+  shifted.setUTCFullYear(shifted.getUTCFullYear() + years);
+  return shifted;
+}
+
+function anchorDateFromIso(isoString: string): Date | null {
+  const date = new Date(isoString);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function periodBoundsFromShift(anchor: Date, amount: number, unit: "days" | "weeks" | "months" | "years", direction: -1 | 1): {
+  readonly occurredAt: string;
+  readonly timeStart: string;
+  readonly timeEnd: string;
+  readonly timeGranularity: TimeGranularity;
+} | null {
+  if (unit === "days") {
+    const targetStart = startOfUtcDay(addUtcDays(anchor, direction * amount));
+    const targetEnd = addUtcDays(targetStart, 1);
+    return {
+      occurredAt: targetStart.toISOString(),
+      timeStart: targetStart.toISOString(),
+      timeEnd: targetEnd.toISOString(),
+      timeGranularity: "day"
+    };
+  }
+
+  if (unit === "weeks") {
+    const targetStart = startOfUtcWeek(addUtcDays(anchor, direction * amount * 7));
+    const targetEnd = addUtcDays(targetStart, 7);
+    return {
+      occurredAt: targetStart.toISOString(),
+      timeStart: targetStart.toISOString(),
+      timeEnd: targetEnd.toISOString(),
+      timeGranularity: "week"
+    };
+  }
+
+  if (unit === "months") {
+    const targetStart = startOfUtcMonth(addUtcMonths(anchor, direction * amount));
+    const targetEnd = startOfUtcMonth(addUtcMonths(targetStart, 1));
+    return {
+      occurredAt: targetStart.toISOString(),
+      timeStart: targetStart.toISOString(),
+      timeEnd: targetEnd.toISOString(),
+      timeGranularity: "month"
+    };
+  }
+
+  const targetStart = startOfUtcYear(addUtcYears(anchor, direction * amount));
+  const targetEnd = startOfUtcYear(addUtcYears(targetStart, 1));
+  return {
+    occurredAt: targetStart.toISOString(),
+    timeStart: targetStart.toISOString(),
+    timeEnd: targetEnd.toISOString(),
+    timeGranularity: "year"
+  };
+}
+
+function weekdayBoundsFromAnchor(anchor: Date, weekdayIndex: number, modifier: "last" | "next" | "this"): {
+  readonly occurredAt: string;
+  readonly timeStart: string;
+  readonly timeEnd: string;
+} {
+  const base = startOfUtcDay(anchor);
+  const currentWeekday = base.getUTCDay();
+  const normalizedCurrent = currentWeekday === 0 ? 7 : currentWeekday;
+  const normalizedTarget = weekdayIndex === 0 ? 7 : weekdayIndex;
+  let diff = normalizedTarget - normalizedCurrent;
+
+  if (modifier === "last") {
+    diff = diff >= 0 ? diff - 7 : diff;
+  } else if (modifier === "next") {
+    diff = diff <= 0 ? diff + 7 : diff;
+  }
+
+  const targetStart = addUtcDays(base, diff);
+  const targetEnd = addUtcDays(targetStart, 1);
+  return {
+    occurredAt: targetStart.toISOString(),
+    timeStart: targetStart.toISOString(),
+    timeEnd: targetEnd.toISOString()
+  };
+}
+
+function inferTimeAnchor(
+  text: string,
+  fallbackOccurredAt: string,
+  capturedAt: string,
+  priorScene?: SceneRecord
+): TimeAnchor {
+  const priorAnchorIso = priorScene?.timeStart ?? priorScene?.occurredAt ?? null;
+  const priorAnchorDate = priorAnchorIso ? anchorDateFromIso(priorAnchorIso) : null;
+  const capturedAnchorDate = anchorDateFromIso(capturedAt);
   const monthYearMatch = text.match(
     /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/i
   );
@@ -99,7 +228,9 @@ function inferTimeAnchor(text: string, fallbackOccurredAt: string, capturedAt: s
         timeEnd,
         timeGranularity: "month",
         timeConfidence: 0.96,
-        isRelativeTime: false
+        isRelativeTime: false,
+        anchorBasis: "explicit",
+        anchorConfidence: 0.96
       };
     }
   }
@@ -117,9 +248,91 @@ function inferTimeAnchor(text: string, fallbackOccurredAt: string, capturedAt: s
         timeEnd,
         timeGranularity: "year",
         timeConfidence: 0.92,
-        isRelativeTime: false
+        isRelativeTime: false,
+        anchorBasis: "explicit",
+        anchorConfidence: 0.92
       };
     }
+  }
+
+  const weekdayMatch = text.match(/\b(last|next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/iu);
+  if (weekdayMatch && capturedAnchorDate) {
+    const weekdayOrder = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const weekdayIndex = weekdayOrder.indexOf((weekdayMatch[2] ?? "").toLowerCase());
+    if (weekdayIndex >= 0) {
+      const bounds = weekdayBoundsFromAnchor(capturedAnchorDate, weekdayIndex, weekdayMatch[1].toLowerCase() as "last" | "next" | "this");
+      return {
+        occurredAt: bounds.occurredAt,
+        timeExpressionText: weekdayMatch[0],
+        timeStart: bounds.timeStart,
+        timeEnd: bounds.timeEnd,
+        timeGranularity: "day",
+        timeConfidence: 0.88,
+        isRelativeTime: true,
+        anchorBasis: "captured_at",
+        anchorConfidence: 0.88
+      };
+    }
+  }
+
+  const relativeShiftMatch = text.match(
+    /\b(?:(\d+|few|a few|couple|a couple|several)\s+(day|days|week|weeks|month|months|year|years)\s+(ago|later|after|before))\b/iu
+  );
+  if (relativeShiftMatch) {
+    const quantity = approximateQuantity(relativeShiftMatch[1] ?? "");
+    const unit = (relativeShiftMatch[2] ?? "").toLowerCase();
+    const directionToken = (relativeShiftMatch[3] ?? "").toLowerCase();
+    const normalizedUnit = unit.startsWith("day")
+      ? "days"
+      : unit.startsWith("week")
+        ? "weeks"
+        : unit.startsWith("month")
+          ? "months"
+          : "years";
+    const anchorBasis: TimeAnchorBasis = priorAnchorDate ? "prior_scene" : "captured_at";
+    const anchorDate = priorAnchorDate ?? capturedAnchorDate;
+    const direction: -1 | 1 = directionToken === "ago" || directionToken === "before" ? -1 : 1;
+
+    if (quantity && anchorDate) {
+      const period = periodBoundsFromShift(anchorDate, quantity, normalizedUnit, direction);
+      if (period) {
+        return {
+          ...period,
+          timeExpressionText: relativeShiftMatch[0],
+          timeConfidence: priorAnchorDate ? 0.84 : 0.74,
+          isRelativeTime: true,
+          anchorBasis,
+          anchorSceneIndex: priorScene?.sceneIndex,
+          anchorConfidence: priorAnchorDate ? 0.86 : 0.74
+        };
+      }
+    }
+  }
+
+  const relativeThisYearMatch = text.match(/\b(earlier|later)\s+that\s+year\b/iu);
+  if (relativeThisYearMatch && priorAnchorDate) {
+    const anchorYearStart = startOfUtcYear(priorAnchorDate);
+    const targetStart =
+      relativeThisYearMatch[1].toLowerCase() === "earlier"
+        ? anchorYearStart
+        : startOfUtcMonth(addUtcMonths(priorAnchorDate, 6));
+    const targetEnd =
+      relativeThisYearMatch[1].toLowerCase() === "earlier"
+        ? startOfUtcMonth(addUtcMonths(anchorYearStart, 6))
+        : startOfUtcYear(addUtcYears(anchorYearStart, 1));
+
+    return {
+      occurredAt: targetStart.toISOString(),
+      timeExpressionText: relativeThisYearMatch[0],
+      timeStart: targetStart.toISOString(),
+      timeEnd: targetEnd.toISOString(),
+      timeGranularity: "year",
+      timeConfidence: 0.62,
+      isRelativeTime: true,
+      anchorBasis: "prior_scene",
+      anchorSceneIndex: priorScene?.sceneIndex,
+      anchorConfidence: 0.72
+    };
   }
 
   const durationMatch = text.match(
@@ -150,7 +363,9 @@ function inferTimeAnchor(text: string, fallbackOccurredAt: string, capturedAt: s
             timeEnd: capturedAt,
             timeGranularity: "relative_duration",
             timeConfidence: 0.7,
-            isRelativeTime: true
+            isRelativeTime: true,
+            anchorBasis: "captured_at",
+            anchorConfidence: 0.7
           };
         }
       }
@@ -160,7 +375,9 @@ function inferTimeAnchor(text: string, fallbackOccurredAt: string, capturedAt: s
         timeExpressionText: expression,
         timeGranularity: "relative_duration",
         timeConfidence: 0.55,
-        isRelativeTime: true
+        isRelativeTime: true,
+        anchorBasis: "fallback",
+        anchorConfidence: 0.4
       };
     }
   }
@@ -175,7 +392,9 @@ function inferTimeAnchor(text: string, fallbackOccurredAt: string, capturedAt: s
       timeEnd: capturedAt,
       timeGranularity: "relative_recent",
       timeConfidence: 0.4,
-      isRelativeTime: true
+      isRelativeTime: true,
+      anchorBasis: "captured_at",
+      anchorConfidence: 0.4
     };
   }
 
@@ -183,7 +402,9 @@ function inferTimeAnchor(text: string, fallbackOccurredAt: string, capturedAt: s
     occurredAt: fallbackOccurredAt,
     timeGranularity: "unknown",
     timeConfidence: 0.2,
-    isRelativeTime: false
+    isRelativeTime: false,
+    anchorBasis: "fallback",
+    anchorConfidence: 0.2
   };
 }
 
@@ -269,14 +490,15 @@ export function splitIntoScenes(text: string, occurredAt: string, capturedAt = o
   const scenes: SceneRecord[] = [];
   let cursor = 0;
   let sceneIndex = 0;
+  let lastAnchoredScene: SceneRecord | undefined;
 
   for (const paragraph of paragraphs) {
     const charStart = normalized.indexOf(paragraph, cursor);
     const safeStart = charStart >= 0 ? charStart : cursor;
     const charEnd = safeStart + paragraph.length;
-    const timeAnchor = inferTimeAnchor(paragraph, occurredAt, capturedAt);
+    const timeAnchor = inferTimeAnchor(paragraph, occurredAt, capturedAt, lastAnchoredScene);
 
-    scenes.push({
+    const scene: SceneRecord = {
       sceneIndex,
       text: paragraph,
       charStart: safeStart,
@@ -288,8 +510,17 @@ export function splitIntoScenes(text: string, occurredAt: string, capturedAt = o
       timeEnd: timeAnchor.timeEnd,
       timeGranularity: timeAnchor.timeGranularity,
       timeConfidence: timeAnchor.timeConfidence,
-      isRelativeTime: timeAnchor.isRelativeTime
-    });
+      isRelativeTime: timeAnchor.isRelativeTime,
+      anchorBasis: timeAnchor.anchorBasis,
+      anchorSceneIndex: timeAnchor.anchorSceneIndex,
+      anchorConfidence: timeAnchor.anchorConfidence
+    };
+
+    scenes.push(scene);
+
+    if ((scene.timeGranularity && scene.timeGranularity !== "unknown") || scene.anchorBasis === "prior_scene") {
+      lastAnchoredScene = scene;
+    }
 
     sceneIndex += 1;
     cursor = charEnd;

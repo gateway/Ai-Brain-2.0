@@ -59,9 +59,21 @@ interface PriorScore {
   readonly reason: string;
 }
 
+type HistoricalPriorMap = ReadonlyMap<string, {
+  readonly score: number;
+  readonly neighborSignature: Record<string, unknown>;
+}>;
+
 interface ClaimAmbiguity {
   readonly state: "requires_clarification";
-  readonly type: "possible_misspelling" | "undefined_kinship" | "vague_place" | "alias_collision" | "unknown_reference";
+  readonly type:
+    | "possible_misspelling"
+    | "undefined_kinship"
+    | "vague_place"
+    | "alias_collision"
+    | "unknown_reference"
+    | "kinship_resolution"
+    | "place_grounding";
   readonly reason: string;
   readonly targetRole: "subject" | "object";
   readonly rawText: string;
@@ -98,6 +110,14 @@ const PLACE_NAMES = new Map<string, string>([
   ["singapore", "Singapore"],
   ["thailand", "Thailand"],
   ["vietnam", "Vietnam"]
+]);
+
+const PLACE_CONTAINMENT = new Map<string, string>([
+  ["Chiang Mai", "Thailand"],
+  ["Koh Samui", "Thailand"],
+  ["Koh Samui Island", "Thailand"],
+  ["Danang", "Vietnam"],
+  ["Mexico City", "Mexico"]
 ]);
 
 const STOP_PERSON_NAMES = new Set([
@@ -329,7 +349,7 @@ function classifyAmbiguity(
     if (KINSHIP_TERMS.has(normalized)) {
       return {
         state: "requires_clarification",
-        type: "undefined_kinship",
+        type: "kinship_resolution",
         reason: `The ${candidate.role} reference "${rawText}" is a kinship role without a grounded person entity.`,
         targetRole: candidate.role,
         rawText,
@@ -340,7 +360,7 @@ function classifyAmbiguity(
     if (VAGUE_PLACE_PHRASES.some((pattern) => pattern.test(rawText))) {
       return {
         state: "requires_clarification",
-        type: "vague_place",
+        type: "place_grounding",
         reason: `The ${candidate.role} reference "${rawText}" looks like a vague place that needs a concrete location.`,
         targetRole: candidate.role,
         rawText,
@@ -408,6 +428,36 @@ async function loadNamespacePersonAliases(client: PoolClient, namespaceId: strin
   }
 
   return aliases;
+}
+
+function buildPriorPairKey(leftEntityId: string, rightEntityId: string): string {
+  return [leftEntityId, rightEntityId].sort((left, right) => left.localeCompare(right)).join("::");
+}
+
+async function loadRelationshipPriors(client: PoolClient, namespaceId: string): Promise<HistoricalPriorMap> {
+  const result = await client.query<{
+    entity_a_id: string;
+    entity_b_id: string;
+    global_correlation_score: number;
+    neighbor_signature: Record<string, unknown>;
+  }>(
+    `
+      SELECT entity_a_id::text, entity_b_id::text, global_correlation_score, neighbor_signature
+      FROM relationship_priors
+      WHERE namespace_id = $1
+    `,
+    [namespaceId]
+  );
+
+  return new Map(
+    result.rows.map((row) => [
+      buildPriorPairKey(row.entity_a_id, row.entity_b_id),
+      {
+        score: row.global_correlation_score,
+        neighborSignature: row.neighbor_signature ?? {}
+      }
+    ] as const)
+  );
 }
 
 function extractAliasPairs(text: string): Array<{ canonical: string; aliases: readonly string[] }> {
@@ -1180,6 +1230,9 @@ function buildNarrativeEventDraft(scene: SceneRecord, claims: readonly ResolvedN
     primaryLocationEntityId: primaryLocation?.objectEntityId ?? null,
     metadata: {
       scene_kind: scene.sceneKind,
+      anchor_basis: scene.anchorBasis ?? "fallback",
+      anchor_scene_index: scene.anchorSceneIndex ?? null,
+      anchor_confidence: scene.anchorConfidence ?? 0.2,
       accepted_claim_count: claims.filter((claim) => claim.status === "accepted").length,
       total_claim_count: claims.length,
       org_project_entity_ids: collectOrgProjectEntityIds(claims)
@@ -1286,7 +1339,8 @@ function computeRelationshipPrior(
   claim: ResolvedNarrativeClaim,
   scene: SceneRecord,
   event: NarrativeEventDraft,
-  mergedIntoCluster: boolean
+  mergedIntoCluster: boolean,
+  historicalPriorScore = 0
 ): PriorScore {
   const claimPrior = computeClaimPrior(claim, scene, event);
   let score = claimPrior.score * 0.7;
@@ -1312,10 +1366,27 @@ function computeRelationshipPrior(
     reasons.push("weak_relative_time");
   }
 
+  if (historicalPriorScore > 0) {
+    score += Math.min(0.18, historicalPriorScore * 0.22);
+    reasons.push("historical_graph_prior");
+  }
+
   return {
     score: clampScore(score),
     reason: reasons.filter(Boolean).join(",")
   };
+}
+
+function lookupHistoricalPriorScore(
+  priors: HistoricalPriorMap,
+  subjectEntityId: string | null,
+  objectEntityId: string | null
+): number {
+  if (!subjectEntityId || !objectEntityId) {
+    return 0;
+  }
+
+  return priors.get(buildPriorPairKey(subjectEntityId, objectEntityId))?.score ?? 0;
 }
 
 function sameTimeBucket(left: NarrativeEventDraft, right: NarrativeEventDraft): boolean {
@@ -1539,11 +1610,14 @@ async function upsertNarrativeEvent(
         time_granularity,
         time_confidence,
         is_relative_time,
+        anchor_basis,
+        anchor_scene_id,
+        anchor_confidence,
         primary_subject_entity_id,
         primary_location_entity_id,
         metadata
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb)
       ON CONFLICT (artifact_observation_id, event_index)
       DO UPDATE SET
         source_scene_id = EXCLUDED.source_scene_id,
@@ -1555,6 +1629,9 @@ async function upsertNarrativeEvent(
         time_granularity = EXCLUDED.time_granularity,
         time_confidence = EXCLUDED.time_confidence,
         is_relative_time = EXCLUDED.is_relative_time,
+        anchor_basis = EXCLUDED.anchor_basis,
+        anchor_scene_id = EXCLUDED.anchor_scene_id,
+        anchor_confidence = EXCLUDED.anchor_confidence,
         primary_subject_entity_id = EXCLUDED.primary_subject_entity_id,
         primary_location_entity_id = EXCLUDED.primary_location_entity_id,
         metadata = narrative_events.metadata || EXCLUDED.metadata,
@@ -1575,6 +1652,9 @@ async function upsertNarrativeEvent(
       options.event.timeGranularity,
       options.event.timeConfidence,
       options.event.isRelativeTime,
+      typeof options.event.metadata.anchor_basis === "string" ? options.event.metadata.anchor_basis : "fallback",
+      options.event.metadata.anchor_scene_id ?? null,
+      typeof options.event.metadata.anchor_confidence === "number" ? options.event.metadata.anchor_confidence : 0.2,
       options.event.primarySubjectEntityId ?? null,
       options.event.primaryLocationEntityId ?? null,
       JSON.stringify(options.event.metadata)
@@ -1633,17 +1713,81 @@ async function upsertNarrativeEventMember(
   );
 }
 
+async function ensurePlaceContainmentCandidate(
+  client: PoolClient,
+  options: {
+    readonly namespaceId: string;
+    readonly childEntityId: string;
+    readonly childName: string;
+    readonly parentName: string;
+    readonly sourceSceneId: string;
+    readonly sourceEventId: string;
+    readonly sourceMemoryId: string | null;
+    readonly sourceChunkId: string | null;
+    readonly occurredAt: string;
+  }
+): Promise<void> {
+  const parentEntityId = await upsertEntity(client, options.namespaceId, "place", options.parentName, [], {
+    extraction_method: "place_containment_seed"
+  });
+
+  await client.query(
+    `
+      INSERT INTO relationship_candidates (
+        namespace_id,
+        subject_entity_id,
+        predicate,
+        object_entity_id,
+        source_scene_id,
+        source_event_id,
+        source_memory_id,
+        source_chunk_id,
+        confidence,
+        prior_score,
+        prior_reason,
+        status,
+        valid_from,
+        metadata
+      )
+      VALUES ($1, $2, 'contained_in', $3, $4, $5, $6, $7, 0.98, 0.97, 'curated_place_containment', 'pending', $8, $9::jsonb)
+      ON CONFLICT (subject_entity_id, predicate, object_entity_id, source_memory_id, source_chunk_id)
+      DO UPDATE SET
+        confidence = GREATEST(relationship_candidates.confidence, EXCLUDED.confidence),
+        prior_score = GREATEST(relationship_candidates.prior_score, EXCLUDED.prior_score),
+        prior_reason = COALESCE(relationship_candidates.prior_reason, EXCLUDED.prior_reason),
+        metadata = relationship_candidates.metadata || EXCLUDED.metadata
+    `,
+    [
+      options.namespaceId,
+      options.childEntityId,
+      parentEntityId,
+      options.sourceSceneId,
+      options.sourceEventId,
+      options.sourceMemoryId,
+      options.sourceChunkId,
+      options.occurredAt,
+      JSON.stringify({
+        extractor: "curated_place_containment",
+        child_name: options.childName,
+        parent_name: options.parentName
+      })
+    ]
+  );
+}
+
 export async function stageNarrativeClaims(
   client: PoolClient,
   input: StageNarrativeClaimsInput
 ): Promise<StageNarrativeClaimsResult> {
   const selfName = await loadExistingSelfName(client, input.namespaceId);
   const namespaceAliases = await loadNamespacePersonAliases(client, input.namespaceId);
+  const historicalPriors = await loadRelationshipPriors(client, input.namespaceId);
   let knownSelfName = selfName;
   let claimCount = 0;
   let relationshipCount = 0;
   let activeCluster: EventClusterState | null = null;
   let nextEventIndex = 0;
+  const sceneIdByIndex = new Map<number, string>();
 
   for (const scene of input.scenes) {
     const sceneSource = input.sceneSources.find((entry) => entry.sceneIndex === scene.sceneIndex);
@@ -1664,9 +1808,12 @@ export async function stageNarrativeClaims(
           time_granularity,
           time_confidence,
           is_relative_time,
+          anchor_basis,
+          anchor_scene_id,
+          anchor_confidence,
           metadata
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb)
         ON CONFLICT (artifact_observation_id, scene_index)
         DO UPDATE SET
           scene_text = EXCLUDED.scene_text,
@@ -1678,6 +1825,9 @@ export async function stageNarrativeClaims(
           time_granularity = EXCLUDED.time_granularity,
           time_confidence = EXCLUDED.time_confidence,
           is_relative_time = EXCLUDED.is_relative_time,
+          anchor_basis = EXCLUDED.anchor_basis,
+          anchor_scene_id = EXCLUDED.anchor_scene_id,
+          anchor_confidence = EXCLUDED.anchor_confidence,
           metadata = narrative_scenes.metadata || EXCLUDED.metadata,
           updated_at = now()
         RETURNING id
@@ -1697,6 +1847,9 @@ export async function stageNarrativeClaims(
         scene.timeGranularity ?? "unknown",
         scene.timeConfidence ?? 0.2,
         scene.isRelativeTime ?? false,
+        scene.anchorBasis ?? "fallback",
+        scene.anchorSceneIndex !== undefined ? sceneIdByIndex.get(scene.anchorSceneIndex) ?? null : null,
+        scene.anchorConfidence ?? 0.2,
         JSON.stringify({
           fragment_count: sceneSource?.sourceMemoryIds.length ?? 0,
           extraction_method: "deterministic_scene_claims",
@@ -1710,6 +1863,7 @@ export async function stageNarrativeClaims(
     if (!sceneId) {
       throw new Error(`Failed to insert scene ${scene.sceneIndex}`);
     }
+    sceneIdByIndex.set(scene.sceneIndex, sceneId);
 
     const { claims, aliases } = extractClaimsFromScene(scene.text, knownSelfName, namespaceAliases);
     const resolvedClaims: ResolvedNarrativeClaim[] = [];
@@ -1819,7 +1973,14 @@ export async function stageNarrativeClaims(
       });
     }
 
-    const narrativeEvent = buildNarrativeEventDraft(scene, resolvedClaims);
+    const narrativeEventBase = buildNarrativeEventDraft(scene, resolvedClaims);
+    const narrativeEvent = {
+      ...narrativeEventBase,
+      metadata: {
+        ...narrativeEventBase.metadata,
+        anchor_scene_id: scene.anchorSceneIndex !== undefined ? sceneIdByIndex.get(scene.anchorSceneIndex) ?? null : null
+      }
+    };
     const mergeIntoCluster = shouldMergeIntoCluster(activeCluster, narrativeEvent);
     const eventIndex: number = mergeIntoCluster && activeCluster ? activeCluster.eventIndex : nextEventIndex++;
     const eventId = await upsertNarrativeEvent(client, {
@@ -1897,10 +2058,13 @@ export async function stageNarrativeClaims(
             time_granularity,
             time_confidence,
             is_relative_time,
+            anchor_basis,
+            anchor_scene_id,
+            anchor_confidence,
             extraction_method,
             metadata
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, 'deterministic_scene_claims', $29::jsonb)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, 'deterministic_scene_claims', $32::jsonb)
         `,
         [
           input.namespaceId,
@@ -1933,6 +2097,9 @@ export async function stageNarrativeClaims(
           scene.timeGranularity ?? "unknown",
           scene.timeConfidence ?? 0.2,
           scene.isRelativeTime ?? false,
+          scene.anchorBasis ?? "fallback",
+          scene.anchorSceneIndex !== undefined ? sceneIdByIndex.get(scene.anchorSceneIndex) ?? null : null,
+          scene.anchorConfidence ?? 0.2,
           JSON.stringify({
             ...(claim.metadata ?? {}),
             prior_score: claimPrior.score,
@@ -2041,6 +2208,23 @@ export async function stageNarrativeClaims(
             predicate: claim.predicate
           }
         });
+
+        if (objectType === "place") {
+          const parentPlace = PLACE_CONTAINMENT.get(claim.objectName);
+          if (parentPlace && parentPlace !== claim.objectName) {
+            await ensurePlaceContainmentCandidate(client, {
+              namespaceId: input.namespaceId,
+              childEntityId: objectEntityId,
+              childName: claim.objectName,
+              parentName: parentPlace,
+              sourceSceneId: sceneId,
+              sourceEventId: eventId,
+              sourceMemoryId: sceneSource?.sourceMemoryIds[0] ?? null,
+              sourceChunkId: sceneSource?.sourceChunkIds[0] ?? null,
+              occurredAt: scene.occurredAt
+            });
+          }
+        }
       }
 
       if (
@@ -2052,7 +2236,13 @@ export async function stageNarrativeClaims(
           claim.predicate
         )
       ) {
-        const relationshipPrior = computeRelationshipPrior(claim, scene, narrativeEvent, mergeIntoCluster);
+        const relationshipPrior = computeRelationshipPrior(
+          claim,
+          scene,
+          narrativeEvent,
+          mergeIntoCluster,
+          lookupHistoricalPriorScore(historicalPriors, subjectEntityId, objectEntityId)
+        );
         await client.query(
           `
             INSERT INTO relationship_candidates (

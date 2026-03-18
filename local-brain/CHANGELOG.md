@@ -2,6 +2,12 @@
 
 ## 2026-03-18
 
+- Added `relationship_priors` plus `neighbor_signatures` so accepted graph history and co-occurrence can bias new alias/relationship extraction without becoming a second truth store.
+- Added recursive place-containment support with `contained_in` relationship candidates plus retrieval-time descendant expansion, so a query for a parent place can surface child-place episodic evidence.
+- Strengthened scene/event time anchoring with prior-scene carryover, `captured_at`-anchored relative expressions like `last Friday` / `two months ago`, and persisted anchor-basis metadata.
+- Expanded the clarification path to richer typed ambiguity handling (`kinship_resolution`, `place_grounding`, and related alias/misspelling cases) while keeping outbox reprocessing deterministic.
+- Switched the relationship atlas to a whole-window default view with click-to-root exploration and replaced the previous font stack with a cleaner Geist-based console shell.
+- Re-ran `npm run eval`, `npm run benchmark:lexical`, `npm run benchmark:narrative`, and `brain-console` lint/build after the place/time/priors slice; all passed.
 - Added a clarification inbox plus `brain_outbox_events` propagation loop so misspellings, unknown kinship references, and vague place references can be resolved by an operator and reprocessed safely.
 - Added type-specific ambiguity surfacing through `claim_candidates` for `possible_misspelling`, `undefined_kinship`, `vague_place`, and related follow-up states.
 - Added `/ops/inbox`, `POST /ops/inbox/resolve`, and `POST /ops/inbox/ignore`, plus a server-rendered `/console/inbox` page for ambiguity review.

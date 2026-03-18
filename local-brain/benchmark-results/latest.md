@@ -1,7 +1,7 @@
 # Lexical Benchmark Report
 
-Generated: 2026-03-18T09:23:18.756Z
-Namespace: eval_1773825798144_fd62d958
+Generated: 2026-03-18T10:07:58.124Z
+Namespace: eval_1773828477583_a045c2d9
 Baseline Eval Passed: true
 
 ## Summary
@@ -123,7 +123,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d0041-b056-781d-9267-c751d49be01e", "semantic_memory_id": "019d0041-b102-7172-8fed-bbe746c833c4"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d006a-92c5-790f-a180-cdf377ed0b19", "semantic_memory_id": "019d006a-934a-7a31-a799-877bb0d65c2f"}
 
 ### spicy_active_truth (bm25)
 - Passed: true
@@ -133,7 +133,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d0041-b056-781d-9267-c751d49be01e", "semantic_memory_id": "019d0041-b102-7172-8fed-bbe746c833c4"}
+- Top content: preference: preference:spicy food = {"target": "spicy food", "polarity": "dislike", "source_memory_id": "019d006a-92c5-790f-a180-cdf377ed0b19", "semantic_memory_id": "019d006a-934a-7a31-a799-877bb0d65c2f"}
 
 ### sweet_active_truth (fts)
 - Passed: true
@@ -143,7 +143,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d0041-b056-781d-9267-c751d49be01e", "semantic_memory_id": "019d0041-b104-76ae-9dd5-b7ff2456cc6c"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d006a-92c5-790f-a180-cdf377ed0b19", "semantic_memory_id": "019d006a-934c-7370-b3cb-c00dfaa3653a"}
 
 ### sweet_active_truth (bm25)
 - Passed: true
@@ -153,7 +153,7 @@ Baseline Eval Passed: true
 - Top memory type: procedural_memory
 - Top overlap: n/a
 - Approx tokens: 13
-- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d0041-b056-781d-9267-c751d49be01e", "semantic_memory_id": "019d0041-b104-76ae-9dd5-b7ff2456cc6c"}
+- Top content: preference: preference:sweet food = {"target": "sweet food", "polarity": "like", "source_memory_id": "019d006a-92c5-790f-a180-cdf377ed0b19", "semantic_memory_id": "019d006a-934c-7370-b3cb-c00dfaa3653a"}
 
 ### rare_entity_cve (fts)
 - Passed: true

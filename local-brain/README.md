@@ -33,11 +33,15 @@ Current working slice:
 - queue-first derivation route (`POST /derive/queue`)
 - deterministic temporal summary scaffolding (`day`/`week`/`month`/`year`)
 - parent-linked temporal nodes for the first real TMT ancestry chain
+- recursive place-containment support through active relationship edges
+- stronger relative-time normalization anchored to `captured_at` or prior scene context
+- graph-history priors with a persisted `relationship_priors` table
 - timeline and relationship ops surfaces for the console (`GET /ops/timeline`, `GET /ops/graph`)
-- clarification inbox plus outbox-driven reprocessing for misspellings, unknown kinship, and vague place references
+- typed clarification inbox plus outbox-driven reprocessing for alias collisions, kinship resolution, place grounding, and misspellings
 - deterministic relationship adjudication into `relationship_memory`
 - deterministic semantic forgetting/decay loop with archival thresholds
 - ParadeDB BM25 lexical branch implemented, benchmarked, and now the default lexical provider
+- graph atlas UI with whole-window view by default and click-to-root exploration
 
 This is not the full brain yet. It is the first implementation slice that
 proves the substrate, schema, and file ingestion loop without Docker.
