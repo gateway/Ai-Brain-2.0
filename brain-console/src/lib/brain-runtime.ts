@@ -1,0 +1,231 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
+const repoRoot = path.resolve(process.cwd(), "..");
+const runtimeBaseUrl = process.env.BRAIN_RUNTIME_BASE_URL ?? "http://127.0.0.1:8787";
+
+interface EvalCheck {
+  readonly name: string;
+  readonly passed: boolean;
+  readonly details: string;
+}
+
+interface EvalReport {
+  readonly generatedAt: string;
+  readonly namespaceId: string;
+  readonly checks: readonly EvalCheck[];
+  readonly metrics: Record<string, number>;
+}
+
+interface BenchmarkCase {
+  readonly name: string;
+  readonly provider: string;
+  readonly passed: boolean;
+  readonly resultCount: number;
+  readonly effectiveLexicalProvider: string;
+  readonly lexicalFallbackUsed: boolean;
+  readonly topMemoryType?: string;
+  readonly topContent?: string;
+  readonly approxTokens?: number;
+}
+
+interface BenchmarkSummary {
+  readonly ftsPassed: number;
+  readonly bm25Passed: number;
+  readonly totalCases: number;
+  readonly bm25TokenDelta: number;
+  readonly bm25FallbackCases: number;
+  readonly recommendation: string;
+  readonly reason: string;
+}
+
+interface BenchmarkReport {
+  readonly generatedAt: string;
+  readonly namespaceId: string;
+  readonly baselineEvalPassed: boolean;
+  readonly baselineEvalFailures: readonly string[];
+  readonly cases: readonly BenchmarkCase[];
+  readonly summary: BenchmarkSummary;
+}
+
+export interface ArtifactDetail {
+  readonly artifactId: string;
+  readonly namespaceId: string;
+  readonly sourceType: string;
+  readonly sourceUri: string;
+  readonly latestObservationId?: string;
+  readonly observations: readonly {
+    readonly artifactObservationId: string;
+    readonly observedAt: string;
+    readonly contentHash: string;
+    readonly byteSize: number;
+    readonly metadata: Record<string, unknown>;
+  }[];
+  readonly derivations: readonly {
+    readonly artifactDerivationId: string;
+    readonly derivationType: string;
+    readonly contentText: string;
+    readonly provider?: string;
+    readonly model?: string;
+    readonly createdAt: string;
+  }[];
+  readonly chunkCount: number;
+  readonly episodicHits: readonly {
+    readonly id: string;
+    readonly content: string;
+    readonly occurredAt?: string;
+    readonly sourceUri?: string;
+  }[];
+}
+
+export interface SearchResultItem {
+  readonly id: string;
+  readonly memoryType: string;
+  readonly content: string;
+  readonly occurredAt?: string;
+  readonly sourceUri?: string;
+  readonly score?: number;
+  readonly lexicalProvider?: string;
+  readonly lexicalFallbackUsed?: boolean;
+}
+
+export interface SearchResult {
+  readonly planner?: {
+    readonly queryType?: string;
+    readonly inferredYear?: number;
+    readonly timeStart?: string;
+    readonly timeEnd?: string;
+    readonly branchPreference?: string;
+    readonly lexicalTerms?: readonly string[];
+  };
+  readonly provider?: string;
+  readonly lexicalProvider?: string;
+  readonly lexicalFallbackUsed?: boolean;
+  readonly results: readonly SearchResultItem[];
+}
+
+export interface OpsOverview {
+  readonly lexicalProvider: "fts" | "bm25";
+  readonly lexicalFallbackEnabled: boolean;
+  readonly queueSummary: {
+    readonly derivation: {
+      readonly pending: number;
+      readonly processing: number;
+      readonly failed: number;
+      readonly completed: number;
+      readonly nextAttemptAt?: string;
+    };
+    readonly vectorSync: {
+      readonly pending: number;
+      readonly processing: number;
+      readonly failed: number;
+      readonly completed: number;
+      readonly nextAttemptAt?: string;
+    };
+  };
+  readonly memorySummary: {
+    readonly temporalNodes: number;
+    readonly relationshipCandidatesPending: number;
+    readonly relationshipMemoryActive: number;
+    readonly semanticDecayEvents: number;
+  };
+}
+
+async function readJsonFile<T>(segments: readonly string[]): Promise<T> {
+  const filePath = path.join(repoRoot, ...segments);
+  return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
+}
+
+async function readMarkdownFile(segments: readonly string[]): Promise<string> {
+  const filePath = path.join(repoRoot, ...segments);
+  return fs.readFile(filePath, "utf8");
+}
+
+async function fetchJson<T>(pathname: string, searchParams?: URLSearchParams): Promise<T> {
+  const url = new URL(pathname, runtimeBaseUrl);
+
+  if (searchParams) {
+    url.search = searchParams.toString();
+  }
+
+  const response = await fetch(url, {
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    throw new Error(`${pathname} returned ${response.status}`);
+  }
+
+  return (await response.json()) as T;
+}
+
+export async function getHealth(): Promise<{ readonly ok: boolean }> {
+  return fetchJson<{ readonly ok: boolean }>("/health");
+}
+
+export async function getOpsOverview(): Promise<OpsOverview> {
+  return fetchJson<OpsOverview>("/ops/overview");
+}
+
+export async function getLatestEval(): Promise<{ readonly json: EvalReport; readonly markdown: string }> {
+  const [json, markdown] = await Promise.all([
+    readJsonFile<EvalReport>(["local-brain", "eval-results", "latest.json"]),
+    readMarkdownFile(["local-brain", "eval-results", "latest.md"])
+  ]);
+
+  return { json, markdown };
+}
+
+export async function getLatestBenchmark(): Promise<{ readonly json: BenchmarkReport; readonly markdown: string }> {
+  const [json, markdown] = await Promise.all([
+    readJsonFile<BenchmarkReport>(["local-brain", "benchmark-results", "latest.json"]),
+    readMarkdownFile(["local-brain", "benchmark-results", "latest.md"])
+  ]);
+
+  return { json, markdown };
+}
+
+export async function searchBrain(input: {
+  readonly namespaceId: string;
+  readonly query: string;
+  readonly timeStart?: string;
+  readonly timeEnd?: string;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly dimensions?: string;
+  readonly limit?: string;
+}): Promise<SearchResult> {
+  const params = new URLSearchParams({
+    namespace_id: input.namespaceId,
+    query: input.query
+  });
+
+  if (input.timeStart) {
+    params.set("time_start", input.timeStart);
+  }
+  if (input.timeEnd) {
+    params.set("time_end", input.timeEnd);
+  }
+  if (input.provider) {
+    params.set("provider", input.provider);
+  }
+  if (input.model) {
+    params.set("model", input.model);
+  }
+  if (input.dimensions) {
+    params.set("dimensions", input.dimensions);
+  }
+  if (input.limit) {
+    params.set("limit", input.limit);
+  }
+
+  return fetchJson<SearchResult>("/search", params);
+}
+
+export async function getArtifactDetail(artifactId: string): Promise<ArtifactDetail> {
+  return fetchJson<ArtifactDetail>(`/artifacts/${artifactId}`);
+}
+
+export function getRuntimeBaseUrl(): string {
+  return runtimeBaseUrl;
+}
