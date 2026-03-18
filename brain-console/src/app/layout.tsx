@@ -24,8 +24,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={`${spaceGrotesk.variable} ${ibmPlexMono.variable} antialiased`}>{children}</body>
+    <html lang="en" className="dark" style={{ colorScheme: "dark" }}>
+      <body className={`${spaceGrotesk.variable} ${ibmPlexMono.variable} bg-background text-foreground antialiased`}>
+        {children}
+      </body>
     </html>
   );
 }

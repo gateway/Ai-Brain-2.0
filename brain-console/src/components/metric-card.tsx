@@ -11,21 +11,21 @@ interface MetricCardProps {
 }
 
 const toneClasses: Record<NonNullable<MetricCardProps["tone"]>, string> = {
-  default: "border-slate-900/10 bg-white",
-  success: "border-emerald-400/35 bg-emerald-50/80",
-  warning: "border-amber-400/35 bg-amber-50/80",
-  danger: "border-rose-400/35 bg-rose-50/80"
+  default: "border-white/8 bg-[linear-gradient(180deg,_rgba(20,24,33,0.94)_0%,_rgba(10,13,19,0.98)_100%)] text-white",
+  success: "border-emerald-400/20 bg-[linear-gradient(180deg,_rgba(10,34,26,0.96)_0%,_rgba(7,18,15,0.98)_100%)] text-white",
+  warning: "border-amber-300/20 bg-[linear-gradient(180deg,_rgba(40,24,10,0.96)_0%,_rgba(19,13,7,0.98)_100%)] text-white",
+  danger: "border-rose-400/20 bg-[linear-gradient(180deg,_rgba(41,14,18,0.96)_0%,_rgba(20,8,10,0.98)_100%)] text-white"
 };
 
 export function MetricCard({ title, value, detail, tone = "default", footer }: MetricCardProps) {
   return (
     <Card className={toneClasses[tone]}>
       <CardHeader>
-        <CardDescription>{title}</CardDescription>
-        <CardTitle className="text-3xl">{value}</CardTitle>
+        <CardDescription className="font-mono text-[11px] uppercase tracking-[0.32em] text-slate-500">{title}</CardDescription>
+        <CardTitle className="text-3xl text-white">{value}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        {detail ? <p className="text-sm leading-6 text-slate-600">{detail}</p> : null}
+        {detail ? <p className="text-sm leading-6 text-slate-400">{detail}</p> : null}
         {footer ? footer : null}
       </CardContent>
     </Card>
@@ -41,5 +41,5 @@ export function StatusBadge({ value }: { readonly value: string }) {
         ? "destructive"
         : "secondary";
 
-  return <Badge variant={variant}>{value}</Badge>;
+  return <Badge variant={variant} className="backdrop-blur">{value}</Badge>;
 }

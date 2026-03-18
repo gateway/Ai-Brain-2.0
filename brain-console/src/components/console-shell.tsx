@@ -23,68 +23,77 @@ export interface ConsoleShellProps {
 
 export function ConsoleShell({ title, subtitle, currentPath, children }: ConsoleShellProps) {
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(255,183,77,0.22),_transparent_25%),radial-gradient(circle_at_top_right,_rgba(79,209,197,0.18),_transparent_28%),linear-gradient(180deg,_#f6f1e8_0%,_#eadfcd_52%,_#e6dac5_100%)] text-slate-950">
-      <div className="pointer-events-none fixed inset-0 opacity-50 [background-image:linear-gradient(rgba(15,23,42,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,0.03)_1px,transparent_1px)] [background-size:26px_26px]" />
-      <div className="mx-auto grid min-h-screen max-w-[1500px] gap-6 px-4 py-5 lg:grid-cols-[265px_1fr] lg:px-6">
-        <aside className="relative overflow-hidden rounded-[32px] border border-slate-900/10 bg-[linear-gradient(180deg,_rgba(15,23,42,0.97)_0%,_rgba(24,37,58,0.96)_100%)] p-5 text-white shadow-[0_24px_80px_rgba(27,31,44,0.35)]">
-          <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-amber-200/50 to-transparent" />
-          <div className="space-y-3">
-            <Badge variant="outline" className="border-amber-300/30 bg-amber-200/10 text-amber-100">
-              Brain 2.0 Operator Console
-            </Badge>
-            <div>
-              <p className="font-mono text-xs uppercase tracking-[0.35em] text-slate-400">Operator Surface</p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white">Local Cognitive Atlas</h1>
-            </div>
-            <p className="text-sm leading-6 text-slate-300">
-              A visual control room for memory, timelines, relationships, provenance, and retrieval quality.
-            </p>
-          </div>
-          <div className="my-6 h-px w-full bg-white/10" />
-          <nav className="space-y-2.5">
-            {navigation.map((item) => {
-              const active = item.href === currentPath;
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    "flex items-center justify-between rounded-[20px] px-4 py-3 text-sm transition-all",
-                    active
-                      ? "bg-white text-slate-950 shadow-[0_18px_40px_rgba(15,23,42,0.25)]"
-                      : "text-slate-300 hover:bg-white/6 hover:text-white"
-                  )}
-                >
-                  <span>{item.label}</span>
-                  {active ? <span className="font-mono text-[10px] uppercase tracking-[0.35em] text-slate-500">open</span> : null}
-                </Link>
-              );
-            })}
-          </nav>
-          <div className="my-6 h-px w-full bg-white/10" />
-          <div className="space-y-2 rounded-[22px] border border-white/10 bg-white/5 p-4 text-sm text-slate-300">
-            <p className="font-medium text-white">Why this exists</p>
-            <p>
-              Keep the brain observable while TMT, relationships, and derivation workers keep maturing.
-            </p>
-          </div>
-        </aside>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_right,_rgba(208,255,97,0.10),_transparent_20%),radial-gradient(circle_at_bottom_left,_rgba(64,150,255,0.10),_transparent_24%),linear-gradient(180deg,_#08090d_0%,_#0b0d12_42%,_#050608_100%)] text-slate-100">
+      <div className="pointer-events-none fixed inset-0 opacity-30 [background-image:linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:24px_24px]" />
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_20%_10%,rgba(255,255,255,0.08),transparent_18%),radial-gradient(circle_at_84%_18%,rgba(214,255,98,0.07),transparent_16%),radial-gradient(circle_at_90%_56%,rgba(255,255,255,0.08),transparent_14%)] opacity-70" />
 
-        <main className="space-y-6 rounded-[36px] border border-slate-900/10 bg-[linear-gradient(180deg,_rgba(255,255,255,0.82)_0%,_rgba(251,248,241,0.88)_100%)] p-5 shadow-[0_24px_80px_rgba(70,56,22,0.18)] backdrop-blur lg:p-7">
-          <header className="flex flex-col gap-4 border-b border-slate-900/10 pb-6 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-[0.38em] text-slate-500">{currentPath}</p>
-              <h2 className="mt-2 text-4xl font-semibold tracking-tight text-slate-950">{title}</h2>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-600">{subtitle}</p>
+      <div className="mx-auto flex min-h-screen max-w-[1800px] flex-col gap-5 px-3 py-4 lg:px-5">
+        <header className="sticky top-4 z-20 overflow-hidden rounded-[32px] border border-white/8 bg-[linear-gradient(180deg,_rgba(16,18,24,0.98)_0%,_rgba(10,12,16,0.98)_100%)] px-4 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur">
+          <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-lime-300/60 to-transparent" />
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="rounded-2xl border border-lime-300/20 bg-lime-300/10 px-3 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-lime-100">
+                Brain 2.0
+              </div>
+              <div className="min-w-0">
+                <p className="font-mono text-[11px] uppercase tracking-[0.34em] text-slate-500">Operator surface</p>
+                <h1 className="mt-1 text-xl font-semibold tracking-tight text-white">Local Cognitive Atlas</h1>
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-400">
+                  A dark control deck for memory, timelines, relationships, provenance, ambiguity, and retrieval quality.
+                </p>
+              </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge variant="outline" className="border-emerald-500/25 bg-emerald-50/90 text-emerald-900">
+
+            <nav className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto rounded-[24px] border border-white/8 bg-white/5 p-1">
+              {navigation.map((item) => {
+                const active = item.href === currentPath;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={cn(
+                      "inline-flex shrink-0 items-center justify-center rounded-full px-4 py-2.5 text-sm transition-all",
+                      active
+                        ? "border border-cyan-400/20 bg-cyan-400/10 text-cyan-100 shadow-[0_12px_32px_rgba(0,0,0,0.22)]"
+                        : "border border-transparent text-slate-400 hover:border-white/8 hover:bg-white/5 hover:text-white"
+                    )}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </nav>
+
+            <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+              <Badge variant="outline" className="border-emerald-400/20 bg-emerald-400/10 text-emerald-100">
                 Local-first
               </Badge>
-              <Badge variant="outline" className="border-sky-500/25 bg-sky-50/90 text-sky-900">
+              <Badge variant="outline" className="border-sky-400/20 bg-sky-400/10 text-sky-100">
                 Postgres-centered
               </Badge>
-              <Badge variant="outline" className="border-amber-500/25 bg-amber-50/90 text-amber-900">
+              <Badge variant="outline" className="border-lime-300/20 bg-lime-300/10 text-lime-100">
+                Temporal memory
+              </Badge>
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-1 rounded-[36px] border border-white/8 bg-[linear-gradient(180deg,_rgba(13,15,20,0.94)_0%,_rgba(8,10,15,0.96)_100%)] p-5 shadow-[0_24px_90px_rgba(0,0,0,0.45)] backdrop-blur lg:p-7">
+          <header className="flex flex-col gap-4 border-b border-white/8 pb-6 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.34em] text-slate-500">{currentPath}</p>
+              <h2 className="mt-2 text-4xl font-semibold tracking-tight text-white">{title}</h2>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-400">{subtitle}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="outline" className="border-emerald-400/20 bg-emerald-400/10 text-emerald-100">
+                Local-first
+              </Badge>
+              <Badge variant="outline" className="border-sky-400/20 bg-sky-400/10 text-sky-100">
+                Postgres-centered
+              </Badge>
+              <Badge variant="outline" className="border-lime-300/20 bg-lime-300/10 text-lime-100">
                 Temporal memory
               </Badge>
             </div>

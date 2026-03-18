@@ -54,6 +54,8 @@ Latest verified run log:
 - [Local status after BM25 closure](brain-spec/local/41-local-brain-status-after-bm25-closure.md)
 - [Timeline, relationship graph, and console atlas slice](brain-spec/local/42-console-timeline-relationship-slice.md)
 - [Ambiguity inbox, outbox propagation, and BM25/TMT closure refresh](brain-spec/local/46-ambiguity-inbox-and-bm25-refresh.md)
+- [Place/time/prior research plan](brain-spec/local/47-place-time-priors-and-graph-plan.md)
+- [Top-nav console and live graph slice](brain-spec/local/48-console-topnav-and-live-graph.md)
 
 ## Main Folders
 
@@ -80,6 +82,7 @@ Latest verified run log:
 - [brain-spec/local/40-bm25-default-and-tmt-closure.md](brain-spec/local/40-bm25-default-and-tmt-closure.md)
 - [brain-spec/local/41-local-brain-status-after-bm25-closure.md](brain-spec/local/41-local-brain-status-after-bm25-closure.md)
 - [brain-spec/local/39-operator-console-run-log.md](brain-spec/local/39-operator-console-run-log.md)
+- [brain-spec/local/48-console-topnav-and-live-graph.md](brain-spec/local/48-console-topnav-and-live-graph.md)
 - [local-brain/CHANGELOG.md](local-brain/CHANGELOG.md)
 
 ## Honest Current Limits

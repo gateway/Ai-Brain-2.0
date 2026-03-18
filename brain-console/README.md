@@ -16,7 +16,7 @@ It is intentionally a developer/operator surface, not the final end-user product
 - lexical status and BM25/FTS posture
 - live query runs with planner and provenance details
 - timeline browsing with rolled-up temporal summaries and supporting episodic evidence
-- relationship graph browsing with clickable entity refocus and edge inspection
+- relationship graph browsing with live pan/zoom, click-to-focus, expand, recenter, and reset-root controls
 - latest eval report
 - latest lexical benchmark report
 - queue and memory-health overview
@@ -67,22 +67,23 @@ Then open:
 
 ## Current Design Decision
 
-The console is server-rendered first and graph-light on purpose.
+The console is still SSR-first, but the graph surface is now client-interactive where it needs to be.
 
 Why:
 
-- it keeps the operator workflow cheap while the brain semantics are still moving
-- it makes BM25/FTS, temporal recall, provenance, and job state visible without inventing a second backend
-- it avoids overcommitting to a client-heavy graph UI before relationship semantics are stable enough to deserve it
+- the shell and data pages remain cheap and easy to reason about
+- the relationships page now has enough room to behave like an atlas instead of a dashboard tile
+- `Cytoscape.js` is contained to the graph surface, not the whole app
 
-What exists now is the safe middle ground:
+What exists now:
 
-- a themed operator atlas
-- a clickable SVG relationship graph backed by live runtime data
+- a top-nav operator shell instead of the old left rail
+- a darker 2026-style control-deck theme
+- a live relationship graph with pan/zoom, focus, expand, recenter, and reset
 - a timeline page that shows both rolled-up temporal nodes and supporting episodic leaves
 
 What still comes later:
 
 - richer temporal containment diagnostics
 - supersession and causal overlays in the graph
-- heavier interactive graph exploration if the relationship semantics justify it
+- stronger provenance drilldowns directly from selected nodes and edges
