@@ -53,7 +53,12 @@ source corpus reconstructs the same life graph and active truth.
 - `what is Steve's preferred response style?`
 - `what is the mandatory protocol for changing the brain's ontology?`
 - `what should be done with the database after each ontology slice?`
+- `what is Steve's current stance on infrastructure?`
+- `how has Steve's opinion on infrastructure changed since 2025?`
+- `did Steve still support hosted infrastructure in January 2025?`
 - `who is Steve dating now?`
+- `who is Alex dating now?`
+- `who was Nina dating?`
 
 ## Core State Checks
 
@@ -79,4 +84,4 @@ Each run should write:
 
 Current green reference run:
 
-- `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T04-21-09-332Z.json`
+- `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T05-06-17-639Z.json`

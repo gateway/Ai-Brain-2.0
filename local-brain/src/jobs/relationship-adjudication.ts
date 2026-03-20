@@ -25,6 +25,12 @@ interface ActiveRelationshipRow {
   readonly object_entity_id: string;
 }
 
+interface ActiveProceduralStateRow {
+  readonly id: string;
+  readonly version: number;
+  readonly state_value: Record<string, unknown>;
+}
+
 function relationshipKind(metadata: Record<string, unknown> | null | undefined): string | null {
   const value = metadata?.relationship_kind;
   return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null;
@@ -140,6 +146,165 @@ function isExclusivePredicate(predicate: string): boolean {
   const normalized = predicate.toLowerCase();
   const exclusivePredicates = new Set<string>(["primary_contact", "married_to", "ceo_of", "significant_other_of", "works_at", "resides_at"]);
   return exclusivePredicates.has(normalized);
+}
+
+function currentRelationshipStateKey(subjectEntityId: string): string {
+  return `current_relationship:${subjectEntityId}:romantic`;
+}
+
+async function lookupCanonicalName(client: PoolClient, entityId: string): Promise<string | null> {
+  const result = await client.query<{ canonical_name: string | null }>(
+    `
+      SELECT canonical_name
+      FROM entities
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [entityId]
+  );
+
+  return result.rows[0]?.canonical_name ?? null;
+}
+
+async function upsertCurrentRelationshipState(
+  client: PoolClient,
+  options: {
+    readonly namespaceId: string;
+    readonly subjectEntityId: string;
+    readonly objectEntityId: string;
+    readonly occurredAt: string;
+    readonly sourceMemoryId: string | null;
+    readonly relationshipMemoryId: string;
+    readonly candidateId: string;
+  }
+): Promise<void> {
+  const [subjectName, partnerName] = await Promise.all([
+    lookupCanonicalName(client, options.subjectEntityId),
+    lookupCanonicalName(client, options.objectEntityId)
+  ]);
+  const stateKey = currentRelationshipStateKey(options.subjectEntityId);
+  const stateValue = {
+    person: subjectName,
+    partner: partnerName,
+    relationship_kind: "romantic",
+    subject_entity_id: options.subjectEntityId,
+    partner_entity_id: options.objectEntityId,
+    relationship_memory_id: options.relationshipMemoryId,
+    source_memory_id: options.sourceMemoryId
+  };
+
+  const activeState = await client.query<ActiveProceduralStateRow>(
+    `
+      SELECT id, version, state_value
+      FROM procedural_memory
+      WHERE namespace_id = $1
+        AND state_type = 'current_relationship'
+        AND state_key = $2
+        AND valid_until IS NULL
+      ORDER BY version DESC
+      LIMIT 1
+    `,
+    [options.namespaceId, stateKey]
+  );
+
+  const activeRow = activeState.rows[0];
+  if (activeRow && JSON.stringify(activeRow.state_value) === JSON.stringify(stateValue)) {
+    await client.query(
+      `
+        UPDATE procedural_memory
+        SET metadata = procedural_memory.metadata || $2::jsonb
+        WHERE id = $1
+      `,
+      [
+        activeRow.id,
+        JSON.stringify({
+          relationship_memory_id: options.relationshipMemoryId,
+          last_candidate_id: options.candidateId,
+          last_updated_at: options.occurredAt
+        })
+      ]
+    );
+    return;
+  }
+
+  if (activeRow) {
+    await client.query(
+      `
+        UPDATE procedural_memory
+        SET valid_until = $2
+        WHERE id = $1
+      `,
+      [activeRow.id, options.occurredAt]
+    );
+  }
+
+  await client.query(
+    `
+      INSERT INTO procedural_memory (
+        namespace_id,
+        state_type,
+        state_key,
+        state_value,
+        version,
+        updated_at,
+        valid_from,
+        valid_until,
+        supersedes_id,
+        metadata
+      )
+      VALUES ($1, 'current_relationship', $2, $3::jsonb, $4, $5, $5, NULL, $6, $7::jsonb)
+    `,
+    [
+      options.namespaceId,
+      stateKey,
+      JSON.stringify(stateValue),
+      (activeRow?.version ?? 0) + 1,
+      options.occurredAt,
+      activeRow?.id ?? null,
+      JSON.stringify({
+        relationship_kind: "romantic",
+        relationship_memory_id: options.relationshipMemoryId,
+        source_memory_id: options.sourceMemoryId,
+        candidate_id: options.candidateId
+      })
+    ]
+  );
+}
+
+async function closeCurrentRelationshipState(
+  client: PoolClient,
+  options: {
+    readonly namespaceId: string;
+    readonly subjectEntityId: string;
+    readonly objectEntityId: string;
+    readonly occurredAt: string;
+    readonly candidateId: string;
+  }
+): Promise<void> {
+  await client.query(
+    `
+      UPDATE procedural_memory
+      SET
+        valid_until = $3,
+        metadata = procedural_memory.metadata || $4::jsonb
+      WHERE namespace_id = $1
+        AND state_type = 'current_relationship'
+        AND state_key = $2
+        AND valid_until IS NULL
+        AND coalesce(state_value->>'partner_entity_id', '') = $5
+    `,
+    [
+      options.namespaceId,
+      currentRelationshipStateKey(options.subjectEntityId),
+      options.occurredAt,
+      JSON.stringify({
+        relationship_transition: "ended",
+        ended_at: options.occurredAt,
+        ended_by_candidate_id: options.candidateId
+      }),
+      options.objectEntityId
+    ]
+  );
 }
 
 async function countParticipationMembershipSignals(
@@ -335,6 +500,13 @@ export async function runRelationshipAdjudication(
               })
             ]
           );
+          await closeCurrentRelationshipState(client, {
+            namespaceId,
+            subjectEntityId: candidate.subject_entity_id,
+            objectEntityId: candidate.object_entity_id,
+            occurredAt,
+            candidateId: candidate.id
+          });
         }
 
         await markRelationshipCandidate(
@@ -528,6 +700,18 @@ export async function runRelationshipAdjudication(
           ]
         );
 
+        if (canonicalPredicate === "significant_other_of") {
+          await upsertCurrentRelationshipState(client, {
+            namespaceId,
+            subjectEntityId: candidate.subject_entity_id,
+            objectEntityId: candidate.object_entity_id,
+            occurredAt,
+            sourceMemoryId: candidate.source_memory_id,
+            relationshipMemoryId: exactMatch.id,
+            candidateId: candidate.id
+          });
+        }
+
         await markRelationshipCandidate(client, candidate.id, "accepted", "Reinforced existing active relationship edge.");
         await logEvent(client, {
           namespaceId,
@@ -605,6 +789,18 @@ export async function runRelationshipAdjudication(
       const relationshipMemoryId = inserted.rows[0]?.id;
       if (!relationshipMemoryId) {
         throw new Error("Failed to insert relationship memory");
+      }
+
+      if (canonicalPredicate === "significant_other_of") {
+        await upsertCurrentRelationshipState(client, {
+          namespaceId,
+          subjectEntityId: candidate.subject_entity_id,
+          objectEntityId: candidate.object_entity_id,
+          occurredAt,
+          sourceMemoryId: candidate.source_memory_id,
+          relationshipMemoryId,
+          candidateId: candidate.id
+        });
       }
 
       for (const prior of activeConflicts) {

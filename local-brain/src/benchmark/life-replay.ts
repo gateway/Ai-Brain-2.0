@@ -1,10 +1,12 @@
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { closePool, queryRows, withTransaction } from "../db/client.js";
 import { runMigrations } from "../db/migrations.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
+import { enqueueDerivationJob, processDerivationJobs } from "../jobs/derivation-queue.js";
 import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
 import { getOpsRelationshipGraph } from "../ops/service.js";
 import { runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
@@ -175,6 +177,54 @@ const FIXTURES: readonly ReplayFixture[] = [
     sourceType: "markdown",
     sourceChannel: "life-replay:coffee-preference-2026",
     capturedAt: "2026-02-01T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("belief-infrastructure-2025.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:belief-infrastructure-2025",
+    capturedAt: "2025-01-10T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("belief-infrastructure-2026.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:belief-infrastructure-2026",
+    capturedAt: "2026-02-10T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("alex-current-dating.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:alex-current-dating",
+    capturedAt: "2026-03-01T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("nina-current-dating.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:nina-current-dating",
+    capturedAt: "2026-01-01T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("nina-breakup.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:nina-breakup",
+    capturedAt: "2026-02-01T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("salience-frustration.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:salience-frustration",
+    capturedAt: "2026-03-21T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("salience-surprise.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:salience-surprise",
+    capturedAt: "2026-03-22T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("salience-excitement.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:salience-excitement",
+    capturedAt: "2026-03-23T09:00:00Z"
   },
   {
     path: replayFixturePath("current-employer.md"),
@@ -362,6 +412,20 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     expectedFollowUpAction: "route_to_clarifications"
   },
   {
+    name: "alex_current_partner_query",
+    query: "who is Alex dating now?",
+    expectTopIncludes: ["Sam"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "nina_historical_partner_query",
+    query: "who was Nina dating?",
+    expectTopIncludes: ["Omar"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
     name: "lauren_breakup_history_query",
     query: "did Steve and Lauren break up?",
     expectTopIncludes: ["Steve", "Lauren", "broke up"],
@@ -501,6 +565,49 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     minimumConfidence: "confident"
   },
   {
+    name: "current_belief_query",
+    query: "what is Steve's current stance on infrastructure?",
+    expectTopIncludes: ["local-first", "Qwen", "infrastructure"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "historical_belief_query",
+    query: "how has Steve's opinion on infrastructure changed since 2025?",
+    expectTopIncludes: ["hosted", "local-first", "infrastructure"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "point_in_time_belief_query",
+    query: "did Steve still support hosted infrastructure in January 2025?",
+    expectTopIncludes: ["hosted", "infrastructure"],
+    expectExcludes: ["local-first"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "salience_surprise_query",
+    query: "what was Steve's most surprising realization during the local-brain bring-up?",
+    expectTopIncludes: ["claim-plus-evidence", "embeddings", "surprising"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "salience_frustration_query",
+    query: "what was the most frustrating part of the local-brain bring-up?",
+    expectTopIncludes: ["PostgreSQL", "parameter binding bug", "frustrating"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "salience_excitement_query",
+    query: "what was Steve excited about with the graph UX?",
+    expectTopIncludes: ["graph UX", "places", "friends"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
     name: "routines_query",
     query: "what routines does Steve have?",
     expectTopIncludes: ["Tuesday coworking at Yellow co-working space"],
@@ -552,6 +659,13 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     query: "what happened during dinner with Dan?",
     expectTopIncludes: ["Dan", "Chiang Mai", "Thailand", "Japan"],
     requireEvidence: true
+  },
+  {
+    name: "multimodal_whiteboard_query",
+    query: "what was written on the whiteboard photo from the March redesign packet?",
+    expectTopIncludes: ["where does Steve live", "who are Steve's friends", "what is Steve working on"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
   }
 ];
 
@@ -810,6 +924,30 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     expectIncludes: ["significant_other_of"]
   },
   {
+    name: "alex_current_relationship_state_exists",
+    sql: `
+      SELECT coalesce(string_agg(state_value::text, ' | ' ORDER BY updated_at DESC), '') AS value
+      FROM procedural_memory
+      WHERE namespace_id = 'personal'
+        AND state_type = 'current_relationship'
+        AND valid_until IS NULL
+        AND state_value->>'person' = 'Alex'
+    `,
+    expectIncludes: ["Alex", "Sam"]
+  },
+  {
+    name: "nina_historical_relationship_state_exists",
+    sql: `
+      SELECT coalesce(string_agg(state_value::text || ' @ ' || coalesce(valid_until::text, ''), ' | ' ORDER BY updated_at DESC), '') AS value
+      FROM procedural_memory
+      WHERE namespace_id = 'personal'
+        AND state_type = 'current_relationship'
+        AND valid_until IS NOT NULL
+        AND state_value->>'person' = 'Nina'
+    `,
+    expectIncludes: ["Nina", "Omar", "2026"]
+  },
+  {
     name: "activity_entities_exist",
     sql: `
       SELECT concat(entity_type, ' ', canonical_name) AS value
@@ -956,6 +1094,42 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     expectIncludes: ["plan:attend_conference_in_turkey_for_two-way", "Turkey", "Two-Way"]
   },
   {
+    name: "belief_entities_exist",
+    sql: `
+      SELECT concat(entity_type, ' ', canonical_name) AS value
+      FROM entities
+      WHERE namespace_id = 'personal'
+        AND entity_type = 'belief'
+      ORDER BY canonical_name
+    `,
+    expectIncludes: [
+      "belief Hosted infrastructure is the pragmatic choice for Brain 2.0 while the local stack is not ready yet",
+      "belief Local-first architecture with local Qwen embeddings is the right direction for Brain 2.0"
+    ]
+  },
+  {
+    name: "belief_state_exists",
+    sql: `
+      SELECT concat(state_key, ' ', state_value::text) AS value
+      FROM procedural_memory
+      WHERE namespace_id = 'personal'
+        AND state_type = 'belief'
+      ORDER BY valid_from
+    `,
+    expectIncludes: ["belief:infrastructure", "Hosted infrastructure", "Local-first architecture with local Qwen embeddings"]
+  },
+  {
+    name: "salience_metadata_exists",
+    sql: `
+      SELECT concat(content, ' ', metadata::text) AS value
+      FROM episodic_memory
+      WHERE namespace_id = 'personal'
+        AND (metadata ? 'salience_labels' OR metadata ? 'surprise_magnitude')
+      ORDER BY occurred_at DESC
+    `,
+    expectIncludes: ["surprise_magnitude", "salience_labels", "frustrated", "excited"]
+  },
+  {
     name: "reconsolidated_day_summary_exists",
     sql: `
       SELECT concat(memory_kind, ' ', canonical_key, ' ', content_abstract) AS value
@@ -978,6 +1152,31 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
       ORDER BY created_at DESC
     `,
     expectIncludes: ["day_summary weak"]
+  },
+  {
+    name: "multimodal_derivation_exists",
+    sql: `
+      SELECT coalesce(string_agg(content_text, ' | ' ORDER BY created_at DESC), '') AS value
+      FROM artifact_derivations
+      WHERE derivation_type = 'ocr'
+        AND metadata->>'derivation_source' = 'life_replay_manual_multimodal'
+    `,
+    expectIncludes: [
+      "March redesign packet",
+      "where does Steve live",
+      "who are Steve's friends",
+      "what is Steve working on"
+    ]
+  },
+  {
+    name: "multimodal_derivation_job_completed",
+    sql: `
+      SELECT coalesce(string_agg(status || ' ' || job_kind, ' | ' ORDER BY created_at DESC), '') AS value
+      FROM derivation_jobs
+      WHERE namespace_id = 'personal'
+        AND metadata->>'derivation_source' = 'life_replay_manual_multimodal'
+    `,
+    expectIncludes: ["completed ocr"]
   }
 ];
 
@@ -1049,7 +1248,41 @@ async function seedNamespace(namespaceId: string): Promise<number> {
     });
   }
 
-  return FIXTURES.length;
+  const multimodalTempDir = await mkdtemp(path.join(os.tmpdir(), "life-replay-multimodal-"));
+  const whiteboardPath = path.join(multimodalTempDir, "march-redesign-whiteboard.png");
+  await writeFile(
+    whiteboardPath,
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9XK3sAAAAASUVORK5CYII=",
+      "base64"
+    )
+  );
+  const whiteboardIngest = await ingestArtifact({
+    inputUri: whiteboardPath,
+    namespaceId,
+    sourceType: "image",
+    sourceChannel: "life-replay:whiteboard-photo",
+    capturedAt: "2026-03-24T09:00:00Z"
+  });
+  await enqueueDerivationJob({
+    namespaceId,
+    artifactId: whiteboardIngest.artifact.artifactId,
+    artifactObservationId: whiteboardIngest.artifact.observationId,
+    jobKind: "ocr",
+    modality: "image",
+    metadata: {
+      derivation_source: "life_replay_manual_multimodal",
+      manual_content_text:
+        "Whiteboard photo from the March redesign packet listed the query smoke checks: where does Steve live, who are Steve's friends, and what is Steve working on."
+    }
+  });
+  await processDerivationJobs({
+    namespaceId,
+    limit: 20,
+    workerId: "life-replay-derivation-worker"
+  });
+
+  return FIXTURES.length + 1;
 }
 
 function aggregateContent(values: readonly RecallResult[]): string {

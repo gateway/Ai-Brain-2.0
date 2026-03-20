@@ -154,6 +154,9 @@ Prove that changing truth does not pollute current state.
   - `decision`
   - `constraint`
   - `style_spec`
+  - `goal`
+  - `plan`
+  - `belief`
 - current verified additions:
   - `Snowboarding` and `Hiking` are first-class `activity` entities
   - favorite movies and watchlist items are first-class `media` entities
@@ -161,9 +164,11 @@ Prove that changing truth does not pollute current state.
   - explicit durable choices now promote first-class `decision` entities like `Stay in Thailand long term` and `Keep Brain 2.0 on Postgres`
   - explicit operating rules now promote first-class `constraint` entities like `Return Ground-Truth Source Document With Search Results` and `Ask For Clarification Instead Of Guessing`
   - explicit work-style and response-style directives now promote first-class `style_spec` entities like `Keep Responses Concise`, `Review Ontology Changes Carefully`, `Wipe And Replay The Database After Each Slice`, and `Prefer Natural-Language Queryability`
+  - explicit goal and plan statements now promote first-class `goal` and `plan` entities like `Stay in Thailand` and `Attend conference in Turkey for Two-Way`
+  - explicit stance and opinion evidence now promotes first-class `belief` entities with historical supersession for infrastructure views
   - natural queries still pass after the typed expansion
   - latest clean replay report:
-    - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T04-21-09-332Z.json`
+    - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T04-43-04-642Z.json`
 
 ### Goal
 
@@ -177,7 +182,9 @@ Move beyond the broad `concept` bucket where it materially improves retrieval.
 - `decision`
 - `constraint`
 - `style_spec`
-- `goal` and `plan` only after prior phases are stable
+- `goal`
+- `plan`
+- `belief`
 
 ### Next Conservative Order
 
@@ -189,6 +196,7 @@ Move beyond the broad `concept` bucket where it materially improves retrieval.
 6. `style_spec`
 7. `goal`
 8. `plan`
+9. `belief`
 
 ### Entry Criteria
 
@@ -207,6 +215,8 @@ Move beyond the broad `concept` bucket where it materially improves retrieval.
 - explicit skills from work-history and autobiographical notes
 - explicit decisions and operational constraints
 - style and work-preference fixtures
+- goal / plan fixtures
+- belief evolution fixtures
 
 ## Phase 5: Relational Hardening
 
@@ -248,11 +258,23 @@ Move beyond the broad `concept` bucket where it materially improves retrieval.
     - `what is Steve's preferred response style?`
     - `what is the mandatory protocol for changing the brain's ontology?`
     - `what should be done with the database after each ontology slice?`
+  - belief evolution is now replay-verified through a unified first-class `belief` class with current, historical, and point-in-time queries:
+    - `what is Steve's current stance on infrastructure?`
+    - `how has Steve's opinion on infrastructure changed since 2025?`
+    - `did Steve still support hosted infrastructure in January 2025?`
+  - salience-aware querying is now replay-verified with topic-first, emotion-second ranking:
+    - `what was the most frustrating part of the local-brain bring-up?`
+    - `what was Steve excited about with the graph UX?`
+  - active romantic relationship truth can now be mirrored into procedural state on top of relationship tenure:
+    - `who is Alex dating now?`
+    - `who was Nina dating?`
+    - active `current_relationship` state now exists for present-tense dating facts
+    - superseded `current_relationship` state now closes when a breakup arrives later
   - historical work-history queries still return broad timeline coverage
   - latest clean replay report:
-    - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T04-21-09-332Z.json`
+    - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T05-06-17-639Z.json`
   - current confidence snapshot:
-    - `36 confident`
+    - `46 confident`
     - `2 weak`
     - `0 missing`
   - current known weak cases:
@@ -266,9 +288,9 @@ tenures.
 
 ### Next Ranked Slices
 
-1. sufficiency-gated hierarchical descent in recall planning
-2. broader relationship/status evolution and contradiction healing
-3. clarification-triggered memory gap tickets for truly missing facts
+1. broader contradiction healing beyond preferences and beliefs
+2. clarification-triggered memory gap tickets for truly missing facts
+3. stronger explicit abstention responses for “no current relationship” style questions
 
 ### Scope
 
@@ -313,14 +335,19 @@ tenures.
 - in progress
 - clean replay is green for the first higher-abstraction slice:
   - `routine`
+  - `goal`
+  - `plan`
+  - `belief`
 - current verified additions:
   - weekly repeated coworking now promotes a first-class `routine`
+  - explicit goal, plan, and belief abstractions now remain evidence-backed after replay
   - routine answers remain evidence-backed after replay
   - event-bounded retrieval now returns richer event context plus evidence bundles without overriding stronger graph truth
   - sufficiency-gated temporal descent is now active in replay with weak-vs-confident grading instead of pass/fail only
+  - structured salience annotation is now replay-verified on episodic and narrative memory without promoting emotion into active truth
   - existing ontology queries still pass after the new abstraction
   - latest clean replay report:
-    - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T02-55-42-723Z.json`
+    - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T05-06-17-639Z.json`
 
 ### Goal
 
@@ -350,15 +377,16 @@ stable.
 - phase summaries
 - contradiction-safe emotional/source annotations
 - evidence-backed plan/goal retrieval
+- evidence-backed belief retrieval and historical belief drift
 - `what routines does Steve have?`
 
 ### Next Ranked Slices
 
-1. conflict-aware memory reconsolidation for contradictory beliefs and preference drift
-2. goal and plan abstraction
-3. smarter recall-planner gating by query complexity
-4. stronger explicit abstention responses and negative-state answers
-5. richer emotion/life-phase annotation after the above stays replay-green
+1. broader contradiction healing beyond preferences and beliefs
+2. smarter recall-planner gating by query complexity
+3. stronger explicit abstention responses and negative-state answers
+4. procedural heuristic induction from repeated successful slices
+5. richer life-phase annotation after the above stays replay-green
 
 ## Phase Gates
 

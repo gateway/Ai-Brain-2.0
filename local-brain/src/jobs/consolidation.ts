@@ -73,7 +73,13 @@ interface PlanStatement {
   readonly projectHint?: string;
 }
 
-type TypedPreferenceEntityType = "activity" | "media" | "skill" | "decision" | "constraint" | "routine" | "style_spec" | "goal" | "plan";
+interface BeliefStatement {
+  readonly topic: string;
+  readonly summary: string;
+  readonly canonicalKey: string;
+}
+
+type TypedPreferenceEntityType = "activity" | "media" | "skill" | "decision" | "constraint" | "routine" | "style_spec" | "goal" | "plan" | "belief";
 
 interface RoutinePatternRow {
   readonly person_name: string;
@@ -210,6 +216,10 @@ function buildCanonicalGoalKey(target: string): string {
 
 function buildCanonicalPlanKey(target: string): string {
   return `plan:${target}`;
+}
+
+function buildCanonicalBeliefKey(target: string): string {
+  return `belief:${target}`;
 }
 
 function normalizeProjectKey(value: string): string {
@@ -428,6 +438,22 @@ function resolveTypedPlanEntity(target: string): TypedPreferenceEntity | null {
     metadata: {
       ontology_phase: "phase4",
       source_kind: "plan"
+    }
+  };
+}
+
+function resolveTypedBeliefEntity(target: string): TypedPreferenceEntity | null {
+  const normalized = normalizePreferenceTarget(target);
+  if (!normalized) {
+    return null;
+  }
+
+  return {
+    entityType: "belief",
+    canonicalName: toDisplayPhrase(target),
+    metadata: {
+      ontology_phase: "phase6",
+      source_kind: "belief"
     }
   };
 }
@@ -1045,6 +1071,68 @@ function extractPlanStatements(content: string): PlanStatement[] {
 
   return statements.filter((statement, index, values) =>
     values.findIndex((candidate) => candidate.canonicalKey === statement.canonicalKey) === index
+  );
+}
+
+function inferBeliefTopic(explicitTopic: string | null, summary: string): string {
+  if (explicitTopic) {
+    return explicitTopic;
+  }
+
+  if (/\b(?:hosted|local-first|local)\s+(?:infrastructure|architecture|embeddings)\b/iu.test(summary)) {
+    return "Infrastructure";
+  }
+
+  const sovereigntyMatch = summary.match(/\b(data sovereignty)\b/iu);
+  if (sovereigntyMatch) {
+    return toDisplayPhrase(sovereigntyMatch[1] ?? "Data Sovereignty");
+  }
+
+  const genericMatch = summary.match(/^([A-Za-z0-9][A-Za-z0-9\s-]{2,40}?)\s+(?:matters|is|are|should)\b/u);
+  if (genericMatch?.[1]) {
+    return toDisplayPhrase(genericMatch[1]);
+  }
+
+  return "General Belief";
+}
+
+function extractBeliefStatements(content: string): BeliefStatement[] {
+  const statements: BeliefStatement[] = [];
+
+  const register = (topicInput: string | null, summaryInput: string) => {
+    const summary = toDisplayPhrase(normalizeWhitespace(summaryInput.replace(/[.]+$/u, "")));
+    if (!summary) {
+      return;
+    }
+    const topic = inferBeliefTopic(
+      topicInput ? toDisplayPhrase(normalizeWhitespace(topicInput)) : null,
+      summary
+    );
+    const normalizedKey = normalizePreferenceTarget(topic).replace(/\s+/gu, "_");
+    if (!normalizedKey) {
+      return;
+    }
+    statements.push({
+      topic,
+      summary,
+      canonicalKey: buildCanonicalBeliefKey(normalizedKey)
+    });
+  };
+
+  for (const match of content.matchAll(/\b(?:my|our)\s+(?:stance|opinion)\s+on\s+(.+?)\s+is(?:\s+now)?(?:\s+that)?\s+(.+?)(?:[.!?]\s+|\n+|$)/giu)) {
+    register(match[1] ?? null, match[2] ?? "");
+  }
+
+  for (const match of content.matchAll(/\b(?:i|we)\s+(?:now\s+)?believe\s+(.+?)(?:[.!?]\s+|\n+|$)/giu)) {
+    register(null, match[1] ?? "");
+  }
+
+  for (const match of content.matchAll(/\bin\s+my\s+view\s+(.+?)(?:[.!?]\s+|\n+|$)/giu)) {
+    register(null, match[1] ?? "");
+  }
+
+  return statements.filter((statement, index, values) =>
+    values.findIndex((candidate) => candidate.canonicalKey === statement.canonicalKey && candidate.summary === statement.summary) === index
   );
 }
 
@@ -2837,6 +2925,155 @@ async function promotePlanCandidate(
   };
 }
 
+async function promoteBeliefCandidate(
+  client: PoolClient,
+  candidate: CandidateRow
+): Promise<{
+  readonly decisions: ConsolidationDecision[];
+  readonly promotedCount: number;
+  readonly supersededCount: number;
+}> {
+  const occurredAt = candidate.occurred_at ?? candidate.created_at;
+  const statements = extractBeliefStatements(candidate.content);
+
+  if (statements.length === 0) {
+    await markCandidate(client, {
+      candidateId: candidate.candidate_id,
+      status: "rejected",
+      decisionReason: "No deterministic belief statement could be parsed."
+    });
+
+    return {
+      decisions: [buildDecision("IGNORE", "No deterministic belief statement found.", 0.2)],
+      promotedCount: 0,
+      supersededCount: 0
+    };
+  }
+
+  const personLabel = await loadNamespacePersonLabel(client, candidate.namespace_id, candidate.content);
+  const sourceMemoryId = await resolveCandidateSourceMemoryId(client, candidate);
+  const decisions: ConsolidationDecision[] = [];
+  let promotedCount = 0;
+  let supersededCount = 0;
+  let lastCanonicalKey: string | undefined;
+  let lastNormalizedValue: Record<string, unknown> | undefined;
+
+  for (const statement of statements) {
+    const typedEntity = resolveTypedBeliefEntity(statement.summary);
+    const typedEntityId = typedEntity ? await upsertTypedEntity(client, candidate.namespace_id, typedEntity) : null;
+
+    if (typedEntityId) {
+      await upsertTypedEntityMention(client, {
+        namespaceId: candidate.namespace_id,
+        entityId: typedEntityId,
+        sourceMemoryId,
+        sourceChunkId: candidate.source_chunk_id,
+        mentionText: statement.summary,
+        occurredAt,
+        metadata: {
+          source: "candidate_consolidation",
+          candidate_id: candidate.candidate_id,
+          state_type: "belief"
+        }
+      });
+    }
+
+    lastCanonicalKey = statement.canonicalKey;
+    lastNormalizedValue = {
+      topic: statement.topic,
+      belief: statement.summary,
+      entity_id: typedEntityId,
+      entity_type: typedEntity?.entityType ?? null
+    };
+
+    await client.query(
+      `
+        INSERT INTO semantic_memory (
+          namespace_id,
+          content_abstract,
+          importance_score,
+          valid_from,
+          valid_until,
+          status,
+          is_anchor,
+          source_episodic_id,
+          source_chunk_id,
+          source_artifact_observation_id,
+          memory_kind,
+          canonical_key,
+          normalized_value,
+          metadata,
+          decay_exempt
+        )
+        VALUES ($1, $2, 0.8, $3, NULL, 'active', true, $4, $5, $6, 'belief', $7, $8::jsonb, $9::jsonb, true)
+      `,
+      [
+        candidate.namespace_id,
+        `${personLabel} belief about ${statement.topic.toLowerCase()} is ${statement.summary.charAt(0).toLowerCase()}${statement.summary.slice(1)}.`,
+        occurredAt,
+        sourceMemoryId,
+        candidate.source_chunk_id,
+        candidate.source_artifact_observation_id,
+        `${statement.canonicalKey}:${normalizePreferenceTarget(statement.summary).replace(/\s+/gu, "_")}`,
+        JSON.stringify(lastNormalizedValue),
+        JSON.stringify({
+          source: "candidate_consolidation",
+          candidate_id: candidate.candidate_id,
+          ontology_phase: "phase6",
+          is_anchor: true
+        })
+      ]
+    );
+
+    const result = await upsertProceduralState(client, {
+      namespaceId: candidate.namespace_id,
+      stateType: "belief",
+      stateKey: statement.canonicalKey,
+      stateValue: {
+        person: personLabel,
+        topic: statement.topic,
+        belief: statement.summary,
+        status: "active",
+        entity_id: typedEntityId,
+        entity_type: typedEntity?.entityType ?? null
+      },
+      occurredAt,
+      sourceMemoryId,
+      metadata: {
+        source: "candidate_consolidation",
+        candidate_id: candidate.candidate_id,
+        ontology_phase: "phase6",
+        is_anchor: true
+      },
+      supersessionMode: "replace"
+    });
+
+    promotedCount += result.promoted ? 1 : 0;
+    supersededCount += result.superseded ? 1 : 0;
+    decisions.push(
+      buildDecision(
+        result.superseded ? "SUPERSEDE" : "ADD",
+        `${result.superseded ? "Updated" : "Added"} belief on ${statement.topic}: ${statement.summary}.`,
+        result.superseded ? 0.8 : 0.76
+      )
+    );
+  }
+
+  await markCandidate(client, {
+    candidateId: candidate.candidate_id,
+    status: "accepted",
+    decisionReason: `Processed ${statements.length} belief statement(s).`,
+    canonicalKey: lastCanonicalKey,
+    normalizedValue: lastNormalizedValue
+  });
+
+  return {
+    decisions,
+    promotedCount,
+    supersededCount
+  };
+}
+
 async function syncDerivedRoutines(
   client: PoolClient,
   namespaceId: string
@@ -3310,7 +3547,7 @@ export async function runCandidateConsolidation(
         LEFT JOIN episodic_memory em ON em.id = mc.source_memory_id
         WHERE mc.namespace_id = $1
           AND mc.status = 'pending'
-          AND mc.candidate_type IN ('semantic_preference', 'semantic_skill', 'semantic_decision', 'semantic_constraint', 'semantic_style_spec', 'semantic_goal', 'semantic_plan')
+          AND mc.candidate_type IN ('semantic_preference', 'semantic_skill', 'semantic_decision', 'semantic_constraint', 'semantic_style_spec', 'semantic_goal', 'semantic_plan', 'semantic_belief')
         ORDER BY COALESCE(em.occurred_at, mc.created_at) ASC, mc.created_at ASC
         LIMIT $2
       `,
@@ -3336,6 +3573,8 @@ export async function runCandidateConsolidation(
                   ? await promoteGoalCandidate(client, candidate)
                   : candidate.candidate_type === "semantic_plan"
                     ? await promotePlanCandidate(client, candidate)
+                    : candidate.candidate_type === "semantic_belief"
+                      ? await promoteBeliefCandidate(client, candidate)
               : await promotePreferenceCandidate(client, candidate);
       processedCandidates += 1;
       promotedMemories += result.promotedCount;

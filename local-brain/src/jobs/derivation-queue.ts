@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 import { withClient, withTransaction } from "../db/client.js";
-import { deriveArtifactViaProvider } from "../derivations/service.js";
+import { attachTextDerivation, deriveArtifactViaProvider } from "../derivations/service.js";
 import { enqueueTargetVectorSync } from "./vector-sync.js";
 import { ProviderError } from "../providers/types.js";
 import type { ProviderModality } from "../providers/types.js";
@@ -146,6 +146,21 @@ function parseAutoVectorSyncConfig(
       source: "derivation_job_follow_up"
     }
   };
+}
+
+function readManualDerivationText(metadata: Record<string, unknown> | null): string | null {
+  if (!metadata) {
+    return null;
+  }
+
+  const direct = readString(metadata.manual_content_text);
+  if (direct) {
+    return direct;
+  }
+
+  const nested = isObject(metadata.manual_derivation) ? metadata.manual_derivation : null;
+  const nestedText = nested ? readString(nested.content_text) : undefined;
+  return nestedText ?? null;
 }
 
 function inferJobKind(artifactType: string, mimeType?: string | null): DerivationJobKind {
@@ -390,6 +405,7 @@ export async function processDerivationJobs(
 
   for (const job of jobs) {
     try {
+      const manualContentText = readManualDerivationText(job.metadata);
       if (job.job_kind === "embed") {
         const targetDerivationId = readString(job.metadata?.target_derivation_id);
         if (!targetDerivationId) {
@@ -433,22 +449,37 @@ export async function processDerivationJobs(
         continue;
       }
 
-      const result = await deriveArtifactViaProvider({
-        artifactId: job.artifact_id,
-        artifactObservationId: job.artifact_observation_id,
-        provider: job.provider ?? "external",
-        model: job.model ?? undefined,
-        derivationType: job.job_kind,
-        modality: job.modality,
-        maxOutputTokens: job.max_output_tokens ?? undefined,
-        outputDimensionality: job.output_dimensionality ?? undefined,
-        embed: false,
-        metadata: {
-          ...(job.metadata ?? {}),
-          derivation_job_id: job.id,
-          derivation_worker_id: workerId
-        }
-      });
+      const result = manualContentText
+        ? await attachTextDerivation({
+            artifactId: job.artifact_id,
+            artifactObservationId: job.artifact_observation_id,
+            sourceChunkId: job.source_chunk_id ?? undefined,
+            derivationType: job.job_kind,
+            text: manualContentText,
+            embed: false,
+            metadata: {
+              ...(job.metadata ?? {}),
+              derivation_job_id: job.id,
+              derivation_worker_id: workerId,
+              derivation_mode: "manual_fixture"
+            }
+          })
+        : await deriveArtifactViaProvider({
+            artifactId: job.artifact_id,
+            artifactObservationId: job.artifact_observation_id,
+            provider: job.provider ?? "external",
+            model: job.model ?? undefined,
+            derivationType: job.job_kind,
+            modality: job.modality,
+            maxOutputTokens: job.max_output_tokens ?? undefined,
+            outputDimensionality: job.output_dimensionality ?? undefined,
+            embed: false,
+            metadata: {
+              ...(job.metadata ?? {}),
+              derivation_job_id: job.id,
+              derivation_worker_id: workerId
+            }
+          });
 
       await withClient(async (client) => {
         await client.query(

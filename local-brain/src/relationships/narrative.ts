@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { loadNamespaceSelfProfileForClient, upsertNamespaceSelfProfileForClient } from "../identity/service.js";
 import type { SceneRecord, TimeGranularity } from "../types.js";
 
-type EntityType = "self" | "person" | "place" | "org" | "project" | "activity" | "media" | "skill" | "decision" | "constraint" | "routine" | "style_spec" | "goal" | "plan" | "concept" | "unknown";
+type EntityType = "self" | "person" | "place" | "org" | "project" | "activity" | "media" | "skill" | "decision" | "constraint" | "routine" | "style_spec" | "goal" | "plan" | "belief" | "concept" | "unknown";
 
 interface SceneSourceRef {
   readonly sceneIndex: number;
@@ -1231,6 +1231,57 @@ function extractClaimsFromScene(
     const bothLivedInMatch = sentenceText.match(/\bboth\s+lived\s+in\s+([^.,;]+?)(?:\s+for\b|\s+with\b|[.?!,;]|$)/iu);
     const companionPerson =
       lastPerson && normalizeName(lastPerson) !== normalizeName(resolvedSelfName ?? "") ? lastPerson : lastOtherPerson;
+    const explicitCurrentDatingMatch = sentenceText.match(
+      /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+is\s+(?:currently\s+)?dating\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/u
+    );
+    if (explicitCurrentDatingMatch) {
+      const subject = resolvePersonName(explicitCurrentDatingMatch[1], aliasMap, resolvedSelfName, explicitPeople);
+      const partner = resolvePersonName(explicitCurrentDatingMatch[2], aliasMap, resolvedSelfName, explicitPeople);
+      if (subject && partner && normalizeName(subject) !== normalizeName(partner)) {
+        claims.push({
+          claimType: "relationship",
+          subjectName: subject,
+          subjectType: subject === resolvedSelfName ? "self" : "person",
+          predicate: "was_with",
+          objectName: partner,
+          objectType: "person",
+          confidence: 0.9,
+          status: "accepted",
+          metadata: {
+            relationship_kind: "romantic"
+          }
+        });
+        lastPerson = subject;
+        if (normalizeName(subject) !== normalizeName(resolvedSelfName ?? "")) {
+          lastOtherPerson = subject;
+          recentPeople.add(subject);
+        }
+      }
+    }
+    const explicitGenericBreakupMatch = sentenceText.match(
+      /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+and\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+broke\s+up\b/u
+    );
+    if (explicitGenericBreakupMatch) {
+      const subject = resolvePersonName(explicitGenericBreakupMatch[1], aliasMap, resolvedSelfName, explicitPeople);
+      const partner = resolvePersonName(explicitGenericBreakupMatch[2], aliasMap, resolvedSelfName, explicitPeople);
+      if (subject && partner && normalizeName(subject) !== normalizeName(partner)) {
+        claims.push({
+          claimType: "relationship",
+          subjectName: subject,
+          subjectType: subject === resolvedSelfName ? "self" : "person",
+          predicate: "relationship_ended",
+          objectName: partner,
+          objectType: "person",
+          confidence: 0.88,
+          status: "accepted",
+          metadata: {
+            relationship_kind: "romantic",
+            historical_relationship: true,
+            relationship_transition: "ended"
+          }
+        });
+      }
+    }
     if (
       resolvedSelfName &&
       companionPerson &&
@@ -2719,6 +2770,35 @@ function buildActivityEventLabel(activity: DetectedSceneActivity): string {
   return normalizeWhitespace(`${activity.label}${people}${place}`);
 }
 
+function deriveSceneSalienceMetadata(content: string): Record<string, unknown> {
+  const lowered = content.toLowerCase();
+  const labels: string[] = [];
+  let sentimentScore = 0;
+  let surpriseMagnitude = 0;
+
+  if (/\b(frustrated|frustrating|annoyed|bothered|ghosted|angry)\b/u.test(lowered)) {
+    labels.push("frustrated");
+    sentimentScore -= 0.85;
+  }
+
+  if (/\b(excited|amazing|thrilled)\b/u.test(lowered)) {
+    labels.push("excited");
+    sentimentScore += 0.82;
+  }
+
+  if (/\b(surprising|surprised|surprise|realization|finally clicked)\b/u.test(lowered)) {
+    labels.push("surprised");
+    surpriseMagnitude = 0.9;
+  }
+
+  return {
+    salience_labels: [...new Set(labels)],
+    sentiment_score: Math.max(-1, Math.min(1, Math.round(sentimentScore * 1000) / 1000)),
+    surprise_magnitude: surpriseMagnitude,
+    is_surprise: surpriseMagnitude >= 0.8
+  };
+}
+
 function buildNarrativeEventDraft(scene: SceneRecord, claims: readonly ResolvedNarrativeClaim[]): NarrativeEventDraft {
   const activity = detectSceneActivity(scene.text);
   const primarySubject = claims.find(
@@ -2757,7 +2837,8 @@ function buildNarrativeEventDraft(scene: SceneRecord, claims: readonly ResolvedN
       source_sentence_text: activity ? normalizeWhitespace(splitSentences(scene.text)[0] ?? scene.text) : null,
       accepted_claim_count: claims.filter((claim) => claim.status === "accepted").length,
       total_claim_count: claims.length,
-      org_project_entity_ids: collectOrgProjectEntityIds(claims)
+      org_project_entity_ids: collectOrgProjectEntityIds(claims),
+      ...deriveSceneSalienceMetadata(scene.text)
     }
   };
 }

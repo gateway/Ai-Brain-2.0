@@ -9,6 +9,39 @@ function normalizeText(value: string): string {
   return value.replace(/\r\n/g, "\n").trim();
 }
 
+function deriveSalienceMetadata(content: string): Record<string, unknown> | null {
+  const lowered = content.toLowerCase();
+  const labels = new Set<string>();
+  let sentimentScore = 0;
+  let surpriseMagnitude = 0;
+
+  if (/\b(frustrated|frustrating|annoyed|bothered|ghosted|angry)\b/u.test(lowered)) {
+    labels.add("frustrated");
+    sentimentScore -= 0.85;
+  }
+
+  if (/\b(excited|amazing|thrilled)\b/u.test(lowered)) {
+    labels.add("excited");
+    sentimentScore += 0.82;
+  }
+
+  if (/\b(surprising|surprised|surprise|realization|finally clicked)\b/u.test(lowered)) {
+    labels.add("surprised");
+    surpriseMagnitude = 0.9;
+  }
+
+  if (labels.size === 0 && surpriseMagnitude === 0) {
+    return null;
+  }
+
+  return {
+    salience_labels: [...labels],
+    sentiment_score: Math.max(-1, Math.min(1, Math.round(sentimentScore * 1000) / 1000)),
+    surprise_magnitude: surpriseMagnitude,
+    is_surprise: surpriseMagnitude >= 0.8
+  };
+}
+
 function buildCandidateWrites(content: string, metadata: Record<string, unknown>): CandidateMemoryWrite[] {
   const writes: CandidateMemoryWrite[] = [];
   const tags = Array.isArray(metadata.tags) ? metadata.tags.filter((value): value is string => typeof value === "string") : [];
@@ -45,6 +78,10 @@ function buildCandidateWrites(content: string, metadata: Record<string, unknown>
     (/\b(?:i|we)\s+(?:am|are|'m|'re)\s+going\s+to\b/u.test(lowered) &&
       /\b(?:conference|trip|launch|meeting|event|visit|move)\b/u.test(lowered)) ||
     /\b(?:i|we)\s+will\s+(?:go|visit|launch|meet)\b/u.test(lowered);
+  const explicitBeliefCue =
+    /\b(?:i|we)\s+(?:now\s+)?believe\b/u.test(lowered) ||
+    /\b(?:my|our)\s+(?:stance|opinion)\s+on\b/u.test(lowered) ||
+    /\bin\s+my\s+view\b/u.test(lowered);
 
   if (firstPersonPreferenceCue || listPreferenceCue) {
     writes.push({
@@ -103,6 +140,15 @@ function buildCandidateWrites(content: string, metadata: Record<string, unknown>
   if (explicitPlanCue) {
     writes.push({
       candidateType: "semantic_plan",
+      content,
+      confidence: 0.72,
+      metadata
+    });
+  }
+
+  if (explicitBeliefCue) {
+    writes.push({
+      candidateType: "semantic_belief",
       content,
       confidence: 0.72,
       metadata
@@ -391,7 +437,8 @@ export async function ingestArtifact(request: IngestRequest): Promise<IngestResu
         ...(request.metadata ?? {}),
         importance_score: fragment.importanceScore ?? null,
         tags: fragment.tags ?? [],
-        source_type: request.sourceType
+        source_type: request.sourceType,
+        ...(deriveSalienceMetadata(fragment.text) ?? {})
       };
 
       const inserted = await insertFragment(client, {

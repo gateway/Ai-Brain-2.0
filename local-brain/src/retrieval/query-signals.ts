@@ -289,6 +289,47 @@ export function isPlanQuery(queryText: string): boolean {
   );
 }
 
+export function isBeliefQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bcurrent\s+stance\b/i.test(normalized) ||
+    /\bwhat\s+is\s+.+\s+(?:current\s+)?stance\b/i.test(normalized) ||
+    /\bhow\s+has\s+.+\s+(?:opinion|stance|belief)\b/i.test(normalized) ||
+    /\bwhat\s+does\s+.+\s+believe\b/i.test(normalized) ||
+    /\bdid\s+.+\s+still\s+support\b/i.test(normalized)
+  );
+}
+
+export function isHistoricalBeliefQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bhow\s+has\s+.+\s+(?:opinion|stance|belief)\b/i.test(normalized) ||
+    /\bdid\s+.+\s+still\s+support\b/i.test(normalized) ||
+    (/\b(?:opinion|stance|belief|support)\b/i.test(normalized) && /\bin\s+(?:[A-Z][a-z]+\s+)?(19\d{2}|20\d{2})\b/i.test(normalized))
+  );
+}
+
+export function isSalienceQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\b(?:surprising|surprise|realization)\b/i.test(normalized) ||
+    /\b(?:frustrating|frustration|frustrated|annoyed|bothered)\b/i.test(normalized) ||
+    /\b(?:excited|exciting|amazing|thrilled)\b/i.test(normalized)
+  );
+}
+
 export function preferredRelationshipPredicates(queryText: string): readonly string[] {
   const normalized = queryText.trim().toLowerCase();
   if (!normalized) {

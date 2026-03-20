@@ -17,6 +17,7 @@ same substrate instead of adding one-off extractors for every domain.
 - `constraint`: durable operating rules, guardrails, or “always/never” policies
 - `routine`: repeated weekly or habitual behaviors derived from repeated event evidence
 - `style_spec`: durable response-style or workflow rules grounded in explicit directive-style evidence
+- `belief`: durable stance or opinion truth that evolves through superseded historical versions
 - `artifact`: source files, transcripts, documents, contracts, media
 - `concept`: preferences, interests, styles, topics, abstract ideas that do not need stable identity yet
 
@@ -91,6 +92,8 @@ same substrate instead of adding one-off extractors for every domain.
 - `constraint` entities anchor durable rules and should be queryable as active operational truth.
 - `routine` entities anchor repeated habits only after deterministic promotion from multiple weeks of event evidence.
 - `style_spec` entities anchor durable response-style or workflow truth such as concise response preferences and ontology-work protocols.
+- `belief` entities anchor explicit stances or opinions while older versions remain historically queryable through supersession.
+- active romantic relationship truth can be mirrored into `procedural_memory` as `current_relationship` while ended tenures remain historical in `relationship_memory`.
 
 ## Hierarchy Rules
 
@@ -107,6 +110,7 @@ same substrate instead of adding one-off extractors for every domain.
   - time anchor
   - activity kind
   - links back to source fragments
+- episodic and narrative rows may also carry salience annotation such as `salience_labels`, `sentiment_score`, and `surprise_magnitude` without promoting emotion into current truth.
 
 ## Clarification Rules
 

@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { queryRows, withTransaction } from "../db/client.js";
 import { getProviderAdapter } from "../providers/registry.js";
 
-type BrainEntityType = "self" | "person" | "place" | "org" | "project" | "activity" | "media" | "skill" | "decision" | "constraint" | "routine" | "style_spec" | "goal" | "plan" | "concept" | "unknown";
+type BrainEntityType = "self" | "person" | "place" | "org" | "project" | "activity" | "media" | "skill" | "decision" | "constraint" | "routine" | "style_spec" | "goal" | "plan" | "belief" | "concept" | "unknown";
 type MentionRole = "subject" | "participant" | "location" | "organization" | "project" | "mentioned";
 type BrainAmbiguityType =
   | "possible_misspelling"
@@ -191,6 +191,10 @@ function coerceEntityType(value: unknown): BrainEntityType {
       return "goal";
     case "plan":
       return "plan";
+    case "belief":
+    case "opinion":
+    case "stance":
+      return "belief";
     case "concept":
     case "thing":
       return "concept";

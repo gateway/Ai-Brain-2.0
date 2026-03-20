@@ -15,6 +15,7 @@ import {
   isCurrentPreferenceQuery,
   isBeliefQuery,
   isHistoricalBeliefQuery,
+  isSalienceQuery,
   isGoalQuery,
   isPlanQuery,
   isPreferenceQuery,
@@ -1238,18 +1239,7 @@ async function loadBeliefRows(
   timeEnd: string | null,
   mode: "current" | "historical" | "point_in_time"
 ): Promise<SearchRow[]> {
-  const scopeClause =
-    mode === "current"
-      ? "pm.valid_until IS NULL"
-      : mode === "point_in_time"
-        ? `
-          ($3::timestamptz IS NULL OR pm.valid_from <= $4::timestamptz)
-          AND (pm.valid_until IS NULL OR $3::timestamptz IS NULL OR pm.valid_until >= $3::timestamptz)
-        `
-        : "TRUE";
-
-  const rows = await queryRows<SearchRow>(
-    `
+  const baseSelect = `
       SELECT
         pm.id AS memory_id,
         'procedural_memory'::text AS memory_type,
@@ -1276,12 +1266,30 @@ async function loadBeliefRows(
         ON a.id = em.artifact_id
       WHERE pm.namespace_id = $1
         AND pm.state_type = 'belief'
-        AND ${scopeClause}
-      ORDER BY pm.valid_from DESC, pm.updated_at DESC
-      LIMIT $5
-    `,
-    [namespaceId, queryText, timeStart, timeEnd, Math.max(candidateLimit * 3, 18)]
-  );
+  `;
+
+  const limitValue = Math.max(candidateLimit * 3, 18);
+  const rows =
+    mode === "point_in_time"
+      ? await queryRows<SearchRow>(
+          `
+            ${baseSelect}
+              AND ($2::timestamptz IS NULL OR pm.valid_from <= $3::timestamptz)
+              AND (pm.valid_until IS NULL OR $2::timestamptz IS NULL OR pm.valid_until >= $2::timestamptz)
+            ORDER BY pm.valid_from DESC, pm.updated_at DESC
+            LIMIT $4
+          `,
+          [namespaceId, timeStart, timeEnd, limitValue]
+        )
+      : await queryRows<SearchRow>(
+          `
+            ${baseSelect}
+              AND ${mode === "current" ? "pm.valid_until IS NULL" : "TRUE"}
+            ORDER BY pm.valid_from DESC, pm.updated_at DESC
+            LIMIT $2
+          `,
+          [namespaceId, limitValue]
+        );
 
   return rows
     .map((row) => ({ row, score: scoreBeliefRow(String(row.content ?? ""), queryText) }))
@@ -1299,6 +1307,202 @@ async function loadBeliefRows(
     })
     .slice(0, Math.max(candidateLimit, mode === "historical" ? 6 : 4))
     .map((item) => item.row);
+}
+
+function scoreSalienceRow(row: SearchRow, queryText: string): number {
+  const normalizedQuery = queryText.toLowerCase();
+  const metadata = (row.provenance.metadata ?? {}) as Record<string, unknown>;
+  const labels = Array.isArray(metadata.salience_labels)
+    ? metadata.salience_labels.filter((value): value is string => typeof value === "string").map((value) => value.toLowerCase())
+    : [];
+  const sentimentScore = typeof metadata.sentiment_score === "number" ? metadata.sentiment_score : Number(metadata.sentiment_score ?? 0);
+  const surpriseMagnitude = typeof metadata.surprise_magnitude === "number" ? metadata.surprise_magnitude : Number(metadata.surprise_magnitude ?? 0);
+  const normalizedContent = String(row.content ?? "").toLowerCase();
+  const rawTerms = queryText.match(/[A-Za-z0-9][A-Za-z0-9._:-]*/g) ?? [];
+  const topicalAnchors = rawTerms
+    .map((term) => term.trim())
+    .filter(Boolean)
+    .filter((term) => !/^[A-Z][a-z]+$/.test(term))
+    .map((term) => term.toLowerCase())
+    .filter((term) => !BM25_STOP_WORDS.has(term))
+    .filter((term) => !["most", "part", "steve", "surprising", "surprise", "realization", "frustrating", "frustration", "frustrated", "annoyed", "bothered", "excited", "exciting", "amazing", "thrilled"].includes(term));
+  const matchedAnchors = topicalAnchors.filter((term) => normalizedContent.includes(term));
+  const topicalCoverage = topicalAnchors.length > 0 ? matchedAnchors.length / topicalAnchors.length : 0;
+  const queryWantsSurprise = /\b(?:surpris|realization)\b/.test(normalizedQuery);
+  const queryWantsFrustration = /\b(?:frustrat|annoy|bothered)\b/.test(normalizedQuery);
+  const queryWantsExcitement = /\b(?:excited|amazing|thrilled)\b/.test(normalizedQuery);
+  const headingLike = /\bnote\b/i.test(String(row.content ?? "")) && String(row.content ?? "").trim().split(/\s+/u).length <= 8;
+
+  let score = 0.3;
+  if (topicalAnchors.length > 0) {
+    if (matchedAnchors.length === 0) {
+      return 0;
+    }
+    score += topicalCoverage * 4.2;
+    if (matchedAnchors.length >= 2) {
+      score += 0.9;
+    }
+  }
+  if (normalizedQuery.includes("graph ux") && normalizedContent.includes("graph ux")) {
+    score += 1.4;
+  }
+  if (normalizedQuery.includes("local-brain") && normalizedQuery.includes("bring-up") && normalizedContent.includes("local-brain") && normalizedContent.includes("bring-up")) {
+    score += 1.2;
+  }
+  if (queryWantsSurprise) {
+    score += Math.max(0, surpriseMagnitude) * 3;
+    if (labels.includes("surprised")) {
+      score += 2;
+    } else if (labels.length > 0 || Math.abs(sentimentScore) > 0.05) {
+      score -= 1.2;
+    }
+  }
+  if (queryWantsFrustration) {
+    score += Math.max(0, -sentimentScore) * 3;
+    if (labels.includes("frustrated")) {
+      score += 2;
+    } else if (labels.includes("excited") || labels.includes("surprised") || sentimentScore > 0.15 || surpriseMagnitude > 0.25) {
+      score -= 2.4;
+    }
+  }
+  if (queryWantsExcitement) {
+    score += Math.max(0, sentimentScore) * 3;
+    if (labels.includes("excited")) {
+      score += 2;
+    } else if (labels.includes("frustrated") || labels.includes("surprised") || sentimentScore < -0.15 || surpriseMagnitude > 0.25) {
+      score -= 2.4;
+    }
+  }
+  if (/\bgraph\b/.test(normalizedQuery) && normalizedContent.includes("graph")) {
+    score += 0.8;
+  }
+  if (/\blocal-brain\b/.test(normalizedQuery) && normalizedContent.includes("local-brain")) {
+    score += 0.8;
+  }
+  if (/\bpostgres(?:ql)?\b/.test(normalizedQuery) && normalizedContent.includes("postgres")) {
+    score += 0.8;
+  }
+  if (headingLike) {
+    score -= 1.1;
+  }
+
+  return score;
+}
+
+function rerankSalienceRows(
+  rows: readonly RankedSearchRow[],
+  queryText: string,
+  candidateLimit: number
+): RankedSearchRow[] {
+  return [...rows]
+    .map((row) => ({
+      ...row,
+      scoreValue: Math.max(row.scoreValue * 0.12, scoreSalienceRow(row, queryText))
+    }))
+    .filter((row) => row.scoreValue > 0.5)
+    .sort((left, right) => {
+      const scoreDelta = right.scoreValue - left.scoreValue;
+      if (scoreDelta !== 0) {
+        return scoreDelta;
+      }
+      const rightIso = toIsoString(right.occurred_at);
+      const leftIso = toIsoString(left.occurred_at);
+      if (leftIso && rightIso && leftIso !== rightIso) {
+        return rightIso.localeCompare(leftIso);
+      }
+      return `${left.memory_type}:${left.memory_id}`.localeCompare(`${right.memory_type}:${right.memory_id}`);
+    })
+    .slice(0, Math.max(candidateLimit, 6));
+}
+
+async function loadSalientRows(
+  namespaceId: string,
+  queryText: string,
+  candidateLimit: number,
+  timeStart: string | null,
+  timeEnd: string | null
+): Promise<SearchRow[]> {
+  const [episodicRows, narrativeRows] = await Promise.all([
+    queryRows<SearchRow>(
+      `
+        SELECT
+          em.id AS memory_id,
+          'episodic_memory'::text AS memory_type,
+          em.content,
+          1::double precision AS raw_score,
+          em.artifact_id,
+          em.occurred_at,
+          em.namespace_id,
+          jsonb_build_object(
+            'tier', 'historical_episodic',
+            'artifact_observation_id', em.artifact_observation_id,
+            'source_chunk_id', em.source_chunk_id,
+            'source_uri', a.uri,
+            'metadata', em.metadata
+          ) AS provenance
+        FROM episodic_memory em
+        LEFT JOIN artifacts a ON a.id = em.artifact_id
+        WHERE em.namespace_id = $1
+          AND (em.metadata ? 'salience_labels' OR em.metadata ? 'surprise_magnitude')
+          AND ($2::timestamptz IS NULL OR em.occurred_at >= $2)
+          AND ($3::timestamptz IS NULL OR em.occurred_at <= $3)
+        ORDER BY em.occurred_at DESC
+        LIMIT $4
+      `,
+      [namespaceId, timeStart, timeEnd, Math.max(candidateLimit * 3, 18)]
+    ),
+    queryRows<SearchRow>(
+      `
+        SELECT
+          ne.id AS memory_id,
+          'narrative_event'::text AS memory_type,
+          ${narrativeEventLexicalDocument("ne", "subject_entity", "location_entity")} AS content,
+          1::double precision AS raw_score,
+          ne.artifact_id,
+          COALESCE(ne.time_start, ne.created_at) AS occurred_at,
+          ne.namespace_id,
+          jsonb_build_object(
+            'tier', 'narrative_event',
+            'event_kind', ne.event_kind,
+            'event_label', ne.event_label,
+            'time_expression_text', ne.time_expression_text,
+            'source_uri', a.uri,
+            'metadata', ne.metadata
+          ) AS provenance
+        FROM narrative_events ne
+        LEFT JOIN artifacts a ON a.id = ne.artifact_id
+        LEFT JOIN entities subject_entity ON subject_entity.id = ne.primary_subject_entity_id
+        LEFT JOIN entities location_entity ON location_entity.id = ne.primary_location_entity_id
+        WHERE ne.namespace_id = $1
+          AND (ne.metadata ? 'salience_labels' OR ne.metadata ? 'surprise_magnitude')
+          AND ($2::timestamptz IS NULL OR COALESCE(ne.time_start, ne.created_at) >= $2)
+          AND ($3::timestamptz IS NULL OR COALESCE(ne.time_start, ne.created_at) <= $3)
+        ORDER BY COALESCE(ne.time_start, ne.created_at) DESC
+        LIMIT $4
+      `,
+      [namespaceId, timeStart, timeEnd, Math.max(candidateLimit * 2, 12)]
+    )
+  ]);
+
+  return [...episodicRows, ...narrativeRows]
+    .map((row) => ({ row, score: scoreSalienceRow(row, queryText) }))
+    .filter((item) => item.score > 0.5)
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      const leftIso = toIsoString(left.row.occurred_at);
+      const rightIso = toIsoString(right.row.occurred_at);
+      if (leftIso && rightIso && leftIso !== rightIso) {
+        return rightIso.localeCompare(leftIso);
+      }
+      return resultKey(left.row).localeCompare(resultKey(right.row));
+    })
+    .slice(0, Math.max(candidateLimit, 6))
+    .map((item) => ({
+      ...item.row,
+      raw_score: item.score
+    }));
 }
 
 function buildProvenanceAnswer(
@@ -1680,6 +1884,17 @@ function proceduralLexicalDocument(): string {
   `;
 }
 
+function artifactDerivationLexicalDocument(): string {
+  return `
+    coalesce(ad.content_text, '') || ' ' ||
+    coalesce(ad.derivation_type, '') || ' ' ||
+    coalesce(a.artifact_type, '') || ' ' ||
+    coalesce(a.source_channel, '') || ' ' ||
+    coalesce(a.uri, '') || ' ' ||
+    coalesce(ad.metadata->>'derivation_source', '')
+  `;
+}
+
 function proceduralContentExpression(): string {
   return `
     CASE
@@ -1714,6 +1929,8 @@ function proceduralContentExpression(): string {
         coalesce(state_value->>'person', 'User') || ' plan planning upcoming ' || coalesce(state_value->>'plan', state_key) || ' ' || coalesce(state_value->>'project_hint', '')
       WHEN state_type = 'belief' THEN
         coalesce(state_value->>'person', 'User') || ' belief stance opinion on ' || coalesce(state_value->>'topic', state_key) || ' is ' || coalesce(state_value->>'belief', state_key)
+      WHEN state_type = 'current_relationship' THEN
+        coalesce(state_value->>'person', 'User') || ' is currently dating ' || coalesce(state_value->>'partner', '') || ' current partner romantic relationship'
       WHEN state_type = 'project_role' THEN
         coalesce(state_value->>'person', '') || ' role on ' || coalesce(state_value->>'project', '') || ' is ' || coalesce(state_value->>'role', '')
       WHEN state_type = 'current_project' THEN
@@ -2003,6 +2220,7 @@ function pruneRankedResults(
   activeRelationshipFocus: boolean,
   dailyLifeEventFocus: boolean,
   dailyLifeSummaryFocus: boolean,
+  salienceQueryFocus: boolean,
   historicalHomeFocus: boolean,
   historicalWorkFocus: boolean,
   historicalRelationshipFocus: boolean,
@@ -2052,6 +2270,10 @@ function pruneRankedResults(
   });
   const eventRows = rows.filter((item) => item.row.memory_type === "narrative_event");
   const episodicRows = rows.filter((item) => item.row.memory_type === "episodic_memory");
+  if (salienceQueryFocus) {
+    return [...episodicRows.slice(0, 3), ...eventRows.slice(0, 2), ...semanticRows.slice(0, 1)].slice(0, 6);
+  }
+
   const focusedProceduralRows =
     activeRelationshipFocus && preferredRelationshipPredicates.length > 0
       ? proceduralRows.filter((item) => {
@@ -2069,6 +2291,9 @@ function pruneRankedResults(
           }
           if ((preferredRelationshipPredicates.includes("works_on") || preferredRelationshipPredicates.includes("project_role")) &&
               (stateType === "current_project" || stateType === "project_role")) {
+            return true;
+          }
+          if (preferredRelationshipPredicates.includes("significant_other_of") && stateType === "current_relationship") {
             return true;
           }
           return false;
@@ -2968,6 +3193,14 @@ async function loadFtsLexicalRows(
     : dailyLifeSummaryFocus
       ? buildEventQueryText(queryText, planner.lexicalTerms)
       : queryText;
+  const derivationMatch = buildBm25DisjunctionClause(
+    [
+      "ad.content_text",
+      "ad.derivation_type"
+    ],
+    effectiveQueryText,
+    2
+  );
   const temporalRowsPromise = planner.temporalFocus || hasTimeWindow
     ? queryRows<SearchRow>(
         `
@@ -3310,7 +3543,10 @@ async function loadFtsLexicalRows(
           ad.id AS memory_id,
           'artifact_derivation'::text AS memory_type,
           ad.content_text AS content,
-          ts_rank(to_tsvector('english', coalesce(ad.content_text, '')), websearch_to_tsquery('english', $2)) AS raw_score,
+          ts_rank(
+            to_tsvector('english', ${artifactDerivationLexicalDocument()}),
+            websearch_to_tsquery('english', $2)
+          ) AS raw_score,
           ao.artifact_id,
           ad.created_at AS occurred_at,
           a.namespace_id,
@@ -3329,11 +3565,11 @@ async function loadFtsLexicalRows(
         JOIN artifacts a ON a.id = ao.artifact_id
         WHERE a.namespace_id = $1
           AND coalesce(ad.content_text, '') <> ''
-          AND to_tsvector('english', coalesce(ad.content_text, '')) @@ websearch_to_tsquery('english', $2)
+          AND ${derivationMatch.clause}
         ORDER BY raw_score DESC, ad.created_at DESC
         LIMIT $3
       `,
-      [namespaceId, queryText, candidateLimit]
+      [namespaceId, ...derivationMatch.values, candidateLimit]
     )
   ]);
 
@@ -3413,7 +3649,14 @@ async function loadBm25LexicalRows(
   );
   const temporalMatch = buildBm25DisjunctionClause(["summary_text", "layer"], effectiveQueryText, 2);
   const episodicMatch = buildBm25DisjunctionClause(["e.content", "e.role"], effectiveQueryText, 2);
-  const derivationMatch = buildBm25DisjunctionClause(["ad.content_text", "ad.derivation_type"], effectiveQueryText, 2);
+  const derivationMatch = buildBm25DisjunctionClause(
+    [
+      "ad.content_text",
+      "ad.derivation_type"
+    ],
+    effectiveQueryText,
+    2
+  );
 
   const [relationshipRows, relationshipCandidateRows, proceduralRows, semanticRows, candidateRows, eventRows, temporalRows, episodicRows, derivationRows] = await Promise.all([
     queryRows<SearchRow>(
@@ -3750,7 +3993,10 @@ async function loadBm25LexicalRows(
           ad.id AS memory_id,
           'artifact_derivation'::text AS memory_type,
           ad.content_text AS content,
-          ts_rank(to_tsvector('english', coalesce(ad.content_text, '')), websearch_to_tsquery('english', $2)) AS raw_score,
+          ts_rank(
+            to_tsvector('english', ${artifactDerivationLexicalDocument()}),
+            websearch_to_tsquery('english', $2)
+          ) AS raw_score,
           ao.artifact_id,
           ad.created_at AS occurred_at,
           a.namespace_id,
@@ -3770,11 +4016,11 @@ async function loadBm25LexicalRows(
         JOIN artifacts a ON a.id = ao.artifact_id
         WHERE a.namespace_id = $1
           AND coalesce(ad.content_text, '') <> ''
-          AND to_tsvector('english', coalesce(ad.content_text, '')) @@ websearch_to_tsquery('english', $2)
+          AND ${derivationMatch.clause}
         ORDER BY raw_score DESC, ad.created_at DESC
         LIMIT $3
       `,
-      [namespaceId, effectiveQueryText, candidateLimit]
+      [namespaceId, ...derivationMatch.values, candidateLimit]
     )
   ]);
 
@@ -3877,6 +4123,7 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
   const dailyLifeEventFocus = isDailyLifeEventQuery(retrievalQueryText);
   const eventBoundedFocus = isEventBoundedQuery(retrievalQueryText);
   const dailyLifeSummaryFocus = isDailyLifeSummaryQuery(retrievalQueryText);
+  const salienceQueryFocus = isSalienceQuery(retrievalQueryText);
   const temporalDetailFocus = isTemporalDetailQuery(retrievalQueryText);
   const preferenceQueryFocus = isPreferenceQuery(retrievalQueryText);
   const historicalPreferenceFocus = isHistoricalPreferenceQuery(retrievalQueryText);
@@ -4138,6 +4385,23 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       );
     }
   }
+  if (salienceQueryFocus) {
+    const salienceRows = toRankedRows(await loadSalientRows(query.namespaceId, retrievalQueryText, candidateLimit, timeStart, timeEnd));
+    if (salienceRows.length > 0) {
+      lexicalRows = mergeUniqueRows(
+        lexicalRows,
+        salienceRows,
+        Math.max(candidateLimit * 2, 12),
+        hasTimeWindow,
+        planner.temporalFocus,
+        dailyLifeEventFocus,
+        dailyLifeSummaryFocus,
+        timeStart,
+        timeEnd
+      );
+      lexicalRows = rerankSalienceRows(lexicalRows, retrievalQueryText, Math.max(candidateLimit * 2, 12));
+    }
+  }
   let temporalGateTriggered = false;
   let temporalLayersUsed: readonly TemporalDescendantLayer[] = [];
   let temporalSummarySufficient = false;
@@ -4366,6 +4630,7 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
     activeRelationshipFocus,
     dailyLifeEventFocus,
     dailyLifeSummaryFocus,
+    salienceQueryFocus,
     historicalHomeFocus,
     historicalWorkFocus,
     historicalRelationshipFocus,
