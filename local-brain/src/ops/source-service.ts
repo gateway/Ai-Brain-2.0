@@ -271,6 +271,13 @@ export interface OpsRuntimeOperationsSettings {
     readonly defaultScanSchedule: string;
     readonly autoImportOnScan: boolean;
   };
+  readonly derivation: {
+    readonly enabled: boolean;
+    readonly workerIntervalSeconds: number;
+    readonly batchLimit: number;
+    readonly provider?: "external" | "openrouter" | "gemini";
+    readonly model?: string;
+  };
   readonly outbox: {
     readonly workerIntervalSeconds: number;
     readonly batchLimit: number;
@@ -852,6 +859,10 @@ export function resolveRuntimeOperationsSettings(metadata: Record<string, unknow
     typed.sourceMonitor && typeof typed.sourceMonitor === "object" && !Array.isArray(typed.sourceMonitor)
       ? (typed.sourceMonitor as Record<string, unknown>)
       : {};
+  const derivation =
+    typed.derivation && typeof typed.derivation === "object" && !Array.isArray(typed.derivation)
+      ? (typed.derivation as Record<string, unknown>)
+      : {};
   const outbox =
     typed.outbox && typeof typed.outbox === "object" && !Array.isArray(typed.outbox)
       ? (typed.outbox as Record<string, unknown>)
@@ -873,6 +884,25 @@ export function resolveRuntimeOperationsSettings(metadata: Record<string, unknow
           ? sourceMonitor.defaultScanSchedule
           : DEFAULT_SCAN_SCHEDULE,
       autoImportOnScan: sourceMonitor.autoImportOnScan === undefined ? true : Boolean(sourceMonitor.autoImportOnScan)
+    },
+    derivation: {
+      enabled: derivation.enabled === undefined ? true : Boolean(derivation.enabled),
+      workerIntervalSeconds:
+        typeof derivation.workerIntervalSeconds === "number" && Number.isFinite(derivation.workerIntervalSeconds)
+          ? Math.max(5, derivation.workerIntervalSeconds)
+          : 45,
+      batchLimit:
+        typeof derivation.batchLimit === "number" && Number.isFinite(derivation.batchLimit)
+          ? Math.max(1, derivation.batchLimit)
+          : 12,
+      provider:
+        derivation.provider === "openrouter" || derivation.provider === "gemini" || derivation.provider === "external"
+          ? derivation.provider
+          : "external",
+      model:
+        typeof derivation.model === "string" && derivation.model.trim()
+          ? derivation.model
+          : undefined
     },
     outbox: {
       workerIntervalSeconds:

@@ -22,6 +22,9 @@ Research guidance for sequencing:
 
 - integrated ontology/retrieval push is complete and replay-green
 - completed slices in the latest pass:
+  - universal mutable-state reconsolidation across active procedural namespaces into `state_summary` semantic truth with deterministic supersession
+  - production runtime derivation worker with ops worker health and manual processing endpoint
+  - richer operator visibility for temporal containment audits and causal supersession overlays on the ops timeline view
   - broader replay corpus
   - final natural-language query pack
   - complexity-aware recall-planner gating
@@ -36,27 +39,27 @@ Research guidance for sequencing:
   - hierarchy-aware recall for structural `parent_entity_id` chains with exact hierarchy stopping rules
   - generalized heuristic induction from repeated evidence into reusable `constraint` truth
 - latest green replay report:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T08-17-33-725Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T09-34-07-426Z.json`
 - latest green scale report:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T08-17-47-452Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T09-34-48-854Z.json`
 - current replay snapshot:
   - `60 confident`
   - `1 weak`
   - `1 missing`
 - current scale snapshot:
   - `86 generated artifacts`
-  - `p50 31.69ms`
-  - `p95 48.1ms`
+  - `p50 31.22ms`
+  - `p95 44.14ms`
   - `Steve focus graph: 54 nodes / 70 edges`
 - the remaining weak/missing cases are intentional:
   - pre-reconsolidation day-summary support is `weak`
   - unresolved kinship queries like `who is Uncle?` return a clarification-driven `missing` abstention
   - unresolved vague-place queries like `where was the summer cabin?` return a clarification-driven `missing` abstention
 - NotebookLM final review agrees this is the conservative right direction.
-- remaining top deterministic gaps from that review:
-  - production wiring for live multimodal workers beyond replay fixtures
-  - universal semantic reconciliation / generalized supersession across all mutable namespaces
-  - richer operator visibility for temporal containment and causal overlays
+- NotebookLM agreed with the conservative order on the latest pass.
+- next highest-value deterministic gap if we do not want to overbuild:
+  - deeper sufficiency-gated TMT descent beyond the current exact day/session coverage
+  - live operator wiring for multimodal worker outputs back into richer session/operator UX
 
 ## Phase 1: Substrate Hardening
 

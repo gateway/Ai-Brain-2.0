@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { processBrainOutboxEvents, type BrainOutboxProcessResult } from "../clarifications/service.js";
 import { queryRows } from "../db/client.js";
+import { processDerivationJobs, type ProcessDerivationJobsResult } from "../jobs/derivation-queue.js";
 import {
   runSemanticTemporalSummaryOverlay,
   runTemporalSummaryScaffold,
@@ -15,7 +16,7 @@ import {
   type ProcessScheduledMonitoredSourcesResult
 } from "./source-service.js";
 
-export type WorkerKey = "source_monitor" | "outbox" | "temporal_summary";
+export type WorkerKey = "source_monitor" | "derivation" | "outbox" | "temporal_summary";
 type WorkerRunStatus = "running" | "succeeded" | "partial" | "failed" | "skipped";
 type WorkerTriggerType = "manual" | "scheduled" | "loop" | "onboarding" | "repair";
 
@@ -151,6 +152,9 @@ function intervalSecondsForWorker(workerKey: WorkerKey, settings: OpsRuntimeOper
   if (workerKey === "source_monitor") {
     return settings.sourceMonitor.workerIntervalSeconds;
   }
+  if (workerKey === "derivation") {
+    return settings.derivation.workerIntervalSeconds;
+  }
   if (workerKey === "outbox") {
     return settings.outbox.workerIntervalSeconds;
   }
@@ -160,6 +164,9 @@ function intervalSecondsForWorker(workerKey: WorkerKey, settings: OpsRuntimeOper
 function enabledForWorker(workerKey: WorkerKey, settings: OpsRuntimeOperationsSettings): boolean {
   if (workerKey === "source_monitor") {
     return settings.sourceMonitor.enabled;
+  }
+  if (workerKey === "derivation") {
+    return settings.derivation.enabled;
   }
   if (workerKey === "temporal_summary") {
     return settings.temporalSummary.enabled;
@@ -309,6 +316,79 @@ export async function executeSourceMonitorWorker(input?: {
       summary: {
         failure_category: classifyWorkerFailure(error).category,
         retry_guidance: classifyWorkerFailure(error).retryGuidance
+      }
+    });
+    throw error;
+  }
+}
+
+export async function executeDerivationWorker(input?: {
+  readonly namespaceId?: string;
+  readonly provider?: string;
+  readonly limit?: number;
+  readonly triggerType?: WorkerTriggerType;
+  readonly workerId?: string;
+}): Promise<ProcessDerivationJobsResult> {
+  const bootstrap = await getBootstrapState();
+  const settings = resolveRuntimeOperationsSettings(bootstrap.metadata);
+  const runId = await createWorkerRun({
+    workerKey: "derivation",
+    triggerType: input?.triggerType ?? "manual",
+    namespaceId: input?.namespaceId,
+    workerId: input?.workerId
+  });
+
+  if (!settings.derivation.enabled) {
+    await finishWorkerRun(runId, {
+      status: "skipped",
+      nextDueAt: null,
+      summary: {
+        reason: "derivation worker disabled in bootstrap operations settings"
+      }
+    });
+
+    return {
+      workerId: input?.workerId ?? "derivation:disabled",
+      claimed: 0,
+      completed: 0,
+      failed: 0,
+      retried: 0
+    };
+  }
+
+  try {
+    const result = await processDerivationJobs({
+      namespaceId: input?.namespaceId,
+      provider: input?.provider,
+      limit: input?.limit ?? settings.derivation.batchLimit,
+      workerId: input?.workerId
+    });
+
+    await finishWorkerRun(runId, {
+      status: result.failed > 0 && result.completed > 0 ? "partial" : result.failed > 0 ? "failed" : "succeeded",
+      attemptedCount: result.claimed,
+      processedCount: result.completed,
+      failedCount: result.failed,
+      skippedCount: 0,
+      nextDueAt: computeNextDueAt(settings.derivation.workerIntervalSeconds),
+      summary: {
+        provider: input?.provider ?? settings.derivation.provider ?? null,
+        model: settings.derivation.model ?? null,
+        retried: result.retried
+      }
+    });
+
+    return result;
+  } catch (error) {
+    const failure = classifyWorkerFailure(error);
+    await finishWorkerRun(runId, {
+      status: "failed",
+      nextDueAt: computeNextDueAt(settings.derivation.workerIntervalSeconds),
+      errorClass: failure.errorClass,
+      errorMessage: failure.message,
+      summary: {
+        failure_category: failure.category,
+        retry_guidance: failure.retryGuidance
       }
     });
     throw error;
@@ -524,7 +604,7 @@ export async function getRuntimeWorkerStatus(): Promise<OpsRuntimeWorkerStatus> 
   }
 
   const nowMs = Date.now();
-  const workers: OpsWorkerHealth[] = (["source_monitor", "outbox", "temporal_summary"] as const).map((workerKey) => {
+  const workers: OpsWorkerHealth[] = (["source_monitor", "derivation", "outbox", "temporal_summary"] as const).map((workerKey) => {
     const enabled = enabledForWorker(workerKey, settings);
     const intervalSeconds = intervalSecondsForWorker(workerKey, settings);
     const latestRun = latestByKey.get(workerKey);

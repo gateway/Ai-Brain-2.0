@@ -5,11 +5,13 @@ import { closePool, queryRows, withTransaction } from "../db/client.js";
 import { runMigrations } from "../db/migrations.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
+import { runUniversalMutableReconsolidation, runMemoryReconsolidation } from "../jobs/memory-reconsolidation.js";
 import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
-import { getOpsRelationshipGraph } from "../ops/service.js";
-import { runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
-import { runMemoryReconsolidation } from "../jobs/memory-reconsolidation.js";
-import { enqueueDerivationJob, processDerivationJobs } from "../jobs/derivation-queue.js";
+import { getOpsRelationshipGraph, getOpsTimelineView } from "../ops/service.js";
+import { executeDerivationWorker } from "../ops/runtime-worker-service.js";
+import { runSemanticDecay } from "../jobs/semantic-decay.js";
+import { runTemporalNodeArchival, runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
+import { enqueueDerivationJob } from "../jobs/derivation-queue.js";
 import { searchMemory } from "../retrieval/service.js";
 import type { RecallConfidenceGrade } from "../retrieval/types.js";
 import type { RecallResult, SourceType } from "../types.js";
@@ -91,6 +93,12 @@ interface ReplayGraphResult {
   readonly failures: readonly string[];
 }
 
+interface ReplayOpsResult {
+  readonly name: string;
+  readonly passed: boolean;
+  readonly failures: readonly string[];
+}
+
 export interface LifeReplayBenchmarkReport {
   readonly generatedAt: string;
   readonly namespaceId: string;
@@ -99,6 +107,7 @@ export interface LifeReplayBenchmarkReport {
   readonly queryResults: readonly ReplayQueryResult[];
   readonly stateResults: readonly ReplayStateResult[];
   readonly graphResults: readonly ReplayGraphResult[];
+  readonly opsResults: readonly ReplayOpsResult[];
   readonly confidentCount: number;
   readonly weakCount: number;
   readonly missingCount: number;
@@ -974,6 +983,14 @@ const GRAPH_EXPECTATIONS: readonly ReplayGraphExpectation[] = [
   }
 ];
 
+const OPS_EXPECTATIONS = [
+  {
+    name: "timeline_overlay_audit",
+    timeStart: "2024-01-01T00:00:00Z",
+    timeEnd: "2026-12-31T23:59:59Z"
+  }
+] as const;
+
 const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
   {
     name: "current_home_state",
@@ -1362,6 +1379,17 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     expectIncludes: ["ocr completed", "transcription completed"]
   },
   {
+    name: "derivation_worker_run_logged",
+    sql: `
+      SELECT concat(worker_key, ' ', status, ' ', coalesce(summary_json->>'provider', 'none')) AS value
+      FROM ops.worker_runs
+      WHERE worker_key = 'derivation'
+      ORDER BY started_at DESC
+      LIMIT 1
+    `,
+    expectIncludes: ["derivation succeeded", "external"]
+  },
+  {
     name: "routine_entities_exist",
     sql: `
       SELECT concat(state_type, ' ', coalesce(state_value->>'routine', state_key)) AS value
@@ -1468,6 +1496,110 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
       ORDER BY state_key
     `,
     expectIncludes: ["current_primary_goal", "Stay in Thailand"]
+  },
+  {
+    name: "mutable_goal_state_summary_active",
+    sql: `
+      SELECT concat(memory_kind, ' ', canonical_key, ' ', content_abstract) AS value
+      FROM semantic_memory
+      WHERE namespace_id = 'personal'
+        AND memory_kind = 'state_summary'
+        AND canonical_key = 'reconsolidated:state_summary:goal:current_primary_goal'
+        AND status = 'active'
+        AND valid_until IS NULL
+      ORDER BY valid_from DESC
+      LIMIT 1
+    `,
+    expectIncludes: ["state_summary reconsolidated:state_summary:goal:current_primary_goal", "Stay in Thailand"]
+  },
+  {
+    name: "mutable_goal_state_summary_superseded",
+    sql: `
+      SELECT concat(status, ' ', canonical_key, ' ', content_abstract) AS value
+      FROM semantic_memory
+      WHERE namespace_id = 'personal'
+        AND canonical_key = 'reconsolidated:state_summary:goal:current_primary_goal'
+        AND status = 'superseded'
+      ORDER BY valid_from DESC
+    `,
+    expectIncludes: ["superseded reconsolidated:state_summary:goal:current_primary_goal", "test stale goal text"]
+  },
+  {
+    name: "archived_non_anchor_semantic_summary_exists",
+    sql: `
+      SELECT concat(status, ' ', canonical_key, ' ', coalesce(metadata->>'archival_tier', ''), ' ', content_abstract) AS value
+      FROM semantic_memory
+      WHERE namespace_id = 'personal'
+        AND canonical_key = 'reconsolidated:profile_summary:legacy_archive:apogee'
+      ORDER BY valid_from DESC
+      LIMIT 1
+    `,
+    expectIncludes: ["archived reconsolidated:profile_summary:legacy_archive:apogee cold Legacy project archive summary for Apogee work history"]
+  },
+  {
+    name: "anchor_state_summary_not_archived",
+    sql: `
+      SELECT concat(status, ' ', canonical_key, ' ', coalesce(metadata->>'source', '')) AS value
+      FROM semantic_memory
+      WHERE namespace_id = 'personal'
+        AND canonical_key = 'reconsolidated:state_summary:goal:current_primary_goal'
+      ORDER BY valid_from DESC
+      LIMIT 1
+    `,
+    expectIncludes: ["active reconsolidated:state_summary:goal:current_primary_goal"]
+  },
+  {
+    name: "semantic_archival_event_logged",
+    sql: `
+      SELECT concat(action, ' ', coalesce(sde.metadata->>'archival_tier', ''), ' ', canonical_key) AS value
+      FROM semantic_decay_events sde
+      JOIN semantic_memory sm ON sm.id = sde.semantic_memory_id
+      WHERE sde.namespace_id = 'personal'
+        AND sm.canonical_key = 'reconsolidated:profile_summary:legacy_archive:apogee'
+      ORDER BY sde.created_at DESC
+      LIMIT 1
+    `,
+    expectIncludes: ["archived cold reconsolidated:profile_summary:legacy_archive:apogee"]
+  },
+  {
+    name: "archived_temporal_day_nodes_exist",
+    sql: `
+      SELECT concat(status, ' ', archival_tier, ' ', layer, ' ', to_char(period_start, 'YYYY-MM-DD')) AS value
+      FROM temporal_nodes
+      WHERE namespace_id = 'personal'
+        AND layer = 'day'
+        AND status = 'archived'
+      ORDER BY period_start ASC
+      LIMIT 3
+    `,
+    expectIncludes: ["archived cold day"]
+  },
+  {
+    name: "archived_temporal_members_preserved",
+    sql: `
+      SELECT concat(tn.status, ' ', tn.archival_tier, ' ', count(tnm.id)::text) AS value
+      FROM temporal_nodes tn
+      JOIN temporal_node_members tnm ON tnm.temporal_node_id = tn.id
+      WHERE tn.namespace_id = 'personal'
+        AND tn.layer = 'day'
+        AND tn.status = 'archived'
+      GROUP BY tn.id, tn.status, tn.archival_tier
+      ORDER BY count(tnm.id) DESC, tn.id
+      LIMIT 1
+    `,
+    expectIncludes: ["archived cold"]
+  },
+  {
+    name: "temporal_archival_event_logged",
+    sql: `
+      SELECT concat(action, ' ', new_tier, ' ', tn.layer) AS value
+      FROM temporal_decay_events tde
+      JOIN temporal_nodes tn ON tn.id = tde.temporal_node_id
+      WHERE tde.namespace_id = 'personal'
+      ORDER BY tde.created_at DESC
+      LIMIT 5
+    `,
+    expectIncludes: ["archived cold day"]
   },
   {
     name: "plan_entity_exists",
@@ -1739,9 +1871,10 @@ export async function seedNamespace(namespaceId: string): Promise<number> {
     }
   }
 
-  await processDerivationJobs({
+  await executeDerivationWorker({
     namespaceId,
     limit: 16,
+    triggerType: "repair",
     workerId: "life-replay:derivation-worker"
   });
 
@@ -1856,6 +1989,118 @@ export async function seedNamespace(namespaceId: string): Promise<number> {
         })
       ]
     );
+
+    const staleGoalSource = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM episodic_memory
+        WHERE namespace_id = $1
+          AND content ILIKE '%goal: stay in thailand%'
+        ORDER BY occurred_at ASC
+        LIMIT 1
+      `,
+      [namespaceId]
+    );
+
+    await client.query(
+      `
+        INSERT INTO semantic_memory (
+          namespace_id,
+          content_abstract,
+          importance_score,
+          valid_from,
+          valid_until,
+          status,
+          is_anchor,
+          source_episodic_id,
+          memory_kind,
+          canonical_key,
+          normalized_value,
+          metadata,
+          decay_exempt
+        )
+        VALUES ($1, $2, 0.82, $3::timestamptz, NULL, 'active', true, $4::uuid, 'state_summary', $5, $6::jsonb, $7::jsonb, true)
+      `,
+      [
+        namespaceId,
+        "Steve's current primary goal is test stale goal text.",
+        "2025-01-01T09:00:00Z",
+        staleGoalSource.rows[0]?.id ?? null,
+        "reconsolidated:state_summary:goal:current_primary_goal",
+        JSON.stringify({
+          state_type: "goal",
+          state_key: "current_primary_goal",
+          state_value: { goal: "test stale goal text" }
+        }),
+        JSON.stringify({
+          source: "life_replay_stale_state_seed",
+          seeded_for_reconsolidation: true
+        })
+      ]
+    );
+
+    const archivalSource = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM episodic_memory
+        WHERE namespace_id = $1
+          AND content ILIKE '%Apogee Software%'
+        ORDER BY occurred_at ASC
+        LIMIT 1
+      `,
+      [namespaceId]
+    );
+
+    await client.query(
+      `
+        INSERT INTO semantic_memory (
+          namespace_id,
+          content_abstract,
+          importance_score,
+          valid_from,
+          valid_until,
+          status,
+          is_anchor,
+          source_episodic_id,
+          memory_kind,
+          canonical_key,
+          normalized_value,
+          metadata,
+          decay_exempt,
+          last_accessed_at,
+          access_count
+        )
+        VALUES ($1, $2, 0.12, $3::timestamptz, NULL, 'active', false, $4::uuid, 'profile_summary', $5, $6::jsonb, $7::jsonb, false, $8::timestamptz, 0)
+      `,
+      [
+        namespaceId,
+        "Legacy project archive summary for Apogee work history.",
+        "2025-01-10T09:00:00Z",
+        archivalSource.rows[0]?.id ?? null,
+        "reconsolidated:profile_summary:legacy_archive:apogee",
+        JSON.stringify({
+          topic: "Apogee Software",
+          summary: "Legacy project archive summary for Apogee work history."
+        }),
+        JSON.stringify({
+          source: "life_replay_archival_seed",
+          seeded_for_archival: true
+        }),
+        "2025-01-15T09:00:00Z"
+      ]
+    );
+  });
+
+  await runUniversalMutableReconsolidation(namespaceId);
+  await runSemanticDecay(namespaceId, {
+    limit: 800,
+    inactivityHours: 24 * 30,
+    coldInactivityHours: 24 * 90,
+    decayFactor: 0.5,
+    minimumScore: 0.1
+  });
+  await runTemporalNodeArchival(namespaceId, {
+    limit: 1600
   });
 
   return allFixtures.length;
@@ -2046,6 +2291,30 @@ async function runGraphExpectation(namespaceId: string, expectation: ReplayGraph
   };
 }
 
+async function runOpsExpectation(
+  namespaceId: string,
+  expectation: (typeof OPS_EXPECTATIONS)[number]
+): Promise<ReplayOpsResult> {
+  const timeline = await getOpsTimelineView(namespaceId, expectation.timeStart, expectation.timeEnd, 80);
+  const failures: string[] = [];
+
+  if (timeline.containmentAudit.violationCount !== 0) {
+    failures.push(`expected 0 containment violations, got ${timeline.containmentAudit.violationCount}`);
+  }
+  if (!timeline.causalOverlays.some((overlay) => overlay.kind === "semantic_supersession")) {
+    failures.push("missing semantic_supersession overlay");
+  }
+  if (!timeline.causalOverlays.some((overlay) => overlay.kind === "procedural_supersession")) {
+    failures.push("missing procedural_supersession overlay");
+  }
+
+  return {
+    name: expectation.name,
+    passed: failures.length === 0,
+    failures
+  };
+}
+
 function toMarkdown(report: LifeReplayBenchmarkReport): string {
   const lines: string[] = [
     "# Life Replay Benchmark Report",
@@ -2081,6 +2350,14 @@ function toMarkdown(report: LifeReplayBenchmarkReport): string {
 
   lines.push("", "## Graph Results", "");
   for (const item of report.graphResults) {
+    lines.push(`- ${item.name}: ${item.passed ? "pass" : "fail"}`);
+    if (item.failures.length > 0) {
+      lines.push(`  failures: ${item.failures.join("; ")}`);
+    }
+  }
+
+  lines.push("", "## Ops Results", "");
+  for (const item of report.opsResults) {
     lines.push(`- ${item.name}: ${item.passed ? "pass" : "fail"}`);
     if (item.failures.length > 0) {
       lines.push(`  failures: ${item.failures.join("; ")}`);
@@ -2126,6 +2403,11 @@ export async function runLifeReplayBenchmark(): Promise<LifeReplayBenchmarkRepor
     graphResults.push(await runGraphExpectation(namespaceId, expectation));
   }
 
+  const opsResults: ReplayOpsResult[] = [];
+  for (const expectation of OPS_EXPECTATIONS) {
+    opsResults.push(await runOpsExpectation(namespaceId, expectation));
+  }
+
   const confidentCount = queryResults.filter((item) => item.confidence === "confident").length;
   const weakCount = queryResults.filter((item) => item.confidence === "weak").length;
   const missingCount = queryResults.filter((item) => item.confidence === "missing").length;
@@ -2138,10 +2420,11 @@ export async function runLifeReplayBenchmark(): Promise<LifeReplayBenchmarkRepor
     queryResults,
     stateResults,
     graphResults,
+    opsResults,
     confidentCount,
     weakCount,
     missingCount,
-    passed: [...queryResults, ...stateResults, ...graphResults].every((item) => item.passed)
+    passed: [...queryResults, ...stateResults, ...graphResults, ...opsResults].every((item) => item.passed)
   };
 }
 

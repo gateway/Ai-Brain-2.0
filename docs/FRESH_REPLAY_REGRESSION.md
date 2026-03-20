@@ -95,6 +95,9 @@ source corpus reconstructs the same life graph and active truth.
 - deterministic multimodal derivation jobs complete and persist replay-safe `artifact_derivations`
 - hierarchy lookup queries can stop at structural `parent_entity_id` facts without forcing noisy episodic descent
 - generalized heuristic induction can promote reusable `constraint` truth, not just `style_spec`
+- the runtime derivation worker can process queued multimodal jobs and record healthy worker runs in `ops.worker_runs`
+- universal mutable-state reconsolidation can supersede stale `state_summary` semantic rows when active procedural truth changes
+- ops timeline responses surface `containmentAudit` and `causalOverlays` so operators can inspect TMT integrity and supersession chains
 
 ## Output
 
@@ -108,9 +111,9 @@ Each run should write:
 Current green reference run:
 
 - clean replay:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T08-17-33-725Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T09-34-07-426Z.json`
 - scale replay:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T08-17-47-452Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T09-34-48-854Z.json`
 
 ## Scale Replay Addendum
 

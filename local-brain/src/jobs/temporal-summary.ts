@@ -38,6 +38,20 @@ interface TemporalNodeSemanticRow {
   readonly metadata: Record<string, unknown>;
 }
 
+interface TemporalArchivalCandidateRow {
+  readonly id: string;
+  readonly layer: TemporalLayer;
+  readonly period_start: string;
+  readonly period_end: string;
+  readonly status: "active" | "archived";
+  readonly archival_tier: "hot" | "warm" | "cold";
+  readonly is_anchor: boolean;
+  readonly decay_exempt: boolean;
+  readonly last_accessed_at: string;
+  readonly access_count: number;
+  readonly metadata: Record<string, unknown>;
+}
+
 interface PriorSummaryRow {
   readonly summary_text: string;
 }
@@ -54,6 +68,14 @@ export interface TemporalSummaryRunSummary {
   readonly scannedBuckets: number;
   readonly upsertedNodes: number;
   readonly linkedMembers: number;
+}
+
+export interface TemporalArchivalRunSummary {
+  readonly context: JobRunContext;
+  readonly namespaceId: string;
+  readonly scanned: number;
+  readonly warmed: number;
+  readonly archived: number;
 }
 
 export const DEFAULT_TEMPORAL_SUMMARY_SYSTEM_PROMPT = `You are the AI Brain 2.0 Semantic Consolidator.
@@ -112,6 +134,36 @@ function depthForLayer(layer: TemporalLayer): number {
   }
 }
 
+function warmDaysForLayer(layer: TemporalLayer): number {
+  switch (layer) {
+    case "day":
+      return 30;
+    case "week":
+      return 60;
+    case "month":
+      return 120;
+    case "year":
+      return 365;
+    default:
+      return 30;
+  }
+}
+
+function coldDaysForLayer(layer: TemporalLayer): number {
+  switch (layer) {
+    case "day":
+      return 90;
+    case "week":
+      return 180;
+    case "month":
+      return 365;
+    case "year":
+      return 730;
+    default:
+      return 90;
+  }
+}
+
 async function linkTemporalHierarchy(client: PoolClient, namespaceId: string): Promise<void> {
   const linkSpecs: ReadonlyArray<{ readonly child: TemporalLayer; readonly parent: TemporalLayer }> = [
     { child: "day", parent: "week" },
@@ -142,6 +194,7 @@ async function linkTemporalHierarchy(client: PoolClient, namespaceId: string): P
             SELECT p.id
             FROM temporal_nodes p
             WHERE p.namespace_id = c.namespace_id
+              AND p.status = 'active'
               AND p.layer = $2
               AND p.period_start <= c.period_start
               AND p.period_end >= c.period_end
@@ -149,6 +202,7 @@ async function linkTemporalHierarchy(client: PoolClient, namespaceId: string): P
             LIMIT 1
           ) parent ON TRUE
           WHERE c.namespace_id = $1
+            AND c.status = 'active'
             AND c.layer = $3
         ) AS resolved
         WHERE child.id = resolved.child_id
@@ -371,9 +425,12 @@ export async function runTemporalSummaryScaffold(
             summary_version,
             generated_by,
             metadata,
+            status,
+            archival_tier,
+            archived_at,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, 1, 'deterministic_rollup', $8::jsonb, now())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, 1, 'deterministic_rollup', $8::jsonb, 'active', 'hot', NULL, now())
           ON CONFLICT (namespace_id, layer, period_start, period_end, summary_version)
           DO UPDATE SET
             depth = EXCLUDED.depth,
@@ -381,6 +438,9 @@ export async function runTemporalSummaryScaffold(
             source_count = EXCLUDED.source_count,
             generated_by = EXCLUDED.generated_by,
             metadata = EXCLUDED.metadata,
+            status = 'active',
+            archival_tier = 'hot',
+            archived_at = NULL,
             updated_at = now()
           RETURNING id
         `,
@@ -479,6 +539,153 @@ export async function runTemporalSummaryScaffold(
   });
 }
 
+export async function runTemporalNodeArchival(
+  namespaceId: string,
+  options?: {
+    readonly limit?: number;
+    readonly hotAccessThreshold?: number;
+  }
+): Promise<TemporalArchivalRunSummary> {
+  const context: JobRunContext = {
+    runId: randomUUID(),
+    startedAt: new Date().toISOString()
+  };
+  const limit = Math.max(1, options?.limit ?? 500);
+  const hotAccessThreshold = Math.max(0, options?.hotAccessThreshold ?? 10);
+
+  return withTransaction(async (client) => {
+    const candidates = await client.query<TemporalArchivalCandidateRow>(
+      `
+        SELECT
+          tn.id::text,
+          tn.layer,
+          tn.period_start::text,
+          tn.period_end::text,
+          tn.status,
+          tn.archival_tier,
+          tn.is_anchor,
+          tn.decay_exempt,
+          tn.last_accessed_at::text,
+          tn.access_count,
+          tn.metadata
+        FROM temporal_nodes tn
+        WHERE tn.namespace_id = $1
+          AND tn.status = 'active'
+          AND tn.is_anchor = false
+          AND tn.decay_exempt = false
+        ORDER BY tn.period_end ASC, tn.id ASC
+        LIMIT $2
+      `,
+      [namespaceId, limit]
+    );
+
+    let warmed = 0;
+    let archived = 0;
+
+    for (const row of candidates.rows) {
+      const effectiveTouchedAt = row.access_count > 0 ? (row.last_accessed_at || row.period_end) : row.period_end;
+      const inactivityMs = Math.max(0, Date.now() - Date.parse(effectiveTouchedAt));
+      const inactivityDays = inactivityMs / (1000 * 60 * 60 * 24);
+      const nextTier =
+        inactivityDays >= coldDaysForLayer(row.layer)
+          ? "cold"
+          : inactivityDays >= warmDaysForLayer(row.layer) && row.access_count < hotAccessThreshold
+            ? "warm"
+            : "hot";
+
+      if (nextTier === row.archival_tier && nextTier !== "cold") {
+        continue;
+      }
+
+      const reason =
+        nextTier === "cold"
+          ? "Temporal summary aged past the cold archival threshold."
+          : nextTier === "warm"
+            ? "Temporal summary aged past the warm archival threshold."
+            : "Temporal summary remains hot due to recency or access.";
+      const nextMetadata = {
+        ...(row.metadata ?? {}),
+        archival_policy: "hot_warm_cold_v1",
+        archival_tier: nextTier,
+        archival_reason: reason,
+        archival_state_updated_at: new Date().toISOString(),
+        inactivity_days: Number(inactivityDays.toFixed(2)),
+        access_count: row.access_count
+      };
+
+      if (nextTier === "cold") {
+        await client.query(
+          `
+            UPDATE temporal_nodes
+            SET
+              status = 'archived',
+              archival_tier = 'cold',
+              archived_at = COALESCE(archived_at, now()),
+              metadata = $2::jsonb,
+              updated_at = now()
+            WHERE id = $1::uuid
+          `,
+          [row.id, JSON.stringify(nextMetadata)]
+        );
+        archived += 1;
+      } else {
+        await client.query(
+          `
+            UPDATE temporal_nodes
+            SET
+              archival_tier = $2,
+              metadata = $3::jsonb,
+              updated_at = now()
+            WHERE id = $1::uuid
+          `,
+          [row.id, nextTier, JSON.stringify(nextMetadata)]
+        );
+        warmed += nextTier === "warm" ? 1 : 0;
+      }
+
+      if (nextTier !== "hot") {
+        await client.query(
+          `
+            INSERT INTO temporal_decay_events (
+              namespace_id,
+              temporal_node_id,
+              action,
+              previous_tier,
+              new_tier,
+              reason,
+              metadata
+            )
+            VALUES ($1, $2::uuid, $3, $4, $5, $6, $7::jsonb)
+          `,
+          [
+            namespaceId,
+            row.id,
+            nextTier === "cold" ? "archived" : "warmed",
+            row.archival_tier,
+            nextTier,
+            reason,
+            JSON.stringify({
+              run_id: context.runId,
+              layer: row.layer,
+              period_start: row.period_start,
+              period_end: row.period_end,
+              inactivity_days: Number(inactivityDays.toFixed(2))
+            })
+          ]
+        );
+      }
+    }
+
+    return {
+      context,
+      namespaceId,
+      scanned: candidates.rowCount ?? 0,
+      warmed,
+      archived
+    };
+  });
+}
+
 export async function runSemanticTemporalSummaryOverlay(
   namespaceId: string,
   options: {
@@ -505,6 +712,7 @@ export async function runSemanticTemporalSummaryOverlay(
           tn.metadata
         FROM temporal_nodes tn
         WHERE tn.namespace_id = $1
+          AND tn.status = 'active'
           AND tn.layer = $2
           AND tn.period_start >= (now() - ($3::int * interval '1 day'))
         ORDER BY tn.period_start ASC
@@ -520,6 +728,7 @@ export async function runSemanticTemporalSummaryOverlay(
           SELECT summary_text
           FROM temporal_nodes
           WHERE namespace_id = $1
+            AND status = 'active'
             AND layer = $2
             AND period_end <= $3::timestamptz
           ORDER BY period_end DESC

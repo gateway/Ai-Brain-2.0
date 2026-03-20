@@ -76,6 +76,7 @@ same substrate instead of adding one-off extractors for every domain.
 - `relationship_memory`: durable accepted graph edges
 - `procedural_memory`: active truth and mutable state
 - `semantic_memory`: compacted patterns and stable abstractions
+- `state_summary` semantic rows: reconsolidated summaries of active procedural truth, always supersedable and evidence-backed
 - `temporal_nodes`: TMT rollups for day/week/month/year summaries
 - `artifact_derivations`: durable text derived from binary artifacts like images and PDFs, always linked back to the source artifact observation
 - `ambiguity_inbox` / identity conflicts: unresolved operator work
@@ -118,6 +119,7 @@ same substrate instead of adding one-off extractors for every domain.
   - links back to source fragments
 - binary artifacts may also generate `artifact_derivations` first, then become queryable evidence through the same duality contract as text-native memory.
 - replay-safe multimodal fixtures should prove the derivation pipeline before live OCR / STT workers are trusted in production.
+- live multimodal worker execution should stay deterministic at the queue/state-machine layer even when the provider-backed OCR / ASR / caption step is model-driven.
 - episodic and narrative rows may also carry salience annotation such as `salience_labels`, `sentiment_score`, and `surprise_magnitude` without promoting emotion into current truth.
 
 ## Clarification Rules
@@ -130,3 +132,4 @@ same substrate instead of adding one-off extractors for every domain.
   - procedural truth
   - temporal summaries
 - stale semantic summaries that disagree with newer active tenure state should be superseded by deterministic reconsolidation rather than left active.
+- operators should be able to inspect temporal containment violations and causal supersession overlays without reading raw SQL.

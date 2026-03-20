@@ -47,6 +47,24 @@ interface BeliefProfileStateRow {
   readonly prior_valid_until: string | null;
 }
 
+interface MutableProceduralStateRow {
+  readonly id: string;
+  readonly state_type: string;
+  readonly state_key: string;
+  readonly state_value: Record<string, unknown>;
+  readonly valid_from: string;
+}
+
+export interface UniversalMutableReconsolidationSummary {
+  readonly runId: string;
+  readonly namespaceId: string;
+  readonly added: number;
+  readonly superseded: number;
+  readonly retired: number;
+  readonly abstained: number;
+  readonly processedKeys: readonly string[];
+}
+
 function formatUtcDayLabel(isoStart: string): string {
   return new Date(isoStart).toLocaleDateString("en-US", {
     month: "long",
@@ -93,6 +111,104 @@ function normalizeBeliefTopic(topic: string): string {
 
 function buildBeliefProfileCanonicalKey(topic: string): string {
   return `reconsolidated:belief_summary:${normalizeBeliefTopic(topic).replace(/^_+|_+$/gu, "")}`;
+}
+
+function buildMutableStateSummaryCanonicalKey(stateType: string, stateKey: string): string {
+  const normalizedStateType = normalizeSummaryContent(stateType.toLowerCase()).replace(/\s+/gu, "_");
+  const normalizedStateKey = normalizeSummaryContent(stateKey.toLowerCase()).replace(/[^\p{L}\p{N}]+/gu, "_").replace(/^_+|_+$/gu, "");
+  return `reconsolidated:state_summary:${normalizedStateType}:${normalizedStateKey}`;
+}
+
+function stateValueString(value: unknown): string {
+  return typeof value === "string" ? normalizeSummaryContent(value) : "";
+}
+
+function buildMutableStateSummaryContent(row: MutableProceduralStateRow): string | null {
+  const state = row.state_value ?? {};
+  const person = stateValueString(state.person) || "Steve";
+  const stateType = row.state_type;
+
+  switch (stateType) {
+    case "current_location": {
+      const place = stateValueString(state.place) || stateValueString(state.place_name) || stateValueString(state.location);
+      return place ? `${person} currently lives in ${place}.` : null;
+    }
+    case "current_employer": {
+      const employer = stateValueString(state.organization) || stateValueString(state.employer) || stateValueString(state.company);
+      return employer ? `${person} currently works at ${employer}.` : null;
+    }
+    case "current_project": {
+      const project = stateValueString(state.project);
+      return project ? `${person} is currently working on ${project}.` : null;
+    }
+    case "project_role": {
+      const role = stateValueString(state.role);
+      const project = stateValueString(state.project) || stateValueString(state.organization);
+      if (role && project) {
+        return `${person}'s current role is ${role} on ${project}.`;
+      }
+      return role ? `${person}'s current role is ${role}.` : null;
+    }
+    case "preference": {
+      const target = stateValueString(state.target);
+      const polarity = stateValueString(state.polarity);
+      const category = stateValueString(state.category);
+      if (!target || !polarity) {
+        return null;
+      }
+      const relation = polarity === "dislike" ? "does not prefer" : "prefers";
+      return `${person} ${relation} ${category ? `${category} ` : ""}${target}.`;
+    }
+    case "belief": {
+      const topic = stateValueString(state.topic);
+      const belief = stateValueString(state.belief);
+      return topic && belief ? `${person}'s current stance on ${topic.toLowerCase()} is ${belief}.` : null;
+    }
+    case "goal": {
+      const goal = stateValueString(state.goal);
+      return goal ? `${person}'s current primary goal is ${goal}.` : null;
+    }
+    case "plan": {
+      const plan = stateValueString(state.plan);
+      return plan ? `${person}'s active plan is ${plan}.` : null;
+    }
+    case "constraint": {
+      const constraint = stateValueString(state.constraint);
+      return constraint ? `Current operational constraint: ${constraint}.` : null;
+    }
+    case "style_spec": {
+      const styleSpec = stateValueString(state.style_spec);
+      return styleSpec ? `Current style rule: ${styleSpec}.` : null;
+    }
+    case "decision": {
+      const decision = stateValueString(state.decision);
+      return decision ? `${person}'s active decision is ${decision}.` : null;
+    }
+    case "watchlist_item": {
+      const title = stateValueString(state.title);
+      return title ? `${person} currently wants to watch ${title}.` : null;
+    }
+    case "skill": {
+      const skill = stateValueString(state.skill);
+      return skill ? `${person} actively practices skill ${skill}.` : null;
+    }
+    case "routine": {
+      const routine = stateValueString(state.routine);
+      return routine ? `${person} currently has routine ${routine}.` : null;
+    }
+    case "current_relationship": {
+      const partner = stateValueString(state.partner_name);
+      return partner ? `${person} is currently dating ${partner}.` : `${person}'s current relationship status is unknown.`;
+    }
+    default:
+      return null;
+  }
+}
+
+function mutableStateSourceMemoryId(row: MutableProceduralStateRow): string | null {
+  return typeof row.state_value?.source_memory_id === "string" && row.state_value.source_memory_id
+    ? row.state_value.source_memory_id
+    : null;
 }
 
 function parseRelationshipProfileConsistencyQuery(query: string): string | null {
@@ -786,6 +902,233 @@ async function resolveSourceEpisodicId(
   });
 
   return row;
+}
+
+export async function runUniversalMutableReconsolidation(namespaceId: string): Promise<UniversalMutableReconsolidationSummary> {
+  const runId = randomUUID();
+  const processedKeys: string[] = [];
+
+  return withTransaction(async (client) => {
+    const activeStateRows = await client.query<MutableProceduralStateRow>(
+      `
+        SELECT id, state_type, state_key, state_value, valid_from::text
+        FROM procedural_memory
+        WHERE namespace_id = $1
+          AND valid_until IS NULL
+          AND state_type IN (
+            'current_location',
+            'current_employer',
+            'current_project',
+            'project_role',
+            'preference',
+            'belief',
+            'goal',
+            'plan',
+            'constraint',
+            'style_spec',
+            'decision',
+            'watchlist_item',
+            'skill',
+            'routine',
+            'current_relationship'
+          )
+        ORDER BY valid_from ASC, updated_at ASC, id ASC
+      `,
+      [namespaceId]
+    );
+
+    const existingSummaryRows = await client.query<{
+      id: string;
+      canonical_key: string;
+      content_abstract: string;
+    }>(
+      `
+        SELECT id, canonical_key, content_abstract
+        FROM semantic_memory
+        WHERE namespace_id = $1
+          AND memory_kind = 'state_summary'
+          AND status = 'active'
+          AND valid_until IS NULL
+      `,
+      [namespaceId]
+    );
+
+    const existingByKey = new Map(existingSummaryRows.rows.map((row) => [row.canonical_key, row] as const));
+    const activeKeys = new Set<string>();
+    let added = 0;
+    let superseded = 0;
+    let retired = 0;
+    let abstained = 0;
+
+    for (const row of activeStateRows.rows) {
+      const summaryContent = buildMutableStateSummaryContent(row);
+      if (!summaryContent) {
+        continue;
+      }
+
+      const canonicalKey = buildMutableStateSummaryCanonicalKey(row.state_type, row.state_key);
+      activeKeys.add(canonicalKey);
+      processedKeys.push(canonicalKey);
+
+      const existing = existingByKey.get(canonicalKey);
+      if (existing && normalizeSummaryContent(existing.content_abstract) === normalizeSummaryContent(summaryContent)) {
+        abstained += 1;
+        continue;
+      }
+
+      const insertResult = await client.query<{ id: string }>(
+        `
+          INSERT INTO semantic_memory (
+            namespace_id,
+            content_abstract,
+            importance_score,
+            valid_from,
+            valid_until,
+            status,
+            is_anchor,
+            source_episodic_id,
+            memory_kind,
+            canonical_key,
+            normalized_value,
+            metadata,
+            decay_exempt
+          )
+          VALUES ($1, $2, 0.86, $3::timestamptz, NULL, 'active', true, $4::uuid, 'state_summary', $5, $6::jsonb, $7::jsonb, true)
+          RETURNING id
+        `,
+        [
+          namespaceId,
+          summaryContent,
+          row.valid_from,
+          mutableStateSourceMemoryId(row),
+          canonicalKey,
+          JSON.stringify({
+            state_type: row.state_type,
+            state_key: row.state_key,
+            state_value: row.state_value
+          }),
+          JSON.stringify({
+            source: "memory_reconsolidation",
+            run_id: runId,
+            reconsolidation_kind: "mutable_state",
+            procedural_memory_id: row.id,
+            state_type: row.state_type,
+            state_key: row.state_key
+          })
+        ]
+      );
+
+      const semanticMemoryId = insertResult.rows[0]?.id;
+      if (!semanticMemoryId) {
+        throw new Error(`Failed to create mutable state summary for ${row.state_type}:${row.state_key}.`);
+      }
+
+      added += 1;
+
+      if (existing) {
+        await client.query(
+          `
+            UPDATE semantic_memory
+            SET
+              valid_until = $2::timestamptz,
+              status = 'superseded',
+              superseded_by_id = $3::uuid
+            WHERE id = $1
+          `,
+          [existing.id, row.valid_from, semanticMemoryId]
+        );
+        superseded += 1;
+      }
+
+      await client.query(
+        `
+          INSERT INTO memory_reconsolidation_events (
+            namespace_id,
+            query_text,
+            trigger_confidence,
+            action,
+            target_memory_kind,
+            semantic_memory_id,
+            source_episodic_id,
+            reason,
+            metadata
+          )
+          VALUES ($1, $2, 'weak', $3, 'state_summary', $4::uuid, $5::uuid, $6, $7::jsonb)
+        `,
+        [
+          namespaceId,
+          `reconcile mutable state summary for ${row.state_type}:${row.state_key}`,
+          existing ? "supersede" : "add",
+          semanticMemoryId,
+          mutableStateSourceMemoryId(row),
+          existing
+            ? `Superseded stale mutable state summary for ${row.state_type}:${row.state_key}.`
+            : `Added mutable state summary for ${row.state_type}:${row.state_key}.`,
+          JSON.stringify({
+            run_id: runId,
+            canonical_key: canonicalKey,
+            state_type: row.state_type,
+            state_key: row.state_key
+          })
+        ]
+      );
+    }
+
+    for (const existing of existingSummaryRows.rows) {
+      if (activeKeys.has(existing.canonical_key)) {
+        continue;
+      }
+
+      await client.query(
+        `
+          UPDATE semantic_memory
+          SET
+            valid_until = now(),
+            status = 'superseded'
+          WHERE id = $1
+        `,
+        [existing.id]
+      );
+      retired += 1;
+
+      await client.query(
+        `
+          INSERT INTO memory_reconsolidation_events (
+            namespace_id,
+            query_text,
+            trigger_confidence,
+            action,
+            target_memory_kind,
+            semantic_memory_id,
+            reason,
+            metadata
+          )
+          VALUES ($1, $2, 'weak', 'supersede', 'state_summary', $3::uuid, $4, $5::jsonb)
+        `,
+        [
+          namespaceId,
+          `retire stale mutable state summary ${existing.canonical_key}`,
+          existing.id,
+          `Retired mutable state summary ${existing.canonical_key} because no active procedural state remains.`,
+          JSON.stringify({
+            run_id: runId,
+            canonical_key: existing.canonical_key,
+            retired_without_active_state: true
+          })
+        ]
+      );
+    }
+
+    return {
+      runId,
+      namespaceId,
+      added,
+      superseded,
+      retired,
+      abstained,
+      processedKeys
+    };
+  });
 }
 
 export async function runMemoryReconsolidation(

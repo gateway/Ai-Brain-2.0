@@ -7,7 +7,8 @@ import { runMigrations } from "../db/migrations.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
 import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
-import { runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
+import { runSemanticDecay } from "../jobs/semantic-decay.js";
+import { runTemporalNodeArchival, runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
 import { getOpsRelationshipGraph } from "../ops/service.js";
 import { searchMemory } from "../retrieval/service.js";
 import { resetDatabase, runLifeReplayBenchmark, seedNamespace } from "./life-replay.js";
@@ -254,6 +255,16 @@ async function rebuildNamespace(namespaceId: string): Promise<void> {
       maxMembersPerNode: 512
     });
   }
+  await runSemanticDecay(namespaceId, {
+    limit: 1600,
+    inactivityHours: 24 * 30,
+    coldInactivityHours: 24 * 90,
+    decayFactor: 0.5,
+    minimumScore: 0.1
+  });
+  await runTemporalNodeArchival(namespaceId, {
+    limit: 2400
+  });
 }
 
 const SCALE_QUERY_SPECS: readonly ScaleQuerySpec[] = [

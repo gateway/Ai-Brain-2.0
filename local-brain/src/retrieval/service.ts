@@ -3413,6 +3413,7 @@ async function loadTemporalHierarchyRows(
         FROM temporal_nodes tn
         JOIN seed_nodes sn ON sn.id = tn.id
         WHERE tn.namespace_id = $1
+          AND tn.status = 'active'
           AND tn.summary_text <> ''
           AND ($4::timestamptz IS NULL OR tn.period_end >= $4::timestamptz)
           AND ($5::timestamptz IS NULL OR tn.period_start <= $5::timestamptz)
@@ -3435,6 +3436,7 @@ async function loadTemporalHierarchyRows(
         FROM temporal_nodes parent
         JOIN ancestry ON ancestry.parent_id = parent.id
         WHERE parent.namespace_id = $1
+          AND parent.status = 'active'
           AND ancestry.hops < $6
       ),
       ranked_ancestry AS (
@@ -3529,6 +3531,7 @@ async function loadTemporalDescendantSupportRows(
           1 AS hops
         FROM temporal_nodes child
         WHERE child.namespace_id = $1
+          AND child.status = 'active'
           AND child.parent_id = ANY($2::uuid[])
           AND child.layer = ANY($3::text[])
           AND ($4::timestamptz IS NULL OR child.period_end >= $4::timestamptz)
@@ -3553,6 +3556,7 @@ async function loadTemporalDescendantSupportRows(
         FROM temporal_nodes child
         JOIN descendants ON child.parent_id = descendants.id
         WHERE child.namespace_id = $1
+          AND child.status = 'active'
           AND child.layer = ANY($3::text[])
           AND descendants.hops < $6
           AND ($4::timestamptz IS NULL OR child.period_end >= $4::timestamptz)
@@ -3883,10 +3887,13 @@ async function loadFtsLexicalRows(
               'summary_version', summary_version,
               'source_count', source_count,
               'generated_by', generated_by,
+              'status', status,
+              'archival_tier', archival_tier,
               'metadata', metadata
             ) AS provenance
           FROM temporal_nodes
           WHERE namespace_id = $1
+            AND status = 'active'
             AND summary_text <> ''
             AND (
               ($3::timestamptz IS NULL OR period_end >= $3::timestamptz)
@@ -4604,10 +4611,13 @@ async function loadBm25LexicalRows(
                 'summary_version', summary_version,
                 'source_count', source_count,
                 'generated_by', generated_by,
+                'status', status,
+                'archival_tier', archival_tier,
                 'metadata', metadata
               ) AS provenance
             FROM temporal_nodes
             WHERE namespace_id = $1
+              AND status = 'active'
               AND summary_text <> ''
               AND (
                 ($3::timestamptz IS NULL OR period_end >= $3::timestamptz)
