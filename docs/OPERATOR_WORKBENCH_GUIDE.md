@@ -39,6 +39,7 @@ Use it to:
 - see whether setup is complete
 - check runtime health
 - see whether background workers are healthy or need attention
+- jump directly into runtime, sources, and clarification work
 - review trusted-source state
 - jump into the right next action
 - return to active sessions
@@ -145,6 +146,20 @@ The import flow now recommends monitoring defaults by source intent:
 
 The import surface now also shows the current source-monitor worker state, last run, next due time, and retry guidance when the latest background run failed or degraded.
 
+### Sources
+
+This is the dedicated operator page for folder and source management after setup.
+
+Use it to:
+
+- add new trusted folders
+- see which sources are being watched
+- run scan/import manually
+- pause or resume monitoring
+- inspect file-level import state for a selected source
+
+This is the page to use when you want operational visibility, not the onboarding import step.
+
 ### When OpenClaw is recommended
 
 If you already have OpenClaw-style markdown memory/session files, this is the recommended import path.
@@ -233,6 +248,33 @@ The app now also stores the runtime behavior choices that were first introduced 
 - summarizer provider/model/preset/system prompt
 - source monitor cadence
 - inbox/outbox and temporal worker cadence
+
+### Runtime
+
+This is the live control page for providers and workers.
+
+Use it to:
+
+- confirm the brain runtime is reachable
+- confirm the local model runtime is reachable
+- see OpenRouter catalog visibility
+- inspect worker health and recent failures
+- manually trigger source monitor, inbox propagation, and temporal summaries
+
+This is where the operator checks whether the machine part of the brain is actually awake.
+
+### Clarifications
+
+This is the global ranked queue of unknowns.
+
+Use it to:
+
+- see unresolved items across namespaces
+- sort attention around the highest-priority ambiguities first
+- resolve kinship labels, vague places, aliases, and misspellings
+- feed corrections back through the controlled inbox endpoints so graph and memory state update cleanly
+
+The ranking is driven by the backend urgency signal, not a random frontend sort.
 
 ### Audit
 

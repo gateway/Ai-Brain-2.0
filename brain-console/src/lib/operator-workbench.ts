@@ -312,7 +312,7 @@ export interface WorkbenchTemporalSummaryProcessResult {
 
 export interface WorkbenchWorkerRun {
   readonly id: string;
-  readonly workerKey: "source_monitor" | "outbox" | "temporal_summary";
+  readonly workerKey: "source_monitor" | "derivation" | "outbox" | "temporal_summary";
   readonly triggerType: "manual" | "scheduled" | "loop" | "onboarding" | "repair";
   readonly namespaceId?: string | null;
   readonly sourceId?: string | null;
@@ -332,7 +332,7 @@ export interface WorkbenchWorkerRun {
 }
 
 export interface WorkbenchWorkerHealth {
-  readonly workerKey: "source_monitor" | "outbox" | "temporal_summary";
+  readonly workerKey: "source_monitor" | "derivation" | "outbox" | "temporal_summary";
   readonly enabled: boolean;
   readonly intervalSeconds?: number;
   readonly state: "disabled" | "never" | "running" | "healthy" | "degraded" | "failed" | "stale";

@@ -35,10 +35,12 @@ function formatDateTime(value?: string | null): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
-function workerLabel(value: "source_monitor" | "outbox" | "temporal_summary"): string {
+function workerLabel(value: "source_monitor" | "derivation" | "outbox" | "temporal_summary"): string {
   switch (value) {
     case "source_monitor":
       return "Source monitor";
+    case "derivation":
+      return "Derivations";
     case "outbox":
       return "Inbox propagation";
     case "temporal_summary":

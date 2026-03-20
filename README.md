@@ -32,10 +32,13 @@ It gives you:
 - a guided first-run setup flow so a new install knows what to do next
 - purpose and owner setup so the brain is grounded before broad ingestion
 - trusted-source import and watch-folder controls
+- a dedicated sources page for scan/import state and watch-folder management
 - session-based intake for text, audio, files, and reviewable evidence
 - clarifications and correction workflows for unresolved people, places, aliases, and relationships
+- a dedicated clarifications page that ranks unknowns by operator priority
 - relationship graph and timeline exploration
 - query and verification surfaces that keep supporting evidence visible
+- a runtime page for provider reachability, worker health, and quick control actions
 - provider, embeddings, and operations settings in one place
 
 In practice, the app is built to let an operator:

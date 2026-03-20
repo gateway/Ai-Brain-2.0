@@ -4,7 +4,7 @@ import { MetricCard } from "@/components/metric-card";
 import { SetupStepGuide } from "@/components/setup-step-guide";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getBootstrapState, getNamespaceCatalog, getRuntimeHealth, getWorkbenchWorkerStatus, listWorkbenchSessions, listWorkbenchSources } from "@/lib/operator-workbench";
+import { getBootstrapState, getNamespaceCatalog, getRuntimeHealth, getWorkbenchClarifications, getWorkbenchWorkerStatus, listWorkbenchSessions, listWorkbenchSources } from "@/lib/operator-workbench";
 
 function formatDateTime(value?: string | null): string {
   if (!value) {
@@ -71,6 +71,9 @@ export default async function WorkbenchDashboardPage() {
       workers: []
     }))
   ]);
+  const bootstrapMetadata = bootstrap.metadata as { readonly defaultNamespaceId?: string };
+  const defaultNamespaceId = bootstrapMetadata.defaultNamespaceId ?? namespaces.defaultNamespaceId ?? "personal";
+  const clarifications = await getWorkbenchClarifications(defaultNamespaceId, 8).catch(() => null);
   const importedSources = sources.filter((source) => source.lastImportAt).length;
   const workerSummary = summarizeWorkerStates(workerStatus.workers);
 
@@ -284,6 +287,20 @@ export default async function WorkbenchDashboardPage() {
                     </div>
                   ))}
                 </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Link href="/runtime" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
+                    <p className="font-medium text-white">Runtime control</p>
+                    <p className="mt-1">Inspect providers, workers, and quick-run controls.</p>
+                  </Link>
+                  <Link href="/sources" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
+                    <p className="font-medium text-white">Source manager</p>
+                    <p className="mt-1">See watched folders, last scans, and pending imports.</p>
+                  </Link>
+                  <Link href="/clarifications" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
+                    <p className="font-medium text-white">Clarifications</p>
+                    <p className="mt-1">Resolve unknowns in a ranked queue instead of guessing.</p>
+                  </Link>
+                </div>
               </CardContent>
             </Card>
 
@@ -319,6 +336,20 @@ export default async function WorkbenchDashboardPage() {
                 title="Trusted sources"
                 value={sources.length}
                 detail={`${importedSources} imported, ${sources.reduce((sum, source) => sum + source.counts.filesPending, 0)} pending`}
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <MetricCard
+                title="Clarifications"
+                value={clarifications?.summary.total ?? 0}
+                tone={(clarifications?.summary.total ?? 0) > 0 ? "warning" : "success"}
+                detail={`Default lane ${defaultNamespaceId}. Fix these before weak memory turns into weird memory.`}
+              />
+              <MetricCard
+                title="Watch folders"
+                value={sources.filter((source) => source.monitorEnabled).length}
+                detail="Folders actively scanned by the runtime worker."
               />
             </div>
 
