@@ -80,6 +80,7 @@ same substrate instead of adding one-off extractors for every domain.
 - `temporal_nodes`: TMT rollups for day/week/month/year summaries
 - `artifact_derivations`: durable text derived from binary artifacts like images and PDFs, always linked back to the source artifact observation
 - `ambiguity_inbox` / identity conflicts: unresolved operator work
+- derived semantic and temporal layers may move through deterministic `hot`, `warm`, and `cold` archival tiers without deleting raw episodic evidence
 
 ## Active Truth Rules
 
@@ -88,6 +89,8 @@ same substrate instead of adding one-off extractors for every domain.
 - Current employer uses `works_at`; old employers use `worked_at`.
 - Preferences supersede over time but raw source evidence is never deleted.
 - Watchlists and other mutable lists live in `procedural_memory`.
+- anchor-backed summaries are exempt from decay and archival.
+- non-anchor derived summaries may demote to `warm` or archive to `cold` when they are superseded or sufficiently stale.
 - `activity` and `media` entities can anchor those states without replacing raw evidence.
 - `skill` entities anchor durable capability while specific uses stay in episodic evidence.
 - `decision` entities anchor explicit choices and should remain evidence-backed.
@@ -107,6 +110,7 @@ same substrate instead of adding one-off extractors for every domain.
 - `contained_in` remains as compatibility/supporting graph evidence.
 - Query zoom-out should traverse the parent chain, not duplicate current truth.
 - exact hierarchy questions may stop on structural parent-chain facts when those rows are sufficient, instead of forcing episodic drill-down.
+- archived temporal summaries should disappear from active recall, but their member links must still preserve the path back to the original evidence.
 
 ## Event Rules
 
@@ -133,3 +137,4 @@ same substrate instead of adding one-off extractors for every domain.
   - temporal summaries
 - stale semantic summaries that disagree with newer active tenure state should be superseded by deterministic reconsolidation rather than left active.
 - operators should be able to inspect temporal containment violations and causal supersession overlays without reading raw SQL.
+- operators should also be able to inspect when derived semantic or temporal layers were warmed or archived without losing the underlying evidence trail.
