@@ -31,6 +31,12 @@ export const toolDescriptors: readonly ToolDescriptor[] = [
     optionalInputs: ["predicate", "time_start", "time_end", "limit"]
   },
   {
+    name: "memory.get_clarifications",
+    description: "Read unresolved clarification items and suggested follow-up prompts for weak or unknown answers.",
+    requiredInputs: ["namespace_id"],
+    optionalInputs: ["query", "limit"]
+  },
+  {
     name: "memory.save_candidate",
     description: "Stage a candidate memory for later consolidation.",
     requiredInputs: ["namespace_id", "content", "candidate_type"],

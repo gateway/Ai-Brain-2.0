@@ -18,6 +18,46 @@ Research guidance for sequencing:
 - add contradiction and supersession regressions before richer plans/goals
 - defer emotion, routines, and life-phase abstraction until replay is stable
 
+## Current Snapshot
+
+- integrated ontology/retrieval push is complete and replay-green
+- completed slices in the latest pass:
+  - broader replay corpus
+  - final natural-language query pack
+  - complexity-aware recall-planner gating
+  - provenance-backed focused graph traversal
+  - MCP clarification read path
+  - generalized contradiction healing / reconsolidation
+  - procedural heuristic induction expansion
+  - clarification-heavy corpus for kinship and vague-place abstention
+  - SQL-first fused hybrid ranking kernel in Postgres
+  - deterministic scale replay pack with medium / large / noisy generated artifacts, latency reporting, and graph stress
+  - deterministic multimodal-native derivation fixtures for image / pdf / audio via `derivation_jobs`
+  - hierarchy-aware recall for structural `parent_entity_id` chains with exact hierarchy stopping rules
+  - generalized heuristic induction from repeated evidence into reusable `constraint` truth
+- latest green replay report:
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T08-17-33-725Z.json`
+- latest green scale report:
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T08-17-47-452Z.json`
+- current replay snapshot:
+  - `60 confident`
+  - `1 weak`
+  - `1 missing`
+- current scale snapshot:
+  - `86 generated artifacts`
+  - `p50 31.69ms`
+  - `p95 48.1ms`
+  - `Steve focus graph: 54 nodes / 70 edges`
+- the remaining weak/missing cases are intentional:
+  - pre-reconsolidation day-summary support is `weak`
+  - unresolved kinship queries like `who is Uncle?` return a clarification-driven `missing` abstention
+  - unresolved vague-place queries like `where was the summer cabin?` return a clarification-driven `missing` abstention
+- NotebookLM final review agrees this is the conservative right direction.
+- remaining top deterministic gaps from that review:
+  - production wiring for live multimodal workers beyond replay fixtures
+  - universal semantic reconciliation / generalized supersession across all mutable namespaces
+  - richer operator visibility for temporal containment and causal overlays
+
 ## Phase 1: Substrate Hardening
 
 ### Goal
@@ -258,6 +298,12 @@ Move beyond the broad `concept` bucket where it materially improves retrieval.
     - `what is Steve's preferred response style?`
     - `what is the mandatory protocol for changing the brain's ontology?`
     - `what should be done with the database after each ontology slice?`
+  - provenance-backed focused graph expansion now includes:
+    - active and historical work/home/friend edges for the focused self node
+    - recursive `contained_in` hierarchy expansion from `parent_entity_id`
+    - evidence pointers on graph edges via `sourceMemoryId` and `sourceUri`
+  - read-only MCP clarification access now exists for agents via:
+    - `memory.get_clarifications`
   - belief evolution is now replay-verified through a unified first-class `belief` class with current, historical, and point-in-time queries:
     - `what is Steve's current stance on infrastructure?`
     - `how has Steve's opinion on infrastructure changed since 2025?`
@@ -411,6 +457,57 @@ stable.
 2. smarter recall-planner gating by query complexity
 3. extend procedural heuristic induction beyond replay integrity into one more machine-enforceable workflow rule
 4. richer life-phase annotation after the above stays replay-green
+
+## Phase 7: Scale And Kernel Hardening
+
+### Status
+
+- in progress
+- clean replay and scale replay are both green
+- current verified additions:
+  - a deterministic scale benchmark now runs a clean baseline replay, wipes again, ingests a larger mixed noisy corpus, and reports latency plus quality deltas
+  - clarification-heavy noisy corpus now proves abstention for:
+    - `who is Uncle?`
+    - `where was the summer cabin?`
+  - hybrid lexical/vector RRF score fusion now runs inside a SQL CTE in Postgres instead of app-side map accumulation
+  - Steve-centered graph stress remains green under noisy load with broader place/org/social breadth
+  - latest scale report:
+    - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T07-19-18-130Z.json`
+
+### Goal
+
+Prove that the brain does not crumble when the corpus becomes messier, larger,
+and more clarification-heavy.
+
+### Scope
+
+- medium / large / noisy replay corpora
+- latency and quality reporting
+- clarification-heavy ambiguity coverage
+- SQL-first fused retrieval ranking
+- graph stress on focused expansion and hierarchy breadth
+
+### Entry Criteria
+
+- earlier ontology phases remain replay-green
+
+### Done Criteria
+
+- clean replay stays green after scale/kernel changes
+- scale replay stays green with no quality delta on the scale query pack
+- clarification-driven abstention remains deterministic for unresolved kinship and vague places
+- focused graph expansion remains provenance-backed under noisy load
+
+### Replay Tests
+
+- `where does Steve live?`
+- `where does Steve work?`
+- `who are Steve's friends?`
+- `what is Steve working on?`
+- `what happened at Yellow co-working space?`
+- `who is Uncle?`
+- `where was the summer cabin?`
+- Steve-focused scale graph retains place / org / friend / event breadth
 
 ## Phase Gates
 

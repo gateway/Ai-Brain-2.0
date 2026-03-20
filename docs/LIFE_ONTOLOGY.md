@@ -91,6 +91,7 @@ same substrate instead of adding one-off extractors for every domain.
 - `skill` entities anchor durable capability while specific uses stay in episodic evidence.
 - `decision` entities anchor explicit choices and should remain evidence-backed.
 - `constraint` entities anchor durable rules and should be queryable as active operational truth.
+- recurrence-gated operational heuristics may also promote reusable `constraint` truth when the same machine-enforceable rule survives repeated evidence across distinct days or weeks.
 - `routine` entities anchor repeated habits only after deterministic promotion from multiple weeks of event evidence.
 - `style_spec` entities anchor durable response-style or workflow truth such as concise response preferences and ontology-work protocols.
 - recurrence-gated operational heuristics may also land in `style_spec` when they survive repeated evidence across distinct sessions or days.
@@ -104,6 +105,7 @@ same substrate instead of adding one-off extractors for every domain.
 - `entities.parent_entity_id` is the primary hierarchy for `place`.
 - `contained_in` remains as compatibility/supporting graph evidence.
 - Query zoom-out should traverse the parent chain, not duplicate current truth.
+- exact hierarchy questions may stop on structural parent-chain facts when those rows are sufficient, instead of forcing episodic drill-down.
 
 ## Event Rules
 
@@ -115,6 +117,7 @@ same substrate instead of adding one-off extractors for every domain.
   - activity kind
   - links back to source fragments
 - binary artifacts may also generate `artifact_derivations` first, then become queryable evidence through the same duality contract as text-native memory.
+- replay-safe multimodal fixtures should prove the derivation pipeline before live OCR / STT workers are trusted in production.
 - episodic and narrative rows may also carry salience annotation such as `salience_labels`, `sentiment_score`, and `surprise_magnitude` without promoting emotion into current truth.
 
 ## Clarification Rules

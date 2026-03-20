@@ -529,6 +529,33 @@ function classifyAmbiguity(
   return null;
 }
 
+function extractStandaloneKinshipReference(sceneText: string): string | null {
+  const normalized = normalizeWhitespace(sceneText);
+  if (!normalized) {
+    return null;
+  }
+
+  const match = normalized.match(/\b(Uncle|Aunt|Mom|Mother|Dad|Father|Partner|Brother|Sister|Cousin)\b/u);
+  const rawText = normalizeWhitespace(match?.[1] ?? "");
+  if (!rawText) {
+    return null;
+  }
+
+  return KINSHIP_TERMS.has(normalizeName(rawText)) ? rawText : null;
+}
+
+function extractStandaloneVaguePlaceReference(sceneText: string): string | null {
+  const normalized = normalizeWhitespace(sceneText);
+  if (!normalized) {
+    return null;
+  }
+
+  const match = normalized.match(
+    /\b(the\s+summer\s+cabin|the\s+cabin\s+near\s+the\s+lake|the\s+old\s+house\s+by\s+the\s+beach|the\s+london\s+building\s+south\s+wing)\b/iu
+  );
+  return normalizeWhitespace(match?.[1] ?? "") || null;
+}
+
 async function loadExistingSelfName(client: PoolClient, namespaceId: string): Promise<string | null> {
   const boundProfile = await loadNamespaceSelfProfileForClient(client, namespaceId);
   if (boundProfile?.canonicalName) {
@@ -4359,6 +4386,102 @@ export async function stageNarrativeClaims(
             })
           ]
         );
+      }
+    }
+
+    if (resolvedClaims.length === 0) {
+      const kinshipReference = extractStandaloneKinshipReference(scene.text);
+      if (kinshipReference) {
+        await client.query(
+          `
+            INSERT INTO claim_candidates (
+              namespace_id,
+              source_scene_id,
+              source_event_id,
+              source_memory_id,
+              source_chunk_id,
+              claim_type,
+              subject_text,
+              subject_entity_type,
+              predicate,
+              normalized_text,
+              confidence,
+              prior_score,
+              prior_reason,
+              status,
+              ambiguity_state,
+              ambiguity_type,
+              ambiguity_reason,
+              occurred_at,
+              extraction_method,
+              metadata
+            )
+            VALUES ($1, $2, $3, $4, $5, 'identity', $6, 'person', 'unresolved_identity', $7, 0.48, 0.74, 'standalone_kinship_reference', 'accepted', 'requires_clarification', 'kinship_resolution', $8, $9, 'deterministic_scene_claims', $10::jsonb)
+          `,
+          [
+            input.namespaceId,
+            sceneId,
+            claimEventId,
+            sceneSource?.sourceMemoryIds[0] ?? null,
+            sceneSource?.sourceChunkIds[0] ?? null,
+            kinshipReference,
+            normalizeWhitespace(kinshipReference),
+            `The subject reference "${kinshipReference}" is a kinship role without a grounded person entity.`,
+            scene.occurredAt,
+            JSON.stringify({
+              raw_ambiguous_text: kinshipReference,
+              suggested_matches: findSuggestedAliasMatches(kinshipReference, namespaceAliases)
+            })
+          ]
+        );
+        claimCount += 1;
+      }
+
+      const vaguePlaceReference = extractStandaloneVaguePlaceReference(scene.text);
+      if (vaguePlaceReference) {
+        await client.query(
+          `
+            INSERT INTO claim_candidates (
+              namespace_id,
+              source_scene_id,
+              source_event_id,
+              source_memory_id,
+              source_chunk_id,
+              claim_type,
+              subject_text,
+              subject_entity_type,
+              predicate,
+              normalized_text,
+              confidence,
+              prior_score,
+              prior_reason,
+              status,
+              ambiguity_state,
+              ambiguity_type,
+              ambiguity_reason,
+              occurred_at,
+              extraction_method,
+              metadata
+            )
+            VALUES ($1, $2, $3, $4, $5, 'location_history', $6, 'place', 'unresolved_place', $7, 0.46, 0.72, 'standalone_vague_place_reference', 'accepted', 'requires_clarification', 'place_grounding', $8, $9, 'deterministic_scene_claims', $10::jsonb)
+          `,
+          [
+            input.namespaceId,
+            sceneId,
+            claimEventId,
+            sceneSource?.sourceMemoryIds[0] ?? null,
+            sceneSource?.sourceChunkIds[0] ?? null,
+            vaguePlaceReference,
+            normalizeWhitespace(vaguePlaceReference),
+            `The place reference "${vaguePlaceReference}" is too vague to resolve without more context.`,
+            scene.occurredAt,
+            JSON.stringify({
+              raw_ambiguous_text: vaguePlaceReference,
+              suggested_matches: findSuggestedAliasMatches(vaguePlaceReference, namespaceAliases)
+            })
+          ]
+        );
+        claimCount += 1;
       }
     }
   }

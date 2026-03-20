@@ -1,5 +1,6 @@
 import { stdin, stdout } from "node:process";
 import { withTransaction } from "../db/client.js";
+import { getOpsClarificationInbox } from "../ops/service.js";
 import { getArtifactDetail, getRelationships, searchMemory, timelineMemory } from "../retrieval/service.js";
 import { toolDescriptors } from "./tool-contracts.js";
 
@@ -152,6 +153,17 @@ function toolSchema(name: string): Record<string, unknown> {
           limit: { type: "integer", minimum: 1, maximum: 50 }
         },
         required: ["entity_name", "namespace_id"]
+      };
+    case "memory.get_clarifications":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          namespace_id: { type: "string" },
+          query: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 50 }
+        },
+        required: ["namespace_id"]
       };
     case "memory.save_candidate":
       return {
@@ -383,6 +395,36 @@ async function callTool(name: string, args: ToolCallArgs): Promise<unknown> {
           limit: optionalNumber(args.limit)
         })
       );
+    case "memory.get_clarifications": {
+      const namespaceId = requireString(args.namespace_id, "namespace_id");
+      const rawQuery = optionalString(args.query)?.toLowerCase() ?? null;
+      const inbox = await getOpsClarificationInbox(namespaceId, optionalNumber(args.limit) ?? 10);
+      const items = rawQuery
+        ? inbox.items.filter((item) => {
+            const haystacks = [
+              item.rawText,
+              item.claimType,
+              item.predicate,
+              item.ambiguityType,
+              item.ambiguityReason ?? "",
+              item.sceneText ?? ""
+            ].join(" ").toLowerCase();
+            return rawQuery.split(/\s+/u).every((token) => token.length < 2 || haystacks.includes(token));
+          })
+        : inbox.items;
+
+      return wrapResult({
+        namespaceId,
+        summary: inbox.summary,
+        items,
+        guidance: {
+          suggestedPrompt:
+            items.length > 0
+              ? `The brain needs clarification before it can answer confidently about: ${optionalString(args.query) ?? "the requested topic"}`
+              : `No open clarification items matched ${optionalString(args.query) ?? "the requested topic"}.`
+        }
+      });
+    }
     case "memory.save_candidate":
       return saveCandidate(args);
     case "memory.upsert_state":

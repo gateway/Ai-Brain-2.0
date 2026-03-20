@@ -34,6 +34,19 @@ interface RelationshipProfileStateRow {
   readonly relationship_transition: string | null;
 }
 
+interface BeliefProfileStateRow {
+  readonly semantic_id: string | null;
+  readonly content_abstract: string | null;
+  readonly person_name: string;
+  readonly topic: string;
+  readonly belief_text: string;
+  readonly source_memory_id: string | null;
+  readonly valid_from: string | null;
+  readonly valid_until: string | null;
+  readonly prior_belief_text: string | null;
+  readonly prior_valid_until: string | null;
+}
+
 function formatUtcDayLabel(isoStart: string): string {
   return new Date(isoStart).toLocaleDateString("en-US", {
     month: "long",
@@ -68,6 +81,20 @@ function buildRelationshipProfileCanonicalKey(personName: string): string {
   return `reconsolidated:profile_summary:relationship:${personName.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "")}`;
 }
 
+function normalizeBeliefTopic(topic: string): string {
+  return normalizeSummaryContent(
+    topic
+      .toLowerCase()
+      .replace(/^\s*using\s+/u, "")
+      .replace(/\bfor\b/gu, " ")
+      .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+  ).replace(/\s+/gu, "_");
+}
+
+function buildBeliefProfileCanonicalKey(topic: string): string {
+  return `reconsolidated:belief_summary:${normalizeBeliefTopic(topic).replace(/^_+|_+$/gu, "")}`;
+}
+
 function parseRelationshipProfileConsistencyQuery(query: string): string | null {
   const normalized = query.trim();
   if (!normalized) {
@@ -83,6 +110,29 @@ function parseRelationshipProfileConsistencyQuery(query: string): string | null 
     const match = normalized.match(pattern);
     if (match?.[1]) {
       return match[1].trim();
+    }
+  }
+
+  return null;
+}
+
+function parseBeliefProfileConsistencyQuery(query: string): string | null {
+  const normalized = query.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const patterns = [
+    /^check\s+belief\s+summary\s+for\s+(.+?)\s+for\s+consistency\.?$/iu,
+    /^check\s+.+['’]s\s+belief\s+summary\s+for\s+(.+?)\s+for\s+consistency\.?$/iu,
+    /^check\s+(.+?)\s+belief\s+summary\s+for\s+consistency\.?$/iu
+  ] as const;
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    const topic = typeof match?.[1] === "string" ? normalizeSummaryContent(match[1]) : "";
+    if (topic) {
+      return topic.replace(/^\s*using\s+/iu, "");
     }
   }
 
@@ -135,6 +185,29 @@ function formatRelationshipStatusSummary(state: RelationshipProfileStateRow): st
   }
 
   return normalizeSummaryContent(`${state.person_name}'s current relationship status is unknown.`);
+}
+
+function formatBeliefStatusSummary(state: BeliefProfileStateRow): string {
+  const topicLower = normalizeSummaryContent(
+    state.topic
+      .toLowerCase()
+      .replace(/^\s*using\s+/u, "")
+      .replace(/\bfor\b/gu, " ")
+      .replace(/-/gu, " ")
+  );
+  if (state.prior_belief_text && state.prior_valid_until) {
+    const changedOn = new Date(state.prior_valid_until).toLocaleDateString("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "UTC"
+    });
+    return normalizeSummaryContent(
+      `${state.person_name}'s current stance on ${topicLower} is ${state.belief_text}. It changed on ${changedOn} from ${state.prior_belief_text}.`
+    );
+  }
+
+  return normalizeSummaryContent(`${state.person_name}'s current stance on ${topicLower} is ${state.belief_text}.`);
 }
 
 async function loadRelationshipProfileState(
@@ -202,6 +275,115 @@ async function loadRelationshipProfileState(
 }
 
 async function loadExistingRelationshipProfileSummary(
+  namespaceId: string,
+  canonicalKey: string
+): Promise<{ id: string; content_abstract: string } | null> {
+  return withTransaction(async (client) => {
+    const result = await client.query<{ id: string; content_abstract: string }>(
+      `
+        SELECT id, content_abstract
+        FROM semantic_memory
+        WHERE namespace_id = $1
+          AND canonical_key = $2
+          AND status = 'active'
+          AND valid_until IS NULL
+        ORDER BY valid_from DESC
+        LIMIT 1
+      `,
+      [namespaceId, canonicalKey]
+    );
+
+    return result.rows[0] ?? null;
+  });
+}
+
+async function loadBeliefProfileState(
+  namespaceId: string,
+  topic: string
+): Promise<BeliefProfileStateRow | null> {
+  const normalizedTopic = normalizeBeliefTopic(topic);
+  return withTransaction(async (client) => {
+    const result = await client.query<BeliefProfileStateRow>(
+      `
+        WITH current_beliefs AS (
+          SELECT
+            NULL::uuid AS semantic_id,
+            NULL::text AS content_abstract,
+            coalesce(pm.state_value->>'person', 'User') AS person_name,
+            coalesce(pm.state_value->>'topic', pm.state_key) AS topic,
+            coalesce(pm.state_value->>'belief', pm.state_key) AS belief_text,
+            NULLIF(pm.state_value->>'source_memory_id', '')::uuid AS source_memory_id,
+            pm.valid_from::text AS valid_from,
+            pm.valid_until::text AS valid_until,
+            regexp_replace(
+              regexp_replace(
+                regexp_replace(lower(coalesce(pm.state_value->>'topic', '')), '^using\\s+', ''),
+                '\\mfor\\M',
+                ' ',
+                'g'
+              ),
+              '[^a-z0-9]+',
+              '_',
+              'g'
+            ) AS normalized_topic
+          FROM procedural_memory pm
+          WHERE pm.namespace_id = $1
+            AND pm.state_type = 'belief'
+            AND pm.valid_until IS NULL
+          ORDER BY pm.updated_at DESC
+        ),
+        prior_beliefs AS (
+          SELECT
+            coalesce(pm.state_value->>'belief', pm.state_key) AS prior_belief_text,
+            pm.valid_until::text AS prior_valid_until,
+            regexp_replace(
+              regexp_replace(
+                regexp_replace(lower(coalesce(pm.state_value->>'topic', '')), '^using\\s+', ''),
+                '\\mfor\\M',
+                ' ',
+                'g'
+              ),
+              '[^a-z0-9]+',
+              '_',
+              'g'
+            ) AS normalized_topic
+          FROM procedural_memory pm
+          WHERE pm.namespace_id = $1
+            AND pm.state_type = 'belief'
+            AND pm.valid_until IS NOT NULL
+          ORDER BY pm.valid_until DESC
+        )
+        SELECT
+          cb.semantic_id,
+          cb.content_abstract,
+          cb.person_name,
+          cb.topic,
+          cb.belief_text,
+          cb.source_memory_id,
+          cb.valid_from,
+          cb.valid_until,
+          pb.prior_belief_text,
+          pb.prior_valid_until
+        FROM current_beliefs cb
+        LEFT JOIN LATERAL (
+          SELECT prior_belief_text, prior_valid_until
+          FROM prior_beliefs
+          WHERE normalized_topic = $2
+          ORDER BY prior_valid_until DESC
+          LIMIT 1
+        ) pb ON TRUE
+        WHERE cb.normalized_topic = $2
+        ORDER BY cb.valid_from DESC
+        LIMIT 1
+      `,
+      [namespaceId, normalizedTopic]
+    );
+
+    return result.rows[0] ?? null;
+  });
+}
+
+async function loadExistingBeliefProfileSummary(
   namespaceId: string,
   canonicalKey: string
 ): Promise<{ id: string; content_abstract: string } | null> {
@@ -430,6 +612,151 @@ async function runRelationshipProfileReconsolidation(
   });
 }
 
+async function runBeliefProfileReconsolidation(
+  input: RunMemoryReconsolidationInput,
+  topic: string
+): Promise<MemoryReconsolidationSummary> {
+  const runId = randomUUID();
+  const canonicalKey = buildBeliefProfileCanonicalKey(topic);
+  const [beliefState, existing] = await Promise.all([
+    loadBeliefProfileState(input.namespaceId, topic),
+    loadExistingBeliefProfileSummary(input.namespaceId, canonicalKey)
+  ]);
+
+  if (!beliefState) {
+    return {
+      runId,
+      namespaceId: input.namespaceId,
+      query: input.query,
+      priorConfidence: "missing",
+      action: "skip",
+      reason: "No active belief state existed for the requested topic."
+    };
+  }
+
+  const nextContent = formatBeliefStatusSummary(beliefState);
+  const effectiveTimestamp = beliefState.valid_from ?? new Date().toISOString();
+
+  if (existing && normalizeSummaryContent(existing.content_abstract) === nextContent) {
+    return {
+      runId,
+      namespaceId: input.namespaceId,
+      query: input.query,
+      priorConfidence: "weak",
+      action: "abstain",
+      semanticMemoryId: existing.id,
+      reason: "Matching belief summary already existed."
+    };
+  }
+
+  return withTransaction(async (client) => {
+    const insertResult = await client.query<{ id: string }>(
+      `
+        INSERT INTO semantic_memory (
+          namespace_id,
+          content_abstract,
+          importance_score,
+          valid_from,
+          valid_until,
+          status,
+          is_anchor,
+          source_episodic_id,
+          memory_kind,
+          canonical_key,
+          normalized_value,
+          metadata,
+          decay_exempt
+        )
+        VALUES ($1, $2, 0.88, $3::timestamptz, NULL, 'active', true, $4::uuid, 'belief_summary', $5, $6::jsonb, $7::jsonb, true)
+        RETURNING id
+      `,
+      [
+        input.namespaceId,
+        nextContent,
+        effectiveTimestamp,
+        beliefState.source_memory_id,
+        canonicalKey,
+        JSON.stringify({
+          topic: beliefState.topic,
+          belief_text: beliefState.belief_text,
+          prior_belief_text: beliefState.prior_belief_text,
+          prior_valid_until: beliefState.prior_valid_until
+        }),
+        JSON.stringify({
+          source: "memory_reconsolidation",
+          run_id: runId,
+          reconsolidation_kind: "belief_profile",
+          topic: beliefState.topic
+        })
+      ]
+    );
+
+    const semanticMemoryId = insertResult.rows[0]?.id;
+    if (!semanticMemoryId) {
+      throw new Error("Failed to create reconsolidated belief summary.");
+    }
+
+    let action: MemoryReconsolidationSummary["action"] = "add";
+    let reason = "Added a belief summary grounded in current-vs-historical belief state.";
+
+    if (existing) {
+      await client.query(
+        `
+          UPDATE semantic_memory
+          SET
+            valid_until = $2::timestamptz,
+            status = 'superseded',
+            superseded_by_id = $3::uuid
+          WHERE id = $1
+        `,
+        [existing.id, effectiveTimestamp, semanticMemoryId]
+      );
+      action = "supersede";
+      reason = "Superseded a stale belief summary after state changed.";
+    }
+
+    await client.query(
+      `
+        INSERT INTO memory_reconsolidation_events (
+          namespace_id,
+          query_text,
+          trigger_confidence,
+          action,
+          target_memory_kind,
+          semantic_memory_id,
+          source_episodic_id,
+          reason,
+          metadata
+        )
+        VALUES ($1, $2, 'weak', $3, 'belief_summary', $4::uuid, $5::uuid, $6, $7::jsonb)
+      `,
+      [
+        input.namespaceId,
+        input.query,
+        action,
+        semanticMemoryId,
+        beliefState.source_memory_id,
+        reason,
+        JSON.stringify({
+          run_id: runId,
+          canonical_key: canonicalKey,
+          topic: beliefState.topic
+        })
+      ]
+    );
+
+    return {
+      runId,
+      namespaceId: input.namespaceId,
+      query: input.query,
+      priorConfidence: "weak",
+      action,
+      semanticMemoryId,
+      reason
+    };
+  });
+}
+
 async function resolveSourceEpisodicId(
   namespaceId: string,
   artifactId: string | null | undefined,
@@ -467,6 +794,11 @@ export async function runMemoryReconsolidation(
   const profilePerson = parseRelationshipProfileConsistencyQuery(input.query);
   if (profilePerson) {
     return runRelationshipProfileReconsolidation(input, profilePerson);
+  }
+
+  const beliefTopic = parseBeliefProfileConsistencyQuery(input.query);
+  if (beliefTopic) {
+    return runBeliefProfileReconsolidation(input, beliefTopic);
   }
 
   const runId = randomUUID();

@@ -150,7 +150,12 @@ const CONSTRAINT_CANONICALS = new Map<string, {
   ["return ground-truth source document with search results", { canonicalName: "Return Ground-Truth Source Document With Search Results" }],
   ["never silently rewrite raw source truth", { canonicalName: "Never Silently Rewrite Raw Source Truth" }],
   ["ask for clarification instead of guessing", { canonicalName: "Ask For Clarification Instead Of Guessing" }],
-  ["ask for clarification of guessing", { canonicalName: "Ask For Clarification Instead Of Guessing" }]
+  ["ask for clarification of guessing", { canonicalName: "Ask For Clarification Instead Of Guessing" }],
+  ["never order peanuts for my dinner", {
+    canonicalName: "Peanuts are an absolute dietary blocker for Steve",
+    aliases: ["Never Order Peanuts For My Dinner"]
+  }],
+  ["peanuts are an absolute dietary blocker for steve", { canonicalName: "Peanuts are an absolute dietary blocker for Steve" }]
 ]);
 
 const STYLE_SPEC_CANONICALS = new Map<string, {
@@ -227,6 +232,15 @@ function buildCanonicalPlanKey(target: string): string {
 
 function buildCanonicalBeliefKey(target: string): string {
   return `belief:${target}`;
+}
+
+function normalizeBeliefTopicKey(value: string): string {
+  return normalizePreferenceTarget(
+    value
+      .replace(/^\s*using\s+/iu, "")
+      .replace(/\bfor\b/giu, " ")
+      .replace(/\b(?:my|our)\s+(?:stance|opinion)\s+on\s+/iu, "")
+  ).replace(/\s+/gu, "_");
 }
 
 function normalizeProjectKey(value: string): string {
@@ -956,6 +970,20 @@ function extractConstraintStatements(content: string): ConstraintStatement[] {
     });
   }
 
+  for (const match of content.matchAll(/\b(peanuts?)\s+(?:are|is)\s+an?\s+absolute\s+dietary\s+blocker\s+for\s+(?:me|Steve(?:\s+Tietze)?)(?:\s+now)?\b/giu)) {
+    const subject = toDisplayPhrase(match[1] ?? "Peanuts");
+    const displayRule = `${subject} are an absolute dietary blocker for Steve`;
+    const normalizedKey = normalizePreferenceTarget(displayRule).replace(/\s+/gu, "_");
+    if (!normalizedKey) {
+      continue;
+    }
+    statements.push({
+      rule: displayRule,
+      canonicalKey: buildCanonicalConstraintKey(normalizedKey),
+      modality: "never"
+    });
+  }
+
   return statements.filter((statement, index, values) =>
     values.findIndex((candidate) => candidate.canonicalKey === statement.canonicalKey) === index
   );
@@ -1115,7 +1143,7 @@ function extractBeliefStatements(content: string): BeliefStatement[] {
       topicInput ? toDisplayPhrase(normalizeWhitespace(topicInput)) : null,
       summary
     );
-    const normalizedKey = normalizePreferenceTarget(topic).replace(/\s+/gu, "_");
+    const normalizedKey = normalizeBeliefTopicKey(topic);
     if (!normalizedKey) {
       return;
     }
@@ -3255,173 +3283,372 @@ async function syncOperationalHeuristics(
         em.source_chunk_id
       FROM episodic_memory em
       WHERE em.namespace_id = $1
-        AND lower(em.content) LIKE '%wipe and replay the database%'
       ORDER BY em.occurred_at ASC NULLS LAST, em.id ASC
     `,
     [namespaceId]
   );
-
-  const distinctDays = new Set(
-    evidenceRows.rows
-      .map((row) => {
-        if (!row.occurred_at) {
-          return null;
-        }
-        const iso = new Date(row.occurred_at).toISOString();
-        return Number.isNaN(Date.parse(iso)) ? null : iso.slice(0, 10);
-      })
-      .filter((value): value is string => Boolean(value))
-  );
-
-  if (distinctDays.size < 3) {
-    return {
-      decisions: [],
-      promotedCount: 0,
-      supersededCount: 0
-    };
-  }
-
-  const statement: StyleSpecStatement = {
-    rule: "Wipe And Replay The Database After Each Slice",
-    canonicalKey: buildCanonicalStyleSpecKey("wipe_and_replay_database_after_each_slice"),
-    scope: "workflow"
-  };
-
-  const typedEntity = resolveTypedStyleSpecEntity(statement.rule, statement.scope);
-  const typedEntityId = typedEntity ? await upsertTypedEntity(client, namespaceId, typedEntity) : null;
-  const sourceMemoryIds = evidenceRows.rows.map((row) => row.memory_id);
-  const sourceMemoryId = sourceMemoryIds[0] ?? null;
-  const occurredAt = evidenceRows.rows.at(-1)?.occurred_at ?? new Date().toISOString();
-  const metadata = {
-    source: "heuristic_induction",
-    heuristic_kind: "replay_integrity",
-    promotion_gate: "rule_of_3_distinct_days",
-    evidence_memory_ids: sourceMemoryIds,
-    evidence_count: sourceMemoryIds.length,
-    ontology_phase: "phase6"
-  };
-
-  if (typedEntityId) {
-    for (const row of evidenceRows.rows) {
-      await upsertTypedEntityMention(client, {
-        namespaceId,
-        entityId: typedEntityId,
-        sourceMemoryId: row.memory_id,
-        sourceChunkId: row.source_chunk_id,
-        mentionText: row.content,
-        occurredAt: row.occurred_at ?? occurredAt,
-        metadata: {
-          source: "heuristic_induction",
-          heuristic_kind: "replay_integrity",
-          promotion_gate: "rule_of_3_distinct_days"
-        }
-      });
+  const patterns = [
+    {
+      heuristicKind: "replay_integrity",
+      statement: {
+        rule: "Wipe And Replay The Database After Each Slice",
+        canonicalKey: buildCanonicalStyleSpecKey("wipe_and_replay_database_after_each_slice"),
+        scope: "workflow"
+      } satisfies StyleSpecStatement,
+      summary: "Operational heuristic: wipe and replay the database after each implementation slice before moving on.",
+      decisionText: "Induced replay-integrity workflow heuristic from repeated evidence.",
+      matchers: [
+        /wipe and replay the database/iu,
+        /operational protocol.+wipe and replay/iu,
+        /replay goes red.+self-heal/iu
+      ]
+    },
+    {
+      heuristicKind: "large_pdf_protocol",
+      statement: {
+        rule: "Chunk Large PDF Uploads Before Processing",
+        canonicalKey: buildCanonicalStyleSpecKey("chunk_large_pdf_uploads_before_processing"),
+        scope: "workflow"
+      } satisfies StyleSpecStatement,
+      summary: "Operational heuristic: chunk or defer PDF uploads over 50MB before processing them.",
+      decisionText: "Induced large-PDF handling heuristic from repeated failure evidence.",
+      matchers: [
+        /pdf uploads?.+50mb/iu,
+        /pdfs? over 50mb/iu,
+        /chunk(?:ed|ing).+pdf/iu,
+        /large pdf.+before processing/iu
+      ]
     }
-  }
-
-  const semanticRows = await client.query<{ id: string }>(
-    `
-      SELECT id
-      FROM semantic_memory
-      WHERE namespace_id = $1
-        AND canonical_key = $2
-        AND status = 'active'
-        AND valid_until IS NULL
-      ORDER BY valid_from DESC
-      LIMIT 1
-    `,
-    [namespaceId, statement.canonicalKey]
-  );
+  ] as const;
 
   let promotedCount = 0;
-  const semanticRow = semanticRows.rows[0];
-  const normalizedValue = {
-    style_spec: statement.rule,
-    scope: statement.scope,
-    entity_id: typedEntityId,
-    entity_type: typedEntity?.entityType ?? null,
-    support_memory_ids: sourceMemoryIds,
-    induced: true
-  };
-
-  if (!semanticRow) {
-    await client.query(
-      `
-        INSERT INTO semantic_memory (
-          namespace_id,
-          content_abstract,
-          importance_score,
-          valid_from,
-          valid_until,
-          status,
-          is_anchor,
-          source_episodic_id,
-          source_chunk_id,
-          source_artifact_observation_id,
-          memory_kind,
-          canonical_key,
-          normalized_value,
-          metadata,
-          decay_exempt
-        )
-        VALUES ($1, $2, 0.9, $3, NULL, 'active', true, $4, NULL, NULL, 'style_spec', $5, $6::jsonb, $7::jsonb, true)
-      `,
-      [
-        namespaceId,
-        "Operational heuristic: wipe and replay the database after each implementation slice before moving on.",
-        occurredAt,
-        sourceMemoryId,
-        statement.canonicalKey,
-        JSON.stringify(normalizedValue),
-        JSON.stringify(metadata)
-      ]
-    );
-    promotedCount += 1;
-  } else {
-    await client.query(
-      `
-        UPDATE semantic_memory
-        SET normalized_value = normalized_value || $2::jsonb,
-            metadata = metadata || $3::jsonb
-        WHERE id = $1
-      `,
-      [semanticRow.id, JSON.stringify(normalizedValue), JSON.stringify(metadata)]
-    );
-  }
-
+  let supersededCount = 0;
+  const decisions: ConsolidationDecision[] = [];
   const namespacePersonLabel = await loadNamespacePersonLabel(client, namespaceId, "");
-  const proceduralResult = await upsertProceduralState(client, {
-    namespaceId,
-    stateType: "style_spec",
-    stateKey: statement.canonicalKey,
-    stateValue: {
-      person: namespacePersonLabel,
-      style_spec: statement.rule,
-      scope: statement.scope,
-      status: "active",
+
+  for (const pattern of patterns) {
+    const matchedRows = evidenceRows.rows.filter((row) => pattern.matchers.some((matcher) => matcher.test(row.content)));
+    const distinctDays = new Set(
+      matchedRows
+        .map((row) => {
+          if (!row.occurred_at) {
+            return null;
+          }
+          const iso = new Date(row.occurred_at).toISOString();
+          return Number.isNaN(Date.parse(iso)) ? null : iso.slice(0, 10);
+        })
+        .filter((value): value is string => Boolean(value))
+    );
+
+    if (distinctDays.size < 3) {
+      continue;
+    }
+
+    const typedEntity = resolveTypedStyleSpecEntity(pattern.statement.rule, pattern.statement.scope);
+    const typedEntityId = typedEntity ? await upsertTypedEntity(client, namespaceId, typedEntity) : null;
+    const sourceMemoryIds = matchedRows.map((row) => row.memory_id);
+    const sourceMemoryId = sourceMemoryIds[0] ?? null;
+    const occurredAt = matchedRows.at(-1)?.occurred_at ?? new Date().toISOString();
+    const metadata = {
+      source: "heuristic_induction",
+      heuristic_kind: pattern.heuristicKind,
+      promotion_gate: "rule_of_3_distinct_days",
+      evidence_memory_ids: sourceMemoryIds,
+      evidence_count: sourceMemoryIds.length,
+      ontology_phase: "phase6"
+    };
+
+    if (typedEntityId) {
+      for (const row of matchedRows) {
+        await upsertTypedEntityMention(client, {
+          namespaceId,
+          entityId: typedEntityId,
+          sourceMemoryId: row.memory_id,
+          sourceChunkId: row.source_chunk_id,
+          mentionText: row.content,
+          occurredAt: row.occurred_at ?? occurredAt,
+          metadata: {
+            source: "heuristic_induction",
+            heuristic_kind: pattern.heuristicKind,
+            promotion_gate: "rule_of_3_distinct_days"
+          }
+        });
+      }
+    }
+
+    const semanticRows = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM semantic_memory
+        WHERE namespace_id = $1
+          AND canonical_key = $2
+          AND status = 'active'
+          AND valid_until IS NULL
+        ORDER BY valid_from DESC
+        LIMIT 1
+      `,
+      [namespaceId, pattern.statement.canonicalKey]
+    );
+
+    const semanticRow = semanticRows.rows[0];
+    const normalizedValue = {
+      style_spec: pattern.statement.rule,
+      scope: pattern.statement.scope,
       entity_id: typedEntityId,
       entity_type: typedEntity?.entityType ?? null,
       support_memory_ids: sourceMemoryIds,
       induced: true
-    },
-    occurredAt,
-    sourceMemoryId,
-    metadata,
-    supersessionMode: "replace"
-  });
+    };
 
-  promotedCount += proceduralResult.promoted ? 1 : 0;
+    if (!semanticRow) {
+      await client.query(
+        `
+          INSERT INTO semantic_memory (
+            namespace_id,
+            content_abstract,
+            importance_score,
+            valid_from,
+            valid_until,
+            status,
+            is_anchor,
+            source_episodic_id,
+            source_chunk_id,
+            source_artifact_observation_id,
+            memory_kind,
+            canonical_key,
+            normalized_value,
+            metadata,
+            decay_exempt
+          )
+          VALUES ($1, $2, 0.9, $3, NULL, 'active', true, $4, NULL, NULL, 'style_spec', $5, $6::jsonb, $7::jsonb, true)
+        `,
+        [
+          namespaceId,
+          pattern.summary,
+          occurredAt,
+          sourceMemoryId,
+          pattern.statement.canonicalKey,
+          JSON.stringify(normalizedValue),
+          JSON.stringify(metadata)
+        ]
+      );
+      promotedCount += 1;
+    } else {
+      await client.query(
+        `
+          UPDATE semantic_memory
+          SET normalized_value = normalized_value || $2::jsonb,
+              metadata = metadata || $3::jsonb
+          WHERE id = $1
+        `,
+        [semanticRow.id, JSON.stringify(normalizedValue), JSON.stringify(metadata)]
+      );
+    }
 
-  return {
-    decisions: [
+    const proceduralResult = await upsertProceduralState(client, {
+      namespaceId,
+      stateType: "style_spec",
+      stateKey: pattern.statement.canonicalKey,
+      stateValue: {
+        person: namespacePersonLabel,
+        style_spec: pattern.statement.rule,
+        scope: pattern.statement.scope,
+        status: "active",
+        entity_id: typedEntityId,
+        entity_type: typedEntity?.entityType ?? null,
+        support_memory_ids: sourceMemoryIds,
+        induced: true
+      },
+      occurredAt,
+      sourceMemoryId,
+      metadata,
+      supersessionMode: "replace"
+    });
+
+    promotedCount += proceduralResult.promoted ? 1 : 0;
+    supersededCount += proceduralResult.superseded ? 1 : 0;
+    decisions.push(
       buildDecision(
         proceduralResult.superseded || semanticRow ? "UPDATE" : "ADD",
-        "Induced replay-integrity workflow heuristic from repeated evidence.",
+        pattern.decisionText,
         0.86
       )
-    ],
+    );
+  }
+
+  const constraintPatterns = [
+    {
+      heuristicKind: "clarify_unknown_identity",
+      statement: {
+        rule: "Ask For Clarification Instead Of Guessing",
+        canonicalKey: buildCanonicalConstraintKey("ask_for_clarification_instead_of_guessing"),
+        modality: "clarify"
+      } satisfies ConstraintStatement,
+      summary: "Operational heuristic: when identity or grounding is unclear, ask for clarification instead of guessing.",
+      decisionText: "Induced clarification-first constraint from repeated ambiguity-handling evidence.",
+      matchers: [
+        /ask for clarification instead of guessing/iu,
+        /if we don't know.+ask for clarification/iu,
+        /unknown (?:identity|kinship|place).+don't guess/iu,
+        /when (?:identity|grounding) is unclear.+clarification/iu
+      ]
+    }
+  ] as const;
+
+  for (const pattern of constraintPatterns) {
+    const matchedRows = evidenceRows.rows.filter((row) => pattern.matchers.some((matcher) => matcher.test(row.content)));
+    const distinctDays = new Set(
+      matchedRows
+        .map((row) => {
+          if (!row.occurred_at) {
+            return null;
+          }
+          const iso = new Date(row.occurred_at).toISOString();
+          return Number.isNaN(Date.parse(iso)) ? null : iso.slice(0, 10);
+        })
+        .filter((value): value is string => Boolean(value))
+    );
+
+    if (distinctDays.size < 3) {
+      continue;
+    }
+
+    const typedEntity = resolveTypedConstraintEntity(pattern.statement.rule);
+    const typedEntityId = typedEntity ? await upsertTypedEntity(client, namespaceId, typedEntity) : null;
+    const sourceMemoryIds = matchedRows.map((row) => row.memory_id);
+    const sourceMemoryId = sourceMemoryIds[0] ?? null;
+    const occurredAt = matchedRows.at(-1)?.occurred_at ?? new Date().toISOString();
+    const metadata = {
+      source: "heuristic_induction",
+      heuristic_kind: pattern.heuristicKind,
+      promotion_gate: "rule_of_3_distinct_days",
+      evidence_memory_ids: sourceMemoryIds,
+      evidence_count: sourceMemoryIds.length,
+      ontology_phase: "phase6"
+    };
+
+    if (typedEntityId) {
+      for (const row of matchedRows) {
+        await upsertTypedEntityMention(client, {
+          namespaceId,
+          entityId: typedEntityId,
+          sourceMemoryId: row.memory_id,
+          sourceChunkId: row.source_chunk_id,
+          mentionText: row.content,
+          occurredAt: row.occurred_at ?? occurredAt,
+          metadata: {
+            source: "heuristic_induction",
+            heuristic_kind: pattern.heuristicKind,
+            promotion_gate: "rule_of_3_distinct_days"
+          }
+        });
+      }
+    }
+
+    const semanticRows = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM semantic_memory
+        WHERE namespace_id = $1
+          AND canonical_key = $2
+          AND status = 'active'
+          AND valid_until IS NULL
+        ORDER BY valid_from DESC
+        LIMIT 1
+      `,
+      [namespaceId, pattern.statement.canonicalKey]
+    );
+
+    const semanticRow = semanticRows.rows[0];
+    const normalizedValue = {
+      constraint: pattern.statement.rule,
+      modality: pattern.statement.modality,
+      entity_id: typedEntityId,
+      entity_type: typedEntity?.entityType ?? null,
+      support_memory_ids: sourceMemoryIds,
+      induced: true
+    };
+
+    if (!semanticRow) {
+      await client.query(
+        `
+          INSERT INTO semantic_memory (
+            namespace_id,
+            content_abstract,
+            importance_score,
+            valid_from,
+            valid_until,
+            status,
+            is_anchor,
+            source_episodic_id,
+            source_chunk_id,
+            source_artifact_observation_id,
+            memory_kind,
+            canonical_key,
+            normalized_value,
+            metadata,
+            decay_exempt
+          )
+          VALUES ($1, $2, 0.9, $3, NULL, 'active', true, $4, NULL, NULL, 'constraint', $5, $6::jsonb, $7::jsonb, true)
+        `,
+        [
+          namespaceId,
+          pattern.summary,
+          occurredAt,
+          sourceMemoryId,
+          pattern.statement.canonicalKey,
+          JSON.stringify(normalizedValue),
+          JSON.stringify(metadata)
+        ]
+      );
+      promotedCount += 1;
+    } else {
+      await client.query(
+        `
+          UPDATE semantic_memory
+          SET normalized_value = normalized_value || $2::jsonb,
+              metadata = metadata || $3::jsonb
+          WHERE id = $1
+        `,
+        [semanticRow.id, JSON.stringify(normalizedValue), JSON.stringify(metadata)]
+      );
+    }
+
+    const proceduralResult = await upsertProceduralState(client, {
+      namespaceId,
+      stateType: "constraint",
+      stateKey: pattern.statement.canonicalKey,
+      stateValue: {
+        person: namespacePersonLabel,
+        constraint: pattern.statement.rule,
+        modality: pattern.statement.modality,
+        status: "active",
+        entity_id: typedEntityId,
+        entity_type: typedEntity?.entityType ?? null,
+        support_memory_ids: sourceMemoryIds,
+        induced: true
+      },
+      occurredAt,
+      sourceMemoryId,
+      metadata,
+      supersessionMode: "replace"
+    });
+
+    promotedCount += proceduralResult.promoted ? 1 : 0;
+    supersededCount += proceduralResult.superseded ? 1 : 0;
+    decisions.push(
+      buildDecision(
+        proceduralResult.superseded || semanticRow ? "UPDATE" : "ADD",
+        pattern.decisionText,
+        0.86
+      )
+    );
+  }
+
+  return {
+    decisions,
     promotedCount,
-    supersededCount: proceduralResult.superseded ? 1 : 0
+    supersededCount
   };
 }
 

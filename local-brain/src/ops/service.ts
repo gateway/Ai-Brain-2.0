@@ -32,6 +32,26 @@ interface TemporalSummaryRow {
   readonly metadata: Record<string, unknown>;
 }
 
+interface TemporalContainmentViolationRow {
+  readonly parent_id: string;
+  readonly parent_layer: string;
+  readonly parent_start: string;
+  readonly parent_end: string;
+  readonly child_id: string;
+  readonly child_layer: string;
+  readonly child_start: string;
+  readonly child_end: string;
+}
+
+interface CausalOverlayRow {
+  readonly overlay_kind: string;
+  readonly source_id: string;
+  readonly target_id: string | null;
+  readonly occurred_at: string;
+  readonly label: string;
+  readonly metadata: Record<string, unknown>;
+}
+
 interface RelationshipGraphRow {
   readonly relationship_id: string;
   readonly subject_entity_id: string;
@@ -43,8 +63,20 @@ interface RelationshipGraphRow {
   readonly predicate: string;
   readonly confidence: number | string | null;
   readonly valid_from: string;
+  readonly valid_until: string | null;
   readonly source_candidate_id: string | null;
+  readonly source_memory_id: string | null;
+  readonly source_uri: string | null;
   readonly metadata: Record<string, unknown>;
+}
+
+interface EntityHierarchyGraphRow {
+  readonly child_entity_id: string;
+  readonly child_name: string;
+  readonly child_type: string;
+  readonly parent_entity_id: string;
+  readonly parent_name: string;
+  readonly parent_type: string;
 }
 
 interface FocusEventGraphRow {
@@ -132,6 +164,27 @@ export interface OpsTimelineView {
   readonly timeEnd: string;
   readonly timeline: readonly OpsTimelineItem[];
   readonly summaries: readonly OpsTemporalSummary[];
+  readonly containmentAudit: {
+    readonly violationCount: number;
+    readonly violations: readonly {
+      readonly parentId: string;
+      readonly parentLayer: string;
+      readonly parentStart: string;
+      readonly parentEnd: string;
+      readonly childId: string;
+      readonly childLayer: string;
+      readonly childStart: string;
+      readonly childEnd: string;
+    }[];
+  };
+  readonly causalOverlays: readonly {
+    readonly kind: string;
+    readonly sourceId: string;
+    readonly targetId?: string | null;
+    readonly occurredAt: string;
+    readonly label: string;
+    readonly metadata: Record<string, unknown>;
+  }[];
 }
 
 export interface OpsRelationshipGraphNode {
@@ -152,7 +205,10 @@ export interface OpsRelationshipGraphEdge {
   readonly predicate: string;
   readonly confidence: number;
   readonly validFrom: string;
+  readonly validUntil?: string | null;
   readonly sourceCandidateId?: string | null;
+  readonly sourceMemoryId?: string | null;
+  readonly sourceUri?: string | null;
   readonly metadata: Record<string, unknown>;
 }
 
@@ -1065,7 +1121,7 @@ export async function getOpsTimelineView(
   timeEnd: string,
   limit = 40
 ): Promise<OpsTimelineView> {
-  const [timelineRows, summaryRows] = await Promise.all([
+  const [timelineRows, summaryRows, containmentRows, causalRows] = await Promise.all([
     queryRows<TimelineRow>(
       `
       SELECT
@@ -1125,6 +1181,103 @@ export async function getOpsTimelineView(
       `
       ,
       [namespaceId, timeStart, timeEnd]
+    ),
+    queryRows<TemporalContainmentViolationRow>(
+      `
+      SELECT
+        parent.id::text AS parent_id,
+        parent.layer AS parent_layer,
+        parent.period_start::text AS parent_start,
+        parent.period_end::text AS parent_end,
+        child.id::text AS child_id,
+        child.layer AS child_layer,
+        child.period_start::text AS child_start,
+        child.period_end::text AS child_end
+      FROM temporal_nodes child
+      JOIN temporal_nodes parent ON parent.id = child.parent_id
+      WHERE child.namespace_id = $1
+        AND parent.namespace_id = $1
+        AND child.period_end >= $2::timestamptz
+        AND child.period_start <= $3::timestamptz
+        AND (
+          parent.period_start > child.period_start
+          OR parent.period_end < child.period_end
+        )
+      ORDER BY child.period_start ASC, child.id ASC
+      LIMIT 25
+      `,
+      [namespaceId, timeStart, timeEnd]
+    ),
+    queryRows<CausalOverlayRow>(
+      `
+      SELECT *
+      FROM (
+        SELECT
+          'procedural_supersession'::text AS overlay_kind,
+          previous_state.id::text AS source_id,
+          next_state.id::text AS target_id,
+          COALESCE(previous_state.valid_until, next_state.valid_from, previous_state.updated_at)::text AS occurred_at,
+          CONCAT(previous_state.state_type, ': ', previous_state.state_key) AS label,
+          jsonb_build_object(
+            'state_type', previous_state.state_type,
+            'state_key', previous_state.state_key,
+            'previous', previous_state.state_value,
+            'next', next_state.state_value
+          ) AS metadata
+        FROM procedural_memory previous_state
+        LEFT JOIN procedural_memory next_state
+          ON next_state.supersedes_id = previous_state.id
+        WHERE previous_state.namespace_id = $1
+          AND previous_state.valid_until IS NOT NULL
+          AND COALESCE(previous_state.valid_until, previous_state.updated_at) >= $2::timestamptz
+          AND COALESCE(previous_state.valid_until, previous_state.updated_at) <= $3::timestamptz
+
+        UNION ALL
+
+        SELECT
+          'semantic_supersession'::text AS overlay_kind,
+          previous_memory.id::text AS source_id,
+          previous_memory.superseded_by_id::text AS target_id,
+          COALESCE(previous_memory.valid_until, previous_memory.updated_at)::text AS occurred_at,
+          CONCAT(previous_memory.memory_kind, ': ', COALESCE(previous_memory.canonical_key, previous_memory.content_abstract)) AS label,
+          jsonb_build_object(
+            'memory_kind', previous_memory.memory_kind,
+            'canonical_key', previous_memory.canonical_key,
+            'normalized_value', previous_memory.normalized_value
+          ) AS metadata
+        FROM semantic_memory previous_memory
+        WHERE previous_memory.namespace_id = $1
+          AND previous_memory.valid_until IS NOT NULL
+          AND previous_memory.status = 'superseded'
+          AND COALESCE(previous_memory.valid_until, previous_memory.updated_at) >= $2::timestamptz
+          AND COALESCE(previous_memory.valid_until, previous_memory.updated_at) <= $3::timestamptz
+
+        UNION ALL
+
+        SELECT
+          'relationship_supersession'::text AS overlay_kind,
+          previous_rel.id::text AS source_id,
+          previous_rel.superseded_by_id::text AS target_id,
+          COALESCE(previous_rel.valid_until, previous_rel.valid_from)::text AS occurred_at,
+          CONCAT(subject_entity.canonical_name, ' ', previous_rel.predicate, ' ', object_entity.canonical_name) AS label,
+          jsonb_build_object(
+            'predicate', previous_rel.predicate,
+            'subject', subject_entity.canonical_name,
+            'object', object_entity.canonical_name,
+            'metadata', previous_rel.metadata
+          ) AS metadata
+        FROM relationship_memory previous_rel
+        JOIN entities subject_entity ON subject_entity.id = previous_rel.subject_entity_id
+        JOIN entities object_entity ON object_entity.id = previous_rel.object_entity_id
+        WHERE previous_rel.namespace_id = $1
+          AND previous_rel.valid_until IS NOT NULL
+          AND COALESCE(previous_rel.valid_until, previous_rel.valid_from) >= $2::timestamptz
+          AND COALESCE(previous_rel.valid_until, previous_rel.valid_from) <= $3::timestamptz
+      ) overlays
+      ORDER BY occurred_at DESC, overlay_kind ASC
+      LIMIT 24
+      `,
+      [namespaceId, timeStart, timeEnd]
     )
   ]);
 
@@ -1151,6 +1304,27 @@ export async function getOpsTimelineView(
       depth: row.depth,
       parentId: row.parent_id,
       metadata: row.metadata
+    })),
+    containmentAudit: {
+      violationCount: containmentRows.length,
+      violations: containmentRows.map((row) => ({
+        parentId: row.parent_id,
+        parentLayer: row.parent_layer,
+        parentStart: row.parent_start,
+        parentEnd: row.parent_end,
+        childId: row.child_id,
+        childLayer: row.child_layer,
+        childStart: row.child_start,
+        childEnd: row.child_end
+      }))
+    },
+    causalOverlays: causalRows.map((row) => ({
+      kind: row.overlay_kind,
+      sourceId: row.source_id,
+      targetId: row.target_id,
+      occurredAt: row.occurred_at,
+      label: row.label,
+      metadata: row.metadata
     }))
   };
 }
@@ -1166,6 +1340,22 @@ export async function getOpsRelationshipGraph(
 ): Promise<OpsRelationshipGraph> {
   const entityName = options?.entityName?.trim();
   const limit = options?.limit ?? 36;
+  const selectedEntityId = entityName
+    ? (
+        await queryRows<{ readonly entity_id: string }>(
+          `
+            SELECT id::text AS entity_id
+            FROM entities
+            WHERE namespace_id = $1
+              AND merged_into_entity_id IS NULL
+              AND lower(canonical_name) = lower($2)
+            LIMIT 1
+          `,
+          [namespaceId, entityName]
+        )
+      )[0]?.entity_id ?? null
+    : null;
+  const graphLimit = selectedEntityId ? Math.max(limit * 4, 96) : limit;
   const rows = await queryRows<RelationshipGraphRow>(
     `
     SELECT
@@ -1179,27 +1369,56 @@ export async function getOpsRelationshipGraph(
       rm.predicate,
       rm.confidence,
       rm.valid_from::text,
+      rm.valid_until::text,
       rm.source_candidate_id::text,
+      rc.source_memory_id::text,
+      a.uri AS source_uri,
       rm.metadata
     FROM relationship_memory rm
     JOIN entities subject ON subject.id = rm.subject_entity_id
     JOIN entities object_entity ON object_entity.id = rm.object_entity_id
+    LEFT JOIN relationship_candidates rc ON rc.id = rm.source_candidate_id
+    LEFT JOIN episodic_memory em ON em.id = rc.source_memory_id
+    LEFT JOIN artifacts a ON a.id = em.artifact_id
     WHERE rm.namespace_id = $1
-      AND rm.status = 'active'
-      AND rm.valid_until IS NULL
       AND subject.merged_into_entity_id IS NULL
       AND object_entity.merged_into_entity_id IS NULL
-      AND ($2::timestamptz IS NULL OR rm.valid_from >= $2::timestamptz)
+      AND (
+        (
+          $4::uuid IS NULL
+          AND rm.status = 'active'
+          AND rm.valid_until IS NULL
+        )
+        OR
+        (
+          $4::uuid IS NOT NULL
+          AND (
+            (rm.status = 'active' AND rm.valid_until IS NULL)
+            OR rm.subject_entity_id = $4::uuid
+            OR rm.object_entity_id = $4::uuid
+          )
+        )
+      )
+      AND ($2::timestamptz IS NULL OR coalesce(rm.valid_until, rm.valid_from) >= $2::timestamptz)
       AND ($3::timestamptz IS NULL OR rm.valid_from <= $3::timestamptz)
       AND (
-        $4::text IS NULL
-        OR lower(subject.canonical_name) = lower($4::text)
-        OR lower(object_entity.canonical_name) = lower($4::text)
+        $5::text IS NULL
+        OR lower(subject.canonical_name) = lower($5::text)
+        OR lower(object_entity.canonical_name) = lower($5::text)
+        OR rm.subject_entity_id = $4::uuid
+        OR rm.object_entity_id = $4::uuid
       )
-    ORDER BY rm.confidence DESC, rm.valid_from DESC
-    LIMIT $5
+    ORDER BY
+      CASE
+        WHEN $4::uuid IS NOT NULL AND (rm.subject_entity_id = $4::uuid OR rm.object_entity_id = $4::uuid) THEN 0
+        ELSE 1
+      END,
+      CASE WHEN rm.valid_until IS NULL THEN 0 ELSE 1 END,
+      coalesce(rm.valid_until, rm.valid_from) DESC,
+      rm.confidence DESC
+    LIMIT $6
     `,
-    [namespaceId, options?.timeStart ?? null, options?.timeEnd ?? null, entityName ?? null, limit]
+    [namespaceId, options?.timeStart ?? null, options?.timeEnd ?? null, selectedEntityId, entityName ?? null, graphLimit]
   );
 
   const mentionRows = await queryRows<{ readonly entity_id: string; readonly mention_count: string }>(
@@ -1266,201 +1485,302 @@ export async function getOpsRelationshipGraph(
       predicate: row.predicate,
       confidence: Number(row.confidence ?? 0),
       validFrom: row.valid_from,
+      validUntil: row.valid_until,
       sourceCandidateId: row.source_candidate_id,
+      sourceMemoryId: row.source_memory_id,
+      sourceUri: row.source_uri,
       metadata: row.metadata
     });
   }
 
-  if (entityName) {
+  if (entityName && selectedEntityId) {
     const entityLabelToken = entityName.trim().split(/\s+/u)[0] ?? entityName.trim();
-    const selectedEntityId =
-      graphNodeIdByName(nodes, entityName) ??
-      (
-        await queryRows<{ readonly entity_id: string }>(
-          `
-            SELECT id::text AS entity_id
-            FROM entities
-            WHERE namespace_id = $1
-              AND merged_into_entity_id IS NULL
-              AND lower(canonical_name) = lower($2)
-            LIMIT 1
-          `,
-          [namespaceId, entityName]
-        )
-      )[0]?.entity_id ??
-      null;
-
-    if (selectedEntityId) {
-      const focusEventRows = await queryRows<FocusEventGraphRow>(
+    if (!nodes.has(selectedEntityId)) {
+      const selectedRows = await queryRows<{ readonly entity_id: string; readonly name: string; readonly entity_type: string }>(
         `
-          WITH chosen_events AS (
-            SELECT
-              ne.id::text AS event_id,
-              ne.event_label,
-              ne.event_kind,
-              COALESCE(ne.time_start, ns.occurred_at, ne.created_at)::text AS occurred_at
-            FROM narrative_events ne
-            LEFT JOIN narrative_scenes ns ON ns.id = ne.source_scene_id
-            WHERE ne.namespace_id = $1
-              AND (
-                ne.primary_subject_entity_id = $2::uuid
-                OR EXISTS (
-                  SELECT 1
-                  FROM narrative_event_members selected_member
-                  WHERE selected_member.event_id = ne.id
-                    AND selected_member.entity_id = $2::uuid
-                )
-                OR (
-                  lower(coalesce(ns.scene_text, '')) LIKE '%' || lower($5) || '%'
-                  OR lower(coalesce(ne.event_label, '')) LIKE '%' || lower($5) || '%'
-                  OR lower(coalesce(ns.scene_text, '')) LIKE '%' || lower($6) || '%'
-                  OR lower(coalesce(ne.event_label, '')) LIKE '%' || lower($6) || '%'
-                )
-              )
-              AND ($3::timestamptz IS NULL OR COALESCE(ne.time_start, ns.occurred_at, ne.created_at) >= $3::timestamptz)
-              AND ($4::timestamptz IS NULL OR COALESCE(ne.time_start, ns.occurred_at, ne.created_at) <= $4::timestamptz)
-            ORDER BY COALESCE(ne.time_start, ns.occurred_at, ne.created_at) DESC
-            LIMIT 8
-          )
-          SELECT *
-          FROM (
-            SELECT
-              ce.event_id,
-              ce.event_label,
-              ce.event_kind,
-              ce.occurred_at,
-              ent.id::text AS entity_id,
-              ent.canonical_name AS entity_name,
-              ent.entity_type AS entity_type,
-              member.member_role
-            FROM chosen_events ce
-            JOIN narrative_event_members member ON member.event_id::text = ce.event_id
-            JOIN entities ent ON ent.id = member.entity_id
-            UNION ALL
-            SELECT
-              ce.event_id,
-              ce.event_label,
-              ce.event_kind,
-              ce.occurred_at,
-              concat('eventmeta:participant:', ce.event_id, ':', participant_name) AS entity_id,
-              participant_name AS entity_name,
-              'person' AS entity_type,
-              'participant' AS member_role
-            FROM chosen_events ce
-            JOIN narrative_events ne ON ne.id::text = ce.event_id
-            JOIN LATERAL jsonb_array_elements_text(
-              CASE
-                WHEN jsonb_typeof(ne.metadata->'participant_names') = 'array' THEN ne.metadata->'participant_names'
-                ELSE '[]'::jsonb
-              END
-            ) AS participant_name ON TRUE
-            WHERE lower(participant_name) <> lower($5)
-              AND lower(participant_name) <> lower($6)
-            UNION ALL
-            SELECT
-              ce.event_id,
-              ce.event_label,
-              ce.event_kind,
-              ce.occurred_at,
-              concat('eventmeta:location:', ce.event_id) AS entity_id,
-              ne.metadata->>'location_text' AS entity_name,
-              'place' AS entity_type,
-              'location' AS member_role
-            FROM chosen_events ce
-            JOIN narrative_events ne ON ne.id::text = ce.event_id
-            WHERE coalesce(ne.metadata->>'location_text', '') <> ''
-          ) AS focus_rows
-          ORDER BY occurred_at DESC, member_role, entity_name
+          SELECT
+            id::text AS entity_id,
+            canonical_name AS name,
+            entity_type
+          FROM entities
+          WHERE id = $1::uuid
+          LIMIT 1
         `,
-        [namespaceId, selectedEntityId, options?.timeStart ?? null, options?.timeEnd ?? null, entityName, entityLabelToken]
+        [selectedEntityId]
       );
+      const selected = selectedRows[0];
+      if (selected) {
+        nodes.set(selectedEntityId, {
+          id: selected.entity_id,
+          name: selected.name,
+          entityType: selected.entity_type,
+          degree: degreeByEntity.get(selected.entity_id) ?? 0,
+          mentionCount: mentionCountByEntity.get(selected.entity_id) ?? 0,
+          isSelected: true
+        });
+      }
+    } else {
+      const selectedNode = nodes.get(selectedEntityId);
+      if (selectedNode && !selectedNode.isSelected) {
+        nodes.set(selectedEntityId, {
+          ...selectedNode,
+          isSelected: true
+        });
+      }
+    }
 
-      const eventDegree = new Map<string, number>();
-      for (const row of focusEventRows) {
-        eventDegree.set(row.event_id, (eventDegree.get(row.event_id) ?? 1) + 1);
+    const focusEventRows = await queryRows<FocusEventGraphRow>(
+      `
+        WITH chosen_events AS (
+          SELECT
+            ne.id::text AS event_id,
+            ne.event_label,
+            ne.event_kind,
+            COALESCE(ne.time_start, ns.occurred_at, ne.created_at)::text AS occurred_at
+          FROM narrative_events ne
+          LEFT JOIN narrative_scenes ns ON ns.id = ne.source_scene_id
+          WHERE ne.namespace_id = $1
+            AND (
+              ne.primary_subject_entity_id = $2::uuid
+              OR EXISTS (
+                SELECT 1
+                FROM narrative_event_members selected_member
+                WHERE selected_member.event_id = ne.id
+                  AND selected_member.entity_id = $2::uuid
+              )
+              OR (
+                lower(coalesce(ns.scene_text, '')) LIKE '%' || lower($5) || '%'
+                OR lower(coalesce(ne.event_label, '')) LIKE '%' || lower($5) || '%'
+                OR lower(coalesce(ns.scene_text, '')) LIKE '%' || lower($6) || '%'
+                OR lower(coalesce(ne.event_label, '')) LIKE '%' || lower($6) || '%'
+              )
+            )
+            AND ($3::timestamptz IS NULL OR COALESCE(ne.time_start, ns.occurred_at, ne.created_at) >= $3::timestamptz)
+            AND ($4::timestamptz IS NULL OR COALESCE(ne.time_start, ns.occurred_at, ne.created_at) <= $4::timestamptz)
+          ORDER BY COALESCE(ne.time_start, ns.occurred_at, ne.created_at) DESC
+          LIMIT 8
+        )
+        SELECT *
+        FROM (
+          SELECT
+            ce.event_id,
+            ce.event_label,
+            ce.event_kind,
+            ce.occurred_at,
+            ent.id::text AS entity_id,
+            ent.canonical_name AS entity_name,
+            ent.entity_type AS entity_type,
+            member.member_role
+          FROM chosen_events ce
+          JOIN narrative_event_members member ON member.event_id::text = ce.event_id
+          JOIN entities ent ON ent.id = member.entity_id
+          UNION ALL
+          SELECT
+            ce.event_id,
+            ce.event_label,
+            ce.event_kind,
+            ce.occurred_at,
+            concat('eventmeta:participant:', ce.event_id, ':', participant_name) AS entity_id,
+            participant_name AS entity_name,
+            'person' AS entity_type,
+            'participant' AS member_role
+          FROM chosen_events ce
+          JOIN narrative_events ne ON ne.id::text = ce.event_id
+          JOIN LATERAL jsonb_array_elements_text(
+            CASE
+              WHEN jsonb_typeof(ne.metadata->'participant_names') = 'array' THEN ne.metadata->'participant_names'
+              ELSE '[]'::jsonb
+            END
+          ) AS participant_name ON TRUE
+          WHERE lower(participant_name) <> lower($5)
+            AND lower(participant_name) <> lower($6)
+          UNION ALL
+          SELECT
+            ce.event_id,
+            ce.event_label,
+            ce.event_kind,
+            ce.occurred_at,
+            concat('eventmeta:location:', ce.event_id) AS entity_id,
+            ne.metadata->>'location_text' AS entity_name,
+            'place' AS entity_type,
+            'location' AS member_role
+          FROM chosen_events ce
+          JOIN narrative_events ne ON ne.id::text = ce.event_id
+          WHERE coalesce(ne.metadata->>'location_text', '') <> ''
+        ) AS focus_rows
+        ORDER BY occurred_at DESC, member_role, entity_name
+      `,
+      [namespaceId, selectedEntityId, options?.timeStart ?? null, options?.timeEnd ?? null, entityName, entityLabelToken]
+    );
+
+    const eventDegree = new Map<string, number>();
+    for (const row of focusEventRows) {
+      eventDegree.set(row.event_id, (eventDegree.get(row.event_id) ?? 1) + 1);
+    }
+
+    for (const row of focusEventRows) {
+      const eventNodeId = `event:${row.event_id}`;
+      if (!nodes.has(eventNodeId)) {
+        nodes.set(eventNodeId, {
+          id: eventNodeId,
+          name: row.event_label,
+          entityType: "event",
+          degree: eventDegree.get(row.event_id) ?? 1,
+          mentionCount: 1,
+          isSelected: false
+        });
       }
 
-      for (const row of focusEventRows) {
-        const eventNodeId = `event:${row.event_id}`;
-        if (!nodes.has(eventNodeId)) {
-          nodes.set(eventNodeId, {
-            id: eventNodeId,
-            name: row.event_label,
-            entityType: "event",
-            degree: eventDegree.get(row.event_id) ?? 1,
-            mentionCount: 1,
-            isSelected: false
-          });
-        }
-
-        const selectedNode = nodes.get(selectedEntityId);
-        if (selectedNode && !selectedNode.isSelected) {
-          nodes.set(selectedEntityId, {
-            ...selectedNode,
-            isSelected: true
-          });
-        }
-
-        const anchorEdgeId = `focus-event:${selectedEntityId}:${row.event_id}`;
-        if (!edgeKeys.has(anchorEdgeId)) {
-          edgeKeys.add(anchorEdgeId);
-          edges.push({
-            id: anchorEdgeId,
-            subjectId: selectedEntityId,
-            objectId: eventNodeId,
-            subjectName: nodes.get(selectedEntityId)?.name ?? entityName,
-            objectName: row.event_label,
-            predicate: "participated_in",
-            confidence: 0.76,
-            validFrom: row.occurred_at,
-            sourceCandidateId: null,
-            metadata: {
-              event_kind: row.event_kind,
-              source_event_id: row.event_id
-            }
-          });
-        }
-
-        if (row.entity_id === selectedEntityId) {
-          continue;
-        }
-
-        if (!nodes.has(row.entity_id)) {
-          nodes.set(row.entity_id, {
-            id: row.entity_id,
-            name: row.entity_name,
-            entityType: row.entity_type,
-            degree: degreeByEntity.get(row.entity_id) ?? 0,
-            mentionCount: mentionCountByEntity.get(row.entity_id) ?? 0,
-            isSelected: false
-          });
-        }
-
-        const predicate =
-          row.member_role === "location"
-            ? "occurred_at"
-            : row.member_role === "organization" || row.member_role === "project"
-              ? "related_to"
-              : "includes";
-        const memberEdgeId = `focus-event-member:${row.event_id}:${row.entity_id}:${row.member_role}`;
-        if (edgeKeys.has(memberEdgeId)) {
-          continue;
-        }
-        edgeKeys.add(memberEdgeId);
+      const anchorEdgeId = `focus-event:${selectedEntityId}:${row.event_id}`;
+      if (!edgeKeys.has(anchorEdgeId)) {
+        edgeKeys.add(anchorEdgeId);
         edges.push({
-          id: memberEdgeId,
-          subjectId: eventNodeId,
-          objectId: row.entity_id,
-          subjectName: row.event_label,
-          objectName: row.entity_name,
-          predicate,
-          confidence: 0.72,
+          id: anchorEdgeId,
+          subjectId: selectedEntityId,
+          objectId: eventNodeId,
+          subjectName: nodes.get(selectedEntityId)?.name ?? entityName,
+          objectName: row.event_label,
+          predicate: "participated_in",
+          confidence: 0.76,
           validFrom: row.occurred_at,
           sourceCandidateId: null,
           metadata: {
-            member_role: row.member_role,
             event_kind: row.event_kind,
             source_event_id: row.event_id
+          }
+        });
+      }
+
+      if (row.entity_id === selectedEntityId) {
+        continue;
+      }
+
+      if (!nodes.has(row.entity_id)) {
+        nodes.set(row.entity_id, {
+          id: row.entity_id,
+          name: row.entity_name,
+          entityType: row.entity_type,
+          degree: degreeByEntity.get(row.entity_id) ?? 0,
+          mentionCount: mentionCountByEntity.get(row.entity_id) ?? 0,
+          isSelected: false
+        });
+      }
+
+      const predicate =
+        row.member_role === "location"
+          ? "occurred_at"
+          : row.member_role === "organization" || row.member_role === "project"
+            ? "related_to"
+            : "includes";
+      const memberEdgeId = `focus-event-member:${row.event_id}:${row.entity_id}:${row.member_role}`;
+      if (edgeKeys.has(memberEdgeId)) {
+        continue;
+      }
+      edgeKeys.add(memberEdgeId);
+      edges.push({
+        id: memberEdgeId,
+        subjectId: eventNodeId,
+        objectId: row.entity_id,
+        subjectName: row.event_label,
+        objectName: row.entity_name,
+        predicate,
+        confidence: 0.72,
+        validFrom: row.occurred_at,
+        sourceCandidateId: null,
+        metadata: {
+          member_role: row.member_role,
+          event_kind: row.event_kind,
+          source_event_id: row.event_id
+        }
+      });
+    }
+
+    const hierarchySeedIds = [...new Set(
+      [...nodes.values()]
+        .filter((node) => node.entityType === "place" || node.entityType === "org" || node.entityType === "project")
+        .map((node) => node.id)
+        .filter((nodeId) => !nodeId.startsWith("event:") && !nodeId.startsWith("eventmeta:"))
+    )];
+    if (hierarchySeedIds.length > 0) {
+      const hierarchyRows = await queryRows<EntityHierarchyGraphRow>(
+        `
+          WITH RECURSIVE climb AS (
+            SELECT
+              child.id::text AS child_entity_id,
+              child.canonical_name AS child_name,
+              child.entity_type AS child_type,
+              parent.id::text AS parent_entity_id,
+              parent.canonical_name AS parent_name,
+              parent.entity_type AS parent_type
+            FROM entities child
+            JOIN entities parent ON parent.id = child.parent_entity_id
+            WHERE child.namespace_id = $1
+              AND child.id = ANY($2::uuid[])
+            UNION ALL
+            SELECT
+              parent.id::text AS child_entity_id,
+              parent.canonical_name AS child_name,
+              parent.entity_type AS child_type,
+              grand.id::text AS parent_entity_id,
+              grand.canonical_name AS parent_name,
+              grand.entity_type AS parent_type
+            FROM climb
+            JOIN entities parent ON parent.id::text = climb.parent_entity_id
+            JOIN entities grand ON grand.id = parent.parent_entity_id
+            WHERE parent.namespace_id = $1
+          )
+          SELECT DISTINCT
+            child_entity_id,
+            child_name,
+            child_type,
+            parent_entity_id,
+            parent_name,
+            parent_type
+          FROM climb
+        `,
+        [namespaceId, hierarchySeedIds]
+      );
+
+      for (const row of hierarchyRows) {
+        if (!nodes.has(row.child_entity_id)) {
+          nodes.set(row.child_entity_id, {
+            id: row.child_entity_id,
+            name: row.child_name,
+            entityType: row.child_type,
+            degree: degreeByEntity.get(row.child_entity_id) ?? 0,
+            mentionCount: mentionCountByEntity.get(row.child_entity_id) ?? 0,
+            isSelected: false
+          });
+        }
+
+        if (!nodes.has(row.parent_entity_id)) {
+          nodes.set(row.parent_entity_id, {
+            id: row.parent_entity_id,
+            name: row.parent_name,
+            entityType: row.parent_type,
+            degree: degreeByEntity.get(row.parent_entity_id) ?? 0,
+            mentionCount: mentionCountByEntity.get(row.parent_entity_id) ?? 0,
+            isSelected: false
+          });
+        }
+
+        const hierarchyEdgeId = `hierarchy:${row.child_entity_id}:${row.parent_entity_id}`;
+        if (edgeKeys.has(hierarchyEdgeId)) {
+          continue;
+        }
+        edgeKeys.add(hierarchyEdgeId);
+        edges.push({
+          id: hierarchyEdgeId,
+          subjectId: row.child_entity_id,
+          objectId: row.parent_entity_id,
+          subjectName: row.child_name,
+          objectName: row.parent_name,
+          predicate: "contained_in",
+          confidence: 0.99,
+          validFrom: options?.timeStart ?? new Date().toISOString(),
+          metadata: {
+            source: "entity_parent_chain",
+            structural: true
           }
         });
       }
