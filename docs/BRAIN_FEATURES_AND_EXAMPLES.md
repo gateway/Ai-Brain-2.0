@@ -10,6 +10,23 @@ The goal is simple:
 - let an operator review and correct uncertainty
 - query the system later in natural language without losing the original source trail
 
+## What the dashboard gives you
+
+The dashboard/workbench is the operator layer that makes the brain usable in practice.
+
+It is where you:
+
+- complete first-run setup
+- define the owner/self anchor
+- import trusted folders and monitored sources
+- run sessions for new intake
+- review clarifications and corrections
+- inspect the graph and timeline
+- test providers, embeddings, and operations settings
+
+The brain substrate is the memory engine.
+The dashboard is the control room that makes the engine understandable, reviewable, and safe to operate.
+
 ## What the brain can do
 
 ### 1. Keep durable evidence, not just model output

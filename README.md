@@ -23,7 +23,32 @@ AI Brain 2.0 is built to help you:
 - monitor watch folders and keep imports in sync over time
 - generate deterministic time summaries with an optional LLM semantic overlay
 
+## What You Get In The Dashboard
+
+The operator dashboard is a real product surface, not just a debug shell.
+
+It gives you:
+
+- a guided first-run setup flow so a new install knows what to do next
+- purpose and owner setup so the brain is grounded before broad ingestion
+- trusted-source import and watch-folder controls
+- session-based intake for text, audio, files, and reviewable evidence
+- clarifications and correction workflows for unresolved people, places, aliases, and relationships
+- relationship graph and timeline exploration
+- query and verification surfaces that keep supporting evidence visible
+- provider, embeddings, and operations settings in one place
+
+In practice, the app is built to let an operator:
+
+1. set up the brain
+2. ingest material
+3. review what the system learned
+4. correct uncertainty
+5. verify answers and provenance
+6. keep the memory system healthy over time
+
 For a fuller product tour with examples, see [docs/BRAIN_FEATURES_AND_EXAMPLES.md](docs/BRAIN_FEATURES_AND_EXAMPLES.md).
+For a section-by-section guide to the app itself, see [docs/OPERATOR_WORKBENCH_GUIDE.md](docs/OPERATOR_WORKBENCH_GUIDE.md).
 
 ## Quick Start
 
