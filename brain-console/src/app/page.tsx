@@ -293,6 +293,10 @@ export default async function WorkbenchDashboardPage() {
                     <p className="font-medium text-white">Runtime control</p>
                     <p className="mt-1">Inspect providers, workers, and quick-run controls.</p>
                   </Link>
+                  <Link href="/knowledge" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
+                    <p className="font-medium text-white">What it knows</p>
+                    <p className="mt-1">Read the current identity, project, people, and belief state with evidence.</p>
+                  </Link>
                   <Link href="/sources" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
                     <p className="font-medium text-white">Source manager</p>
                     <p className="mt-1">See watched folders, last scans, and pending imports.</p>

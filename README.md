@@ -36,6 +36,7 @@ It gives you:
 - session-based intake for text, audio, files, and reviewable evidence
 - clarifications and correction workflows for unresolved people, places, aliases, and relationships
 - a dedicated clarifications page that uses backend-owned priority score, level, and reasons
+- a dedicated "What It Knows" page that shows current identity, home, projects, people, routines, and beliefs with evidence
 - relationship graph and timeline exploration
 - query and verification surfaces that keep supporting evidence visible
 - a runtime page for provider reachability, worker health, and quick control actions

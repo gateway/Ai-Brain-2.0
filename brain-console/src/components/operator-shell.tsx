@@ -8,6 +8,7 @@ const fullNavigation = [
   { href: "/setup", label: "Start Here" },
   { href: "/bootstrap", label: "Guided Setup" },
   { href: "/help", label: "Help" },
+  { href: "/knowledge", label: "What It Knows" },
   { href: "/sessions", label: "Sessions" },
   { href: "/clarifications", label: "Clarifications" },
   { href: "/sources", label: "Sources" },
@@ -22,6 +23,7 @@ const onboardingNavigation = [
   { href: "/", label: "Dashboard" },
   { href: "/setup", label: "Start Here" },
   { href: "/bootstrap", label: "Guided Setup" },
+  { href: "/knowledge", label: "What It Knows" },
   { href: "/clarifications", label: "Clarifications" },
   { href: "/help", label: "Help" },
   { href: "/settings", label: "Settings" }

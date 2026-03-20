@@ -281,6 +281,19 @@ Use it to:
 
 The ranking is driven by the backend priority contract, including score, level, and reasons, not a random frontend sort.
 
+### What It Knows
+
+This is the operator-facing readout of the brain's current believed state.
+
+Use it to:
+
+- inspect the current self anchor
+- read the current answer for home, projects, people, routines, beliefs, and preferences
+- check that evidence is attached to those answers
+- spot whether a bad answer is really a clarification or source problem
+
+This page is meant to answer “what does the brain think is true right now?” without making the operator dig through graph, query, and review pages first.
+
 ### Audit
 
 The operator-facing quality and readiness surface.
