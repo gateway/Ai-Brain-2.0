@@ -24,6 +24,7 @@ import {
   scanWorkbenchSource,
   saveWorkbenchSelfProfile,
   testWorkbenchEmbeddings,
+  updateWorkbenchSession,
   updateWorkbenchBootstrapState,
   updateWorkbenchSource
 } from "@/lib/operator-workbench";
@@ -98,6 +99,7 @@ function refreshBootstrapPaths(): void {
   revalidatePath("/setup");
   revalidatePath("/bootstrap");
   revalidatePath("/bootstrap/purpose");
+  revalidatePath("/bootstrap/intelligence");
   revalidatePath("/bootstrap/owner");
   revalidatePath("/bootstrap/import");
   revalidatePath("/bootstrap/verify");
@@ -131,7 +133,7 @@ export async function saveBootstrapPurposeAction(formData: FormData): Promise<vo
   });
 
   refreshBootstrapPaths();
-  redirect("/bootstrap");
+  redirect("/bootstrap/intelligence");
 }
 
 export async function launchOwnerBootstrapAction(): Promise<void> {
@@ -139,6 +141,13 @@ export async function launchOwnerBootstrapAction(): Promise<void> {
   const existingSessionId =
     typeof bootstrap.metadata.ownerBootstrapSessionId === "string" ? bootstrap.metadata.ownerBootstrapSessionId : undefined;
   const namespaceId = bootstrap.metadata.defaultNamespaceId ?? "personal";
+  const embeddingSettings = resolveBootstrapEmbeddingSettings(bootstrap.metadata);
+  const preferredLlmProvider =
+    bootstrap.metadata.intelligenceMode === "openrouter"
+      ? "openrouter"
+      : bootstrap.metadata.intelligenceMode === "skip"
+        ? undefined
+        : bootstrap.metadata.defaultLlmProvider ?? "external";
 
   if (existingSessionId) {
     redirect("/bootstrap/owner");
@@ -148,8 +157,24 @@ export async function launchOwnerBootstrapAction(): Promise<void> {
     title: "Owner bootstrap intake",
     namespaceId,
     notes: "Protected first-run owner bootstrap session created from the onboarding flow.",
-    tags: ["bootstrap", "owner-profile"]
+    tags: ["bootstrap", "owner-profile"],
+    defaultLlmProvider: preferredLlmProvider,
+    defaultLlmModel: bootstrap.metadata.defaultLlmModel ?? undefined,
+    defaultLlmPreset: bootstrap.metadata.defaultLlmPreset ?? undefined,
+    defaultAsrModel: bootstrap.metadata.defaultAsrModel ?? undefined,
+    defaultEmbeddingProvider: embeddingSettings.provider === "none" ? undefined : embeddingSettings.provider,
+    defaultEmbeddingModel: embeddingSettings.model ?? undefined
   });
+
+  if (bootstrap.metadata.intelligenceMode === "skip") {
+    await updateWorkbenchSession(session.id, {
+      defaultLlmProvider: null,
+      defaultLlmModel: null,
+      defaultLlmPreset: null,
+      defaultEmbeddingProvider: null,
+      defaultEmbeddingModel: null
+    });
+  }
 
   await updateWorkbenchBootstrapState({
     metadata: {
@@ -161,6 +186,87 @@ export async function launchOwnerBootstrapAction(): Promise<void> {
 
   refreshBootstrapPaths();
   redirect("/bootstrap/owner");
+}
+
+export async function saveOnboardingIntelligenceAction(formData: FormData): Promise<void> {
+  const bootstrap = await getBootstrapState();
+  const existingOperations = resolveWorkbenchOperationsSettings(bootstrap.metadata);
+  const existingEmbeddings = resolveBootstrapEmbeddingSettings(bootstrap.metadata);
+  const route = readString(formData, "intelligence_route") as "external" | "openrouter" | "skip";
+  const llmModel = readString(formData, "llm_model");
+  const llmPreset = readString(formData, "llm_preset");
+  const asrModel = readString(formData, "asr_model");
+  const embeddingRoute = readString(formData, "embedding_route") || "match";
+  const summaryStyle = (readString(formData, "summary_style") as "deterministic" | "deterministic_plus_llm") || "deterministic";
+  const sourceMonitorSchedule = readString(formData, "source_monitor_default_schedule") || existingOperations.sourceMonitor.defaultScanSchedule;
+  const summaryCadenceSeconds =
+    readNumberValue(formData, "temporal_summary_interval_seconds") ?? existingOperations.temporalSummary.workerIntervalSeconds;
+
+  const resolvedEmbeddingProvider =
+    embeddingRoute === "none"
+      ? "none"
+      : embeddingRoute === "openrouter"
+        ? "openrouter"
+        : embeddingRoute === "external"
+          ? "external"
+          : route === "skip"
+            ? "none"
+            : route;
+
+  const nextMetadata: BootstrapMetadata = {
+    ...bootstrap.metadata,
+    intelligenceSetupCompletedAt: new Date().toISOString(),
+    intelligenceMode: route,
+    defaultLlmProvider: route === "skip" ? undefined : route,
+    defaultLlmModel: llmModel || null,
+    defaultLlmPreset: llmPreset || null,
+    defaultAsrModel: asrModel || null,
+    embeddingSettings: {
+      provider: resolvedEmbeddingProvider as "none" | "external" | "openrouter" | "gemini",
+      model: llmModel || existingEmbeddings.model || null,
+      dimensions: existingEmbeddings.dimensions ?? null,
+      normalize: existingEmbeddings.normalize ?? false,
+      instruction: existingEmbeddings.instruction ?? null
+    },
+    operationsSettings: {
+      ...existingOperations,
+      sourceMonitor: {
+        ...existingOperations.sourceMonitor,
+        enabled: route !== "skip",
+        defaultScanSchedule: sourceMonitorSchedule
+      },
+      temporalSummary: {
+        ...existingOperations.temporalSummary,
+        enabled: summaryStyle === "deterministic_plus_llm" || existingOperations.temporalSummary.enabled,
+        strategy: summaryStyle,
+        summarizerProvider: route === "openrouter" ? "openrouter" : "external",
+        summarizerModel: llmModel || existingOperations.temporalSummary.summarizerModel || null,
+        summarizerPreset: llmPreset || existingOperations.temporalSummary.summarizerPreset || null,
+        workerIntervalSeconds: summaryCadenceSeconds
+      }
+    }
+  };
+
+  await updateWorkbenchBootstrapState({ metadata: nextMetadata });
+
+  const ownerSessionId =
+    typeof bootstrap.metadata.ownerBootstrapSessionId === "string" ? bootstrap.metadata.ownerBootstrapSessionId : undefined;
+  if (ownerSessionId) {
+    await updateWorkbenchSession(ownerSessionId, {
+      defaultLlmProvider: route === "skip" ? null : route,
+      defaultLlmModel: llmModel || null,
+      defaultLlmPreset: llmPreset || null,
+      defaultAsrModel: asrModel || null,
+      defaultEmbeddingProvider: resolvedEmbeddingProvider === "none" ? null : (resolvedEmbeddingProvider as "external" | "openrouter" | "gemini"),
+      defaultEmbeddingModel: llmModel || null,
+      metadata: {
+        onboarding_intelligence_route: route
+      }
+    });
+  }
+
+  refreshBootstrapPaths();
+  redirect("/bootstrap/owner?saved=intelligence");
 }
 
 export async function saveBootstrapSelfProfileAction(formData: FormData): Promise<void> {
@@ -588,7 +694,9 @@ export async function saveSourceAction(formData: FormData): Promise<void> {
     rootPath: readString(formData, "root_path"),
     includeSubfolders: readBoolean(formData, "include_subfolders"),
     monitorEnabled: readBoolean(formData, "monitor_enabled"),
-    scanSchedule: readBoolean(formData, "monitor_enabled") ? "every_30_minutes" : "disabled",
+    scanSchedule: readBoolean(formData, "monitor_enabled")
+      ? readString(formData, "monitor_schedule") || "every_30_minutes"
+      : "disabled",
     notes: readString(formData, "notes") || undefined,
     metadata: {
       source_intent: readString(formData, "source_intent") || "ongoing_folder_monitor"
@@ -620,6 +728,20 @@ export async function saveSourceAction(formData: FormData): Promise<void> {
 
   refreshBootstrapPaths();
   redirect(`${nextUrlBase}?source=${source.id}`);
+}
+
+export async function skipSourceImportAction(): Promise<void> {
+  const bootstrap = await getBootstrapState();
+  await updateWorkbenchBootstrapState({
+    sourceImportCompleted: true,
+    metadata: {
+      ...bootstrap.metadata,
+      sourceImportMode: "skipped",
+      sourceImportCompletedAt: new Date().toISOString()
+    }
+  });
+  refreshBootstrapPaths();
+  redirect("/bootstrap/verify");
 }
 
 export async function scanSourceAction(formData: FormData): Promise<void> {

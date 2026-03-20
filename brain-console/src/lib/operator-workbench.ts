@@ -200,7 +200,13 @@ export interface WorkbenchBootstrapState {
 export interface BootstrapMetadata {
   readonly brainPurposeMode?: BrainPurposeMode;
   readonly brainPurposeNotes?: string | null;
+  readonly intelligenceSetupCompletedAt?: string;
+  readonly intelligenceMode?: "external" | "openrouter" | "skip";
   readonly defaultNamespaceId?: string;
+  readonly defaultLlmProvider?: WorkbenchModelProvider;
+  readonly defaultLlmModel?: string | null;
+  readonly defaultLlmPreset?: string | null;
+  readonly defaultAsrModel?: string | null;
   readonly sourceDefaults?: {
     readonly intent?: SourceIntent;
     readonly monitorEnabled?: boolean;
@@ -660,6 +666,45 @@ export async function createWorkbenchSession(input: {
 
   if (!payload.session) {
     throw new Error("Runtime did not return a session payload.");
+  }
+  return payload.session;
+}
+
+export async function updateWorkbenchSession(
+  sessionId: string,
+  input: {
+    readonly title?: string;
+    readonly notes?: string | null;
+    readonly tags?: readonly string[];
+    readonly status?: string;
+    readonly defaultAsrModel?: string | null;
+    readonly defaultLlmProvider?: WorkbenchModelProvider | null;
+    readonly defaultLlmModel?: string | null;
+    readonly defaultLlmPreset?: string | null;
+    readonly defaultEmbeddingProvider?: WorkbenchModelProvider | null;
+    readonly defaultEmbeddingModel?: string | null;
+    readonly metadata?: Record<string, unknown>;
+  }
+): Promise<WorkbenchSession> {
+  const payload = await fetchJson<JsonEnvelope<WorkbenchSession>>(`/ops/sessions/${sessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      title: input.title,
+      notes: input.notes,
+      tags: input.tags,
+      status: input.status,
+      default_asr_model: input.defaultAsrModel,
+      default_llm_provider: input.defaultLlmProvider,
+      default_llm_model: input.defaultLlmModel,
+      default_llm_preset: input.defaultLlmPreset,
+      default_embedding_provider: input.defaultEmbeddingProvider,
+      default_embedding_model: input.defaultEmbeddingModel,
+      metadata: input.metadata ?? null
+    })
+  });
+
+  if (!payload.session) {
+    throw new Error(`Session ${sessionId} update payload missing.`);
   }
   return payload.session;
 }

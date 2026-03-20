@@ -56,14 +56,15 @@ export default async function SetupPage({
   };
 
   const purposeDone = Boolean(bootstrap?.metadata.brainPurposeMode);
+  const intelligenceDone = Boolean(bootstrap?.metadata.intelligenceSetupCompletedAt || bootstrap?.metadata.intelligenceMode);
   const ownerDone = Boolean(bootstrap?.ownerProfileCompleted);
   const importDone = Boolean(bootstrap?.sourceImportCompleted);
   const verifyDone = Boolean(bootstrap?.metadata.verificationSmokePackRunAt);
-  const embeddingsConfigured = Boolean(embeddingSettings.provider);
+  const embeddingsConfigured = Boolean(bootstrap?.metadata.intelligenceSetupCompletedAt) || Boolean(embeddingSettings.provider);
   const embeddingTestDone = Boolean(bootstrap?.metadata.lastEmbeddingTest?.success);
   const embeddingRebuildDone = Boolean(bootstrap?.metadata.lastEmbeddingRebuild?.success);
 
-  const setupSteps = [
+  const requiredSteps = [
     {
       key: "runtime",
       title: "Runtime reachable",
@@ -75,23 +76,31 @@ export default async function SetupPage({
     {
       key: "purpose",
       title: "Set brain purpose",
-      description: "Choose the operational lane first so namespace and verification defaults are explicit.",
+      description: "Pick the lane first so the brain knows whether this is mostly personal, business, creative, or mixed.",
       completed: purposeDone,
       href: "/bootstrap/purpose",
       hrefLabel: "Set purpose"
     },
     {
+      key: "intelligence",
+      title: "Connect intelligence",
+      description: "Choose local runtime, OpenRouter, or a calm skip-for-now mode, then decide how summaries should work.",
+      completed: intelligenceDone,
+      href: "/bootstrap/intelligence",
+      hrefLabel: "Connect intelligence"
+    },
+    {
       key: "owner",
-      title: "Finish owner bootstrap",
-      description: "Create the self anchor, add owner evidence, and review what the brain learned.",
+      title: "Tell the brain who you are",
+      description: "Create the self anchor, then type, speak, or upload the first owner evidence and let the brain classify it if available.",
       completed: ownerDone,
       href: "/bootstrap/owner",
-      hrefLabel: "Open owner bootstrap"
+      hrefLabel: "Open owner step"
     },
     {
       key: "import",
       title: "Import trusted sources",
-      description: "Add monitored folders or trusted bootstrap sources before relying on retrieval.",
+      description: "Add watched folders or skip this for now if you only want to start with owner evidence.",
       completed: importDone,
       href: "/bootstrap/import",
       hrefLabel: "Open source import"
@@ -103,12 +112,15 @@ export default async function SetupPage({
       completed: verifyDone,
       href: "/bootstrap/verify",
       hrefLabel: "Open verification"
-    },
+    }
+  ] as const;
+
+  const optionalSteps = [
     {
       key: "embeddings",
-      title: "Configure embeddings",
-      description: "Choose local runtime, OpenRouter, Gemini, or deliberate lexical-only mode.",
-      completed: embeddingsConfigured,
+      title: "Test retrieval route",
+      description: "Optional but smart: test the embeddings path before assuming hybrid retrieval is active.",
+      completed: embeddingsConfigured && embeddingTestDone,
       href: "/settings",
       hrefLabel: "Open settings"
     },
@@ -130,13 +142,13 @@ export default async function SetupPage({
     }
   ] as const;
 
-  const firstPendingIndex = setupSteps.findIndex((step) => !step.completed);
+  const firstPendingIndex = requiredSteps.findIndex((step) => !step.completed);
 
   return (
     <OperatorShell
       currentPath="/setup"
       title="Start Here"
-      subtitle="This is the first-run path. Follow it step by step and the app will take you from a fresh install to a verified system that is ready for real use."
+      subtitle="Welcome. This is the easiest path from a blank install to a brain that actually knows something and can prove where it learned it."
     >
       <div className="space-y-6 lg:space-y-8">
         {searchValue(params.blocked_from) ? (
@@ -148,10 +160,10 @@ export default async function SetupPage({
           step="Start Here"
           title="Follow the setup flow in order"
           statusLabel={firstPendingIndex === -1 ? "ready to use" : `next step ${firstPendingIndex + 1}`}
-          whatToDo="Work through the checklist from top to bottom. Each step links directly to the page where that task is completed."
-          whyItMatters="This app depends on having a purpose, self anchor, provider connection, trusted evidence, and verification in place. Skipping ahead makes the system harder to trust."
-          nextHref={setupSteps[firstPendingIndex === -1 ? setupSteps.length - 1 : firstPendingIndex]?.href}
-          nextLabel={firstPendingIndex === -1 ? "Review settings" : setupSteps[firstPendingIndex]?.hrefLabel}
+          whatToDo="Work through the checklist from top to bottom. Each step is intentionally narrow so you only have one real decision to make at a time."
+          whyItMatters="This app depends on having purpose, intelligence routing, self identity, evidence, and verification in place. Skipping ahead makes the brain feel spooky in the bad way."
+          nextHref={firstPendingIndex === -1 ? "/settings" : requiredSteps[firstPendingIndex]?.href}
+          nextLabel={firstPendingIndex === -1 ? "Review optional settings" : requiredSteps[firstPendingIndex]?.hrefLabel}
         />
         <section className="overflow-hidden rounded-[34px] border border-white/8 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.11),_transparent_24%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_28px_100px_rgba(0,0,0,0.28)]">
           <div className="grid gap-6 px-5 py-6 sm:px-6 lg:grid-cols-[minmax(0,1.15fr)_340px] lg:px-8 lg:py-8">
@@ -161,25 +173,25 @@ export default async function SetupPage({
               </div>
               <div className="space-y-3">
                 <h2 className="max-w-3xl text-[1.85rem] font-semibold tracking-[-0.03em] text-white sm:text-[2.25rem]">
-                  Set up the brain in one calm pass, then move into daily use.
+                  Give the brain a name, a lane, a little intelligence, and a few trusted facts.
                 </h2>
                 <p className="max-w-2xl text-[15px] leading-8 text-slate-200">
-                  Everything here is ordered on purpose. Start with identity and purpose, connect the model provider, load trusted evidence, then verify retrieval before relying on the system.
+                  Everything here is ordered on purpose. Pick the brain mode, choose where intelligence runs, tell it who you are, add trusted evidence, then verify it before you trust it with your digital life.
                 </p>
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
                 {[
                   {
-                    label: "Purpose",
-                    detail: "Choose what kind of brain this is and which lane it should default to."
+                    label: "Identity",
+                    detail: "Tell the brain what it is for and who it belongs to."
+                  },
+                  {
+                    label: "Intelligence",
+                    detail: "Choose local, OpenRouter, or a skip-for-now route without getting buried in settings."
                   },
                   {
                     label: "Evidence",
-                    detail: "Ground the system in owner context and trusted source material."
-                  },
-                  {
-                    label: "Verification",
-                    detail: "Prove retrieval and provider routing are actually working."
+                    detail: "Ground the system in real owner context and trusted sources, then verify the answers."
                   }
                 ].map((item) => (
                   <div
@@ -234,7 +246,7 @@ export default async function SetupPage({
               </div>
             </div>
             <div className="space-y-4">
-              {setupSteps.map((step, index) => {
+              {requiredSteps.map((step, index) => {
                 const current = !step.completed && index === firstPendingIndex;
                 return (
                   <div
@@ -280,6 +292,37 @@ export default async function SetupPage({
                   </div>
                 );
               })}
+            </div>
+
+            <div className="space-y-4 pt-2">
+              <div className="px-1">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-slate-400">Optional but smart</p>
+                <h3 className="mt-2 text-[1.2rem] font-semibold tracking-tight text-white">Checks worth doing next</h3>
+              </div>
+              {optionalSteps.map((step) => (
+                <div key={step.key} className={`rounded-[24px] border p-5 ${checklistTone(step.completed, false)}`}>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h4 className="text-[1.05rem] font-semibold tracking-tight text-white">{step.title}</h4>
+                      <p className="mt-2 text-[15px] leading-8 text-slate-300">{step.description}</p>
+                    </div>
+                    <Badge
+                      variant="outline"
+                      className={step.completed ? "border-emerald-300/25 bg-emerald-300/12 text-emerald-50" : "border-white/10 bg-white/5 text-stone-200"}
+                    >
+                      {step.completed ? "complete" : "optional"}
+                    </Badge>
+                  </div>
+                  <div className="mt-5">
+                    <Link
+                      href={step.href}
+                      className="inline-flex min-h-11 items-center rounded-2xl border border-white/10 bg-white/6 px-5 py-3 text-sm text-white hover:bg-white/10"
+                    >
+                      {step.hrefLabel}
+                    </Link>
+                  </div>
+                </div>
+              ))}
             </div>
           </section>
 

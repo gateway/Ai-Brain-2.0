@@ -28,16 +28,18 @@ export default async function BootstrapPage() {
   const brainPurpose = bootstrap.metadata.brainPurposeMode ?? "not set";
   const importedSources = sources.filter((source) => source.lastImportAt).length;
   const hasPurpose = Boolean(bootstrap.metadata.brainPurposeMode);
+  const hasIntelligence = Boolean(bootstrap.metadata.intelligenceSetupCompletedAt || bootstrap.metadata.intelligenceMode);
   const highlightPurpose = !hasPurpose;
-  const highlightOwner = hasPurpose && !bootstrap.ownerProfileCompleted;
-  const highlightImport = hasPurpose && bootstrap.ownerProfileCompleted && !bootstrap.sourceImportCompleted;
+  const highlightIntelligence = hasPurpose && !hasIntelligence;
+  const highlightOwner = hasPurpose && hasIntelligence && !bootstrap.ownerProfileCompleted;
+  const highlightImport = hasPurpose && hasIntelligence && bootstrap.ownerProfileCompleted && !bootstrap.sourceImportCompleted;
   const purposeNamespace = bootstrap.metadata.defaultNamespaceId ?? "personal";
 
   return (
     <OperatorShell
       currentPath="/bootstrap"
       title="Guided Setup"
-      subtitle="Use this guided setup flow to teach the system what kind of brain this is, who it belongs to, what trusted evidence it should start with, and whether retrieval is actually working."
+      subtitle="This is the friendly version of the hard part. One step at a time, you tell the brain what it is, where its intelligence comes from, who it belongs to, what it should read, and how to prove it works."
       actions={
         <Link
           href="/bootstrap/import"
@@ -52,12 +54,12 @@ export default async function BootstrapPage() {
           step="Guided Setup"
           title="Move through the setup flow one step at a time"
           statusLabel={`${bootstrap.progress.completedSteps}/${bootstrap.progress.totalSteps} complete`}
-          whatToDo="Complete the purpose step first, then the owner step, then import trusted files, then verify the brain. If you are unsure where to go next, follow the highlighted card below."
-          whyItMatters="These steps create the initial brain configuration and trustworthy evidence base. They are the foundation for later sessions, graph review, and query/debug work."
+          whatToDo="Pick the purpose first, then connect intelligence, then do owner setup, then trusted sources, then verification. If you are unsure where to go next, follow the highlighted card."
+          whyItMatters="These steps create the initial configuration and trustworthy evidence base. They are the difference between a cool demo and a brain you can actually trust."
           nextHref={
-            !hasPurpose ? "/bootstrap/purpose" : !bootstrap.ownerProfileCompleted ? "/bootstrap/owner" : !bootstrap.sourceImportCompleted ? "/bootstrap/import" : "/bootstrap/verify"
+            !hasPurpose ? "/bootstrap/purpose" : !hasIntelligence ? "/bootstrap/intelligence" : !bootstrap.ownerProfileCompleted ? "/bootstrap/owner" : !bootstrap.sourceImportCompleted ? "/bootstrap/import" : "/bootstrap/verify"
           }
-          nextLabel={!hasPurpose ? "Set purpose" : !bootstrap.ownerProfileCompleted ? "Open owner step" : !bootstrap.sourceImportCompleted ? "Import trusted sources" : "Run verification"}
+          nextLabel={!hasPurpose ? "Set purpose" : !hasIntelligence ? "Connect intelligence" : !bootstrap.ownerProfileCompleted ? "Open owner step" : !bootstrap.sourceImportCompleted ? "Import trusted sources" : "Run verification"}
         />
         <div className="grid gap-4 md:grid-cols-4">
           <MetricCard title="Completed steps" value={`${bootstrap.progress.completedSteps}/${bootstrap.progress.totalSteps}`} detail="Tracked onboarding milestones." />
@@ -81,18 +83,27 @@ export default async function BootstrapPage() {
               href="/bootstrap/purpose"
               eyebrow="Step 1"
               title="Brain purpose"
-              description="Set whether this brain is personal, business, creative, or hybrid. This drives default namespace, source posture, and verification hints."
+              description="Tell the app what kind of brain this is. This decides the lane, the tone, and the defaults for what comes next."
               meta={brainPurpose.replace(/_/g, " ")}
               badge={highlightPurpose ? "current step" : bootstrap.metadata.brainPurposeMode ? "saved" : "required"}
               className={stepCardTone(highlightPurpose)}
             />
+            <ConsoleEntryCard
+              href="/bootstrap/intelligence"
+              eyebrow="Step 2"
+              title="Connect intelligence"
+              description="Choose whether the brain uses your local runtime, OpenRouter, or a skip-for-now mode. This also sets how summaries behave."
+              meta={bootstrap.metadata.intelligenceMode ?? "not chosen"}
+              badge={highlightIntelligence ? "current step" : hasIntelligence ? "saved" : "required"}
+              className={stepCardTone(highlightIntelligence)}
+            />
             <div className={`rounded-[28px] border p-5 ${stepCardTone(highlightOwner)}`}>
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-200">Step 2</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-200">Step 3</p>
                   <h3 className="mt-2 text-[1.15rem] font-semibold tracking-tight text-white">Owner bootstrap</h3>
                   <p className="mt-2 max-w-md text-[15px] leading-7 text-slate-100">
-                    Create a dedicated owner intake session for self-anchor data, owner evidence, clarifications, and search-backed verification.
+                    Create a dedicated owner intake session for self-anchor data, typed narrative, voice notes, clarifications, and search-backed verification.
                   </p>
                 </div>
                 <Badge variant="outline" className={highlightOwner ? "border-cyan-300/30 bg-cyan-300/16 text-cyan-50" : completedTone(bootstrap.ownerProfileCompleted)}>
@@ -124,9 +135,9 @@ export default async function BootstrapPage() {
             </div>
             <ConsoleEntryCard
               href="/bootstrap/import"
-              eyebrow="Step 3"
+              eyebrow="Step 4"
               title="Import existing memories"
-              description="Register OpenClaw or local markdown folders, scan supported files, preview what changed, and import through the normal brain ingest path."
+              description="Register OpenClaw or local markdown folders, scan supported files, preview what changed, and import through the normal ingest path. Or skip this for now."
               meta={`${sources.length} configured sources`}
               badge={highlightImport ? "current step" : bootstrap.sourceImportCompleted ? "imported" : "pending"}
               className={stepCardTone(highlightImport)}
@@ -141,7 +152,7 @@ export default async function BootstrapPage() {
               <CardTitle>Finish by checking the brain</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4 text-sm leading-7 text-slate-300">
-              <p>The verification page now runs a real smoke pack against the current namespace and shows the evidence returned for each question.</p>
+              <p>The verification page runs a real smoke pack against the current namespace and shows the evidence returned for each question. If the brain is wrong, this is where you catch it before it becomes confidently weird.</p>
               <div className="flex flex-wrap gap-3">
                 <Link
                   href="/bootstrap/verify"

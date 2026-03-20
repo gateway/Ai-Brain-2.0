@@ -164,7 +164,7 @@ Recommended order:
 
 1. `Start Here`
 2. `Guided Setup`
-3. `Settings`
+3. `Settings` for optional tuning
 4. normal `Sessions`
 5. `Legacy Console` only after setup is complete
 
@@ -172,12 +172,18 @@ Inside setup, do this in order:
 
 1. confirm runtime reachable
 2. choose brain purpose
-3. complete owner setup
-4. import trusted sources
-5. run verification smoke checks
-6. configure embeddings
-7. test embeddings
-8. rebuild namespace vectors after provider/model changes
+3. connect intelligence
+4. complete owner setup
+5. import trusted sources, or skip for now
+6. run verification smoke checks
+
+The guided setup flow is intentionally single-focus. Each step should answer one question:
+
+1. what kind of brain is this
+2. where should it think
+3. who is the owner
+4. what trusted material should come in first
+5. can it prove what it learned
 
 ## 8. What source path should I use?
 
@@ -206,6 +212,13 @@ Use Owner Setup first, then add:
 - markdown notes
 - audio notes
 - trusted folders
+
+The owner step supports:
+
+- typed narrative
+- audio notes that can go through ASR when a provider is connected
+- optional classification into entities, relationships, claims, and ambiguities
+- raw evidence preservation even when classification is skipped
 
 ## 9. How monitored folders work
 
@@ -241,7 +254,7 @@ Use the app like this:
 - `Dashboard`: high-level operator status and recent work
 - `Sessions`: create and manage intake/review loops
 - `Models`: inspect runtime families and provider state
-- `Settings`: manage embeddings/provider defaults
+- `Settings`: manage provider defaults, embeddings, summaries, workers, and retry guidance
 - `Legacy Console`: advanced query, graph, timeline, benchmark, and inbox exploration
 
 ## Related docs

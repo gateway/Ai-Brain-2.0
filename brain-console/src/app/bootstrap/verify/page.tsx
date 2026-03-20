@@ -57,11 +57,11 @@ export default async function BootstrapVerifyPage({
     <OperatorShell
       currentPath="/bootstrap"
       title="Verify The Brain"
-      subtitle="Run the final checks against the real substrate and confirm the brain can answer from evidence before you call setup done."
+      subtitle="This is the trust test. Ask the brain simple questions, inspect the evidence, and make sure it is smart in the useful way instead of smart in the scary way."
     >
       <div className="space-y-6">
         <SetupStepGuide
-          step="Step 4"
+          step="Step 5"
           title="Confirm the brain can actually answer from what you loaded"
           statusLabel={bootstrap.verificationCompleted ? "complete" : "final check"}
           whatToDo="Run the smoke pack, inspect the supporting evidence, and use the ad hoc query only as a secondary tool if you want more context."

@@ -21,7 +21,7 @@ export default async function BootstrapPurposePage() {
     <OperatorShell
       currentPath="/bootstrap"
       title="Brain Purpose"
-      subtitle="Choose what kind of brain this is before you add a lot of data. This step defines the operating lane the rest of setup will use."
+      subtitle="Pick the lane before you dump a life into it. This tells the brain what belongs here and stops it from becoming a very ambitious junk drawer."
     >
       <div className="mx-auto max-w-4xl space-y-5">
         <SetupStepGuide
@@ -30,8 +30,8 @@ export default async function BootstrapPurposePage() {
           statusLabel={purpose.replace(/_/g, " ")}
           whatToDo="Pick the mode that best matches what this brain should primarily hold: personal life context, business context, creative work, or a hybrid of those."
           whyItMatters="This sets the default namespace, source posture, and verification hints used by the rest of setup. It tells the system what belongs in this lane."
-          nextHref="/bootstrap/owner"
-          nextLabel="Next: owner setup"
+          nextHref="/bootstrap/intelligence"
+          nextLabel="Next: connect intelligence"
         />
         <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
           <CardHeader>

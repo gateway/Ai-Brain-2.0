@@ -4,6 +4,7 @@ import {
   importSourceAction,
   saveSourceAction,
   scanSourceAction,
+  skipSourceImportAction,
   toggleSourceMonitoringAction
 } from "@/app/bootstrap/actions";
 import { OperatorShell } from "@/components/operator-shell";
@@ -80,7 +81,7 @@ export default async function BootstrapImportPage({
     <OperatorShell
       currentPath="/bootstrap"
       title="Trusted Source Import"
-      subtitle="Add the folders this brain should start from, preview what is in them, and import them through the normal ingest path."
+      subtitle="Add watched folders if you have them, or skip this step if you want to start with owner evidence only. The key is clarity, not maximum checkbox usage."
       actions={
         <Link
           href="/bootstrap/verify"
@@ -92,10 +93,10 @@ export default async function BootstrapImportPage({
     >
       <div className="space-y-6">
         <SetupStepGuide
-          step="Step 3"
+          step="Step 4"
           title="Add trusted folders and import them carefully"
-          statusLabel={bootstrap.sourceImportCompleted ? "complete" : "in progress"}
-          whatToDo="Register a source, scan it, review the preview, then import it. Use owner setup for a few highly reviewed files and this page for larger trusted folders or archives."
+          statusLabel={bootstrap.sourceImportCompleted ? "complete" : "optional but recommended"}
+          whatToDo="Register a source, scan it, review the preview, then import it. If you do not have a folder to add yet, you can skip this step and come back later."
           whyItMatters="This brings more evidence into the brain without losing provenance. It is the clean way to seed notes, archives, and project folders before normal daily use."
           nextHref="/bootstrap/verify"
           nextLabel="Next: verify the brain"
@@ -211,10 +212,17 @@ export default async function BootstrapImportPage({
                   <Textarea name="notes" placeholder="Optional operator note about this source." />
                 </label>
                 <div className="rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-300">v1 file types: <code>.md</code>, <code>.txt</code></div>
-                <div className="flex flex-wrap gap-3">
-                  <Button type="submit" name="intent" value="save" className="rounded-2xl bg-white text-stone-950 hover:bg-stone-200">
-                    Save source
-                  </Button>
+              <div className="flex flex-wrap gap-3">
+                {!bootstrap.sourceImportCompleted ? (
+                  <form action={skipSourceImportAction}>
+                    <Button type="submit" variant="outline" className="rounded-2xl border-white/10 bg-white/5 text-white hover:bg-white/10">
+                      Skip for now
+                    </Button>
+                  </form>
+                ) : null}
+                <Button type="submit" name="intent" value="save" className="rounded-2xl bg-white text-stone-950 hover:bg-stone-200">
+                  Save source
+                </Button>
                   <Button type="submit" name="intent" value="save-scan" variant="outline" className="rounded-2xl border-white/10 bg-white/5 text-white hover:bg-white/10">
                     Save + scan
                   </Button>
@@ -256,6 +264,13 @@ export default async function BootstrapImportPage({
                 </label>
                 <div className="rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-300">Extensions locked in v1</div>
                 <div className="flex flex-wrap gap-3">
+                  {!bootstrap.sourceImportCompleted ? (
+                    <form action={skipSourceImportAction}>
+                      <Button type="submit" variant="outline" className="rounded-2xl border-white/10 bg-white/5 text-white hover:bg-white/10">
+                        Skip for now
+                      </Button>
+                    </form>
+                  ) : null}
                   <Button type="submit" name="intent" value="save" className="rounded-2xl bg-white text-stone-950 hover:bg-stone-200">
                     Save source
                   </Button>

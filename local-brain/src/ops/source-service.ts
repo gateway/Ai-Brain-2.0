@@ -366,17 +366,27 @@ function defaultNamespaceId(): string {
 }
 
 function mapBootstrapState(row: BootstrapStateRow): OpsBootstrapState {
-  const completedSteps = [row.owner_profile_completed, row.source_import_completed, row.verification_completed].filter(Boolean).length;
+  const metadata = row.metadata ?? {};
+  const purposeCompleted = typeof metadata.brainPurposeMode === "string" && metadata.brainPurposeMode.trim().length > 0;
+  const intelligenceCompleted =
+    typeof metadata.intelligenceSetupCompletedAt === "string" || typeof metadata.intelligenceMode === "string";
+  const completedSteps = [
+    purposeCompleted,
+    intelligenceCompleted,
+    row.owner_profile_completed,
+    row.source_import_completed,
+    row.verification_completed
+  ].filter(Boolean).length;
   return {
     ownerProfileCompleted: row.owner_profile_completed,
     sourceImportCompleted: row.source_import_completed,
     verificationCompleted: row.verification_completed,
     onboardingCompletedAt: row.onboarding_completed_at ?? undefined,
-    metadata: row.metadata ?? {},
+    metadata,
     updatedAt: row.updated_at,
     progress: {
       completedSteps,
-      totalSteps: 3,
+      totalSteps: 5,
       onboardingComplete: Boolean(row.onboarding_completed_at)
     }
   };
@@ -917,8 +927,11 @@ export async function updateBootstrapState(input: UpdateBootstrapStateRequest): 
     ...(existing.metadata ?? {}),
     ...(input.metadata ?? {})
   };
+  const nextPurposeCompleted = typeof nextMetadata.brainPurposeMode === "string" && nextMetadata.brainPurposeMode.trim().length > 0;
+  const nextIntelligenceCompleted =
+    typeof nextMetadata.intelligenceSetupCompletedAt === "string" || typeof nextMetadata.intelligenceMode === "string";
   const nextOnboardingCompletedAt =
-    nextOwnerProfileCompleted && nextSourceImportCompleted && nextVerificationCompleted
+    nextPurposeCompleted && nextIntelligenceCompleted && nextOwnerProfileCompleted && nextSourceImportCompleted && nextVerificationCompleted
       ? existing.onboarding_completed_at ?? new Date().toISOString()
       : null;
 

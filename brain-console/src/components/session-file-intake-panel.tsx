@@ -24,6 +24,7 @@ interface SessionFileIntakePanelProps {
   readonly defaultLlmProvider?: WorkbenchModelProvider;
   readonly defaultLlmModel?: string;
   readonly defaultLlmPreset?: string;
+  readonly defaultRunClassification?: boolean;
   readonly asrModels: readonly string[];
   readonly llmModels: readonly string[];
   readonly presets: readonly PresetChoice[];
@@ -168,6 +169,7 @@ export function SessionFileIntakePanel({
   defaultLlmProvider,
   defaultLlmModel,
   defaultLlmPreset,
+  defaultRunClassification = true,
   asrModels,
   llmModels,
   presets
@@ -421,7 +423,7 @@ export function SessionFileIntakePanel({
       </label>
 
       <label className="flex items-center gap-3 rounded-[20px] border border-white/10 bg-white/6 px-4 py-3 text-sm text-slate-100">
-        <input type="checkbox" name="run_classification" value="true" defaultChecked className="size-4 rounded border-white/20 bg-transparent" />
+        <input type="checkbox" name="run_classification" value="true" defaultChecked={defaultRunClassification} className="size-4 rounded border-white/20 bg-transparent" />
         Run LLM classification for text files and transcripts
       </label>
 

@@ -65,7 +65,7 @@ Then open [http://127.0.0.1:3005](http://127.0.0.1:3005) and go through:
 
 1. `Start Here`
 2. `Guided Setup`
-3. `Settings`
+3. `Settings` for optional tuning
 4. `Sessions`
 
 The bootstrap script prepares the repo, local Python helper venv, database, and Node dependencies. The doctor script verifies that the machine is actually ready before you trust the result.
@@ -178,7 +178,7 @@ AI Brain supports both local and hosted model paths.
 
 The intended operator flow is:
 
-- choose the provider in `Settings`
+- choose the provider during `Guided Setup` or later in `Settings`
 - test the provider path
 - rebuild vectors if the embedding provider or model changed
 - use the same routing for temporal semantic summaries if desired
@@ -190,10 +190,11 @@ If you already have OpenClaw-style markdown notes or a structured local knowledg
 Recommended pattern:
 
 1. complete `Start Here`
-2. define the owner/self anchor
-3. import trusted markdown folders
-4. enable watch-folder monitoring for sources that continue to change
-5. verify the graph, clarifications, and retrieval results before broadening scope
+2. choose the brain lane and intelligence route
+3. define the owner/self anchor
+4. import trusted markdown folders
+5. enable watch-folder monitoring for sources that continue to change
+6. verify the graph, clarifications, and retrieval results before broadening scope
 
 ## What Exists Today
 
@@ -387,8 +388,9 @@ npm run migrate
    - `Sessions`
 9. Inside the setup flow, do:
    - brain purpose
+   - connect intelligence
    - owner setup
-   - trusted source import
+   - trusted source import, or skip it for now
    - verification
 10. Open `/settings` and set embeddings:
    - `external` if you want your own local runtime

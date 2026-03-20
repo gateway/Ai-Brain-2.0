@@ -125,12 +125,13 @@ export default async function BootstrapOwnerPage({
   const friendsSmoke = smokePack.find((item) => item.query === "who are my friends?");
   const projectsSmoke = smokePack.find((item) => item.query === "what am I working on?");
   const likesSmoke = smokePack.find((item) => item.query === "what do I like?");
+  const classificationEnabled = bootstrap.metadata.intelligenceMode !== "skip";
 
   return (
     <OperatorShell
       currentPath="/bootstrap"
       title="Owner Setup"
-      subtitle="Tell the brain who you are, add owner evidence, review what it learned, and only then mark this step complete."
+      subtitle="Tell the brain who you are, speak to it if that is easier, let it classify what it can, then review the result before calling this step done."
       actions={
         <Link
           href={`/sessions/${session.id}/review`}
@@ -142,11 +143,11 @@ export default async function BootstrapOwnerPage({
     >
       <div className="space-y-6">
         <SetupStepGuide
-          step="Step 2"
+          step="Step 3"
           title="Set the owner identity and add the first personal evidence"
           statusLabel={bootstrap.ownerProfileCompleted ? "complete" : "in progress"}
-          whatToDo="Save the self profile first. Then add a typed narrative, microphone notes, or bootstrap files so the brain has real evidence to classify and review."
-          whyItMatters="The owner step gives the brain a real self anchor and a trustworthy first body of evidence. Without it, later retrieval and graph state are much harder to trust."
+          whatToDo="Save the self profile first. Then type, record, or upload the first owner evidence so the brain has something real to classify, summarize, and review."
+          whyItMatters="This is where the brain stops being a concept and starts becoming your brain. The self anchor plus real evidence is what makes later retrieval and graph state trustworthy."
           nextHref="/bootstrap/import"
           nextLabel="Next: import trusted sources"
         />
@@ -162,6 +163,11 @@ export default async function BootstrapOwnerPage({
         {saved === "self" ? (
           <div className="rounded-[22px] border border-emerald-300/25 bg-emerald-300/12 px-4 py-3 text-sm text-emerald-50">
             Self profile saved to the brain and bound to namespace <code>{namespaceId}</code>.
+          </div>
+        ) : null}
+        {saved === "intelligence" ? (
+          <div className="rounded-[22px] border border-cyan-300/25 bg-cyan-300/12 px-4 py-3 text-sm text-cyan-50">
+            Intelligence route saved. If classification is enabled below, it will use those defaults.
           </div>
         ) : null}
         {smokeStatus === "done" ? (
@@ -210,7 +216,9 @@ export default async function BootstrapOwnerPage({
             <div className="flex flex-wrap items-center gap-3 rounded-[20px] border border-white/10 bg-black/15 px-4 py-3">
               <StatusBadge status={session.status} />
               <span className="text-sm text-slate-300">Current defaults:</span>
-              <span className="text-sm text-slate-400">LLM provider {session.defaultLlmProvider === "openrouter" ? "OpenRouter" : "Local runtime"}</span>
+              <span className="text-sm text-slate-400">
+                LLM provider {session.defaultLlmProvider === "openrouter" ? "OpenRouter" : session.defaultLlmProvider === "external" ? "Local runtime" : "skip for now"}
+              </span>
               <span className="text-sm text-slate-400">Preset {session.defaultLlmPreset ?? "research-analyst"}</span>
               <span className="text-sm text-slate-400">ASR {session.defaultAsrModel ?? "runtime default"}</span>
             </div>
@@ -265,7 +273,7 @@ export default async function BootstrapOwnerPage({
             <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
               <CardHeader>
                 <CardDescription>Owner narrative</CardDescription>
-                <CardTitle>Type the first “about me” profile pass</CardTitle>
+                <CardTitle>Type the first “about me” pass</CardTitle>
               </CardHeader>
               <CardContent>
                 <OwnerNarrativeForm
@@ -273,6 +281,7 @@ export default async function BootstrapOwnerPage({
                   defaultLlmProvider={session.defaultLlmProvider}
                   defaultLlmModel={session.defaultLlmModel}
                   defaultLlmPreset={session.defaultLlmPreset}
+                  defaultRunClassification={classificationEnabled}
                   llmModels={llmModels}
                   presets={presets}
                 />
@@ -327,7 +336,7 @@ export default async function BootstrapOwnerPage({
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="rounded-[20px] border border-white/10 bg-white/4 p-4 text-sm leading-7 text-slate-300">
-                  Markdown, text, audio, and microphone recordings land in the protected owner bootstrap session as real evidence. PDF and image uploads are stored, but still wait on OCR or vision adapters.
+                  Markdown, text, audio, and microphone recordings land in the protected owner bootstrap session as real evidence. If you connected intelligence in the last step, ASR and classification can help clean this up. If not, no drama: the raw evidence still lands first.
                 </div>
                 <SessionFileIntakePanel
                   sessionId={session.id}
@@ -335,6 +344,7 @@ export default async function BootstrapOwnerPage({
                   defaultLlmProvider={session.defaultLlmProvider}
                   defaultLlmModel={session.defaultLlmModel}
                   defaultLlmPreset={session.defaultLlmPreset}
+                  defaultRunClassification={classificationEnabled}
                   asrModels={asrModels}
                   llmModels={llmModels}
                   presets={presets}

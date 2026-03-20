@@ -24,7 +24,7 @@ The Legacy Console is secondary and more technical.
 
 1. `Start Here`
 2. `Guided Setup`
-3. `Settings`
+3. `Settings` for optional tuning and verification
 4. `Sessions`
 5. `Legacy Console` after setup is complete
 
@@ -62,11 +62,25 @@ The onboarding flow that grounds the system before daily use.
 It covers:
 
 - brain purpose
+- intelligence routing
 - owner/self setup
 - trusted source import
 - verification smoke checks
 
 This is the correct place to bootstrap the system, not the session list.
+
+### Connect Intelligence
+
+This is the route-selection step between purpose and owner setup.
+
+Use it to:
+
+- choose local runtime, OpenRouter, or skip for now
+- set the first default for ASR, classification, embeddings, and readable summaries
+- decide whether summaries stay purely deterministic or use the semantic LLM overlay
+- set sane first defaults for watched-folder cadence
+
+If the user skips this step, the brain can still store evidence and stay deterministic. It just becomes much less chatty until a provider is connected.
 
 ### Purpose
 
@@ -94,6 +108,13 @@ Use it to:
 - resolve clarifications
 
 This is where the first trusted personal evidence should go.
+
+The owner step is built to be forgiving:
+
+- typed text is valid
+- audio is valid when ASR is available
+- uploads are valid
+- classification is encouraged, but raw evidence still lands first
 
 ### Trusted Source Import
 
@@ -188,6 +209,7 @@ The provider and embeddings routing surface.
 
 Use it to:
 
+- inspect whether local runtime and OpenRouter are reachable
 - choose embeddings provider
 - choose model and dimensions
 - test embeddings
@@ -203,6 +225,14 @@ Current provider meanings:
 - `external`: your own local/private runtime
 - `openrouter`: hosted models and embeddings
 - `gemini`: future/optional provider path
+
+The app now also stores the runtime behavior choices that were first introduced during Guided Setup:
+
+- default LLM route
+- summary strategy
+- summarizer provider/model/preset/system prompt
+- source monitor cadence
+- inbox/outbox and temporal worker cadence
 
 ### Audit
 

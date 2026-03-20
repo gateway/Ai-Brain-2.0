@@ -19,6 +19,7 @@ interface OwnerNarrativeFormProps {
   readonly defaultLlmProvider?: WorkbenchModelProvider;
   readonly defaultLlmModel?: string;
   readonly defaultLlmPreset?: string;
+  readonly defaultRunClassification?: boolean;
   readonly llmModels: readonly string[];
   readonly presets: readonly PresetChoice[];
 }
@@ -28,6 +29,7 @@ export function OwnerNarrativeForm({
   defaultLlmProvider,
   defaultLlmModel,
   defaultLlmPreset,
+  defaultRunClassification = true,
   llmModels,
   presets
 }: OwnerNarrativeFormProps) {
@@ -62,7 +64,7 @@ export function OwnerNarrativeForm({
       </label>
 
       <label className="flex items-center gap-3 rounded-[20px] border border-white/10 bg-white/6 px-4 py-3 text-sm text-slate-100">
-        <input type="checkbox" name="run_classification" defaultChecked className="size-4 rounded border-white/20 bg-transparent" />
+        <input type="checkbox" name="run_classification" defaultChecked={defaultRunClassification} className="size-4 rounded border-white/20 bg-transparent" />
         Run LLM classification after ingest
       </label>
 
