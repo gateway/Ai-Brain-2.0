@@ -32,6 +32,7 @@ import {
   updateMonitoredSource
 } from "../ops/source-service.js";
 import {
+  executeDerivationWorker,
   executeOutboxWorker,
   executeSourceMonitorWorker,
   executeTemporalSummaryWorker,
@@ -336,12 +337,16 @@ function mergeSearchResponses(responses: readonly SearchResponse[], limit: numbe
       provenanceAnswer: bestProvenanceAnswer,
       planner: planner ?? responses[0]?.meta.planner ?? {
         intent: "simple",
+        queryClass: "direct_fact",
         temporalFocus: false,
+        leafEvidenceRequired: false,
         yearHints: [],
         lexicalTerms: [],
         targetLayers: [],
         descendantExpansionOrder: ["day"],
         maxTemporalDepth: 0,
+        hierarchyExpansionBudget: 0,
+        graphHopBudget: 0,
         ancestorLayerBudgets: { session: 0, day: 0, week: 0, month: 0, year: 0, profile: 0 },
         descendantLayerBudgets: { session: 0, day: 0, week: 0, month: 0, year: 0, profile: 0 },
         supportMemberBudget: 0,
@@ -860,6 +865,24 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
       body: {
         ok: true,
         status: await getRuntimeWorkerStatus()
+      }
+    };
+  }
+
+  if (request.method === "POST" && url.pathname === "/ops/derivations/process") {
+    const body = await readJsonBody(request);
+    const derivationRun = await executeDerivationWorker({
+      namespaceId: optionalString(body.namespace_id),
+      provider: optionalString(body.provider),
+      limit: optionalNumber(body.limit),
+      triggerType: "manual"
+    });
+
+    return {
+      statusCode: 200,
+      body: {
+        ok: true,
+        derivationRun
       }
     };
   }

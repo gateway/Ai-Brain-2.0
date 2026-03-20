@@ -19,11 +19,13 @@ import {
   isGoalQuery,
   isPlanQuery,
   isPreferenceQuery,
+  isConstraintQuery,
   isStyleSpecQuery,
   isTemporalDetailQuery,
   normalizeRelationshipWhyQuery,
   isPrecisionLexicalQuery,
   isRelationshipStyleExactQuery,
+  isHierarchyTraversalQuery,
   preferredRelationshipPredicates
 } from "./query-signals.js";
 import { planRecallQuery } from "./planner.js";
@@ -301,6 +303,34 @@ function buildStyleSpecEvidenceQueryText(queryText: string, plannerTerms: readon
   }
 
   return [...expanded].join(" ").trim() || queryText;
+}
+
+function normalizeHierarchyKey(value: string): string {
+  return value
+    .trim()
+    .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/gu, "")
+    .replace(/\s+/gu, " ")
+    .toLowerCase();
+}
+
+function extractHierarchyTargets(queryText: string): readonly string[] {
+  const patterns = [
+    /\b(?:what|which)\s+(?:country|state|province|region|city)\s+is\s+(.+?)\s+in\??$/iu,
+    /\bwhere\s+in\s+the\s+hierarchy\s+is\s+(.+?)\??$/iu,
+    /\bwhat\s+is\s+(.+?)\s+contained\s+in\??$/iu,
+    /\bwhat\s+contains\s+(.+?)\??$/iu
+  ] as const;
+
+  for (const pattern of patterns) {
+    const match = queryText.match(pattern);
+    const captured = typeof match?.[1] === "string" ? match[1].trim() : "";
+    if (captured) {
+      return [captured.replace(/\?+$/u, "").trim()];
+    }
+  }
+
+  const properPhrases = queryText.match(/\b(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b/g) ?? [];
+  return [...new Set(properPhrases.filter((phrase) => !/^(What|Which|Where)$/u.test(phrase)))];
 }
 
 function parseIsoTimestamp(value: unknown): number | null {
@@ -615,7 +645,15 @@ function buildDualityObject(
           suggestedPrompt:
             followUpAction === "route_to_clarifications"
               ? `The brain could not find authoritative evidence for: ${queryText}`
-              : `The brain found only weak support for: ${queryText}`
+              : `The brain found only weak support for: ${queryText}`,
+          mcpTool: {
+            name: "memory.get_clarifications",
+            arguments: {
+              namespace_id: namespaceId,
+              query: queryText,
+              limit: 10
+            }
+          }
         };
 
   return {
@@ -746,6 +784,109 @@ function expandBoundedEventResults(
   }
 
   return expanded.slice(0, limit);
+}
+
+async function loadSourceMemorySupportRows(
+  namespaceId: string,
+  results: readonly RecallResult[],
+  limit: number
+): Promise<readonly RecallResult[]> {
+  const sourceMemoryIds = Array.from(
+    new Set(
+      results
+        .map((result) => (typeof result.provenance.source_memory_id === "string" ? result.provenance.source_memory_id : null))
+        .filter((value): value is string => Boolean(value))
+    )
+  ).slice(0, 6);
+
+  if (sourceMemoryIds.length === 0) {
+    return [];
+  }
+
+  const rows = await queryRows<SearchRow>(
+    `
+      SELECT
+        em.id AS memory_id,
+        'episodic_memory'::text AS memory_type,
+        em.content AS content,
+        0.7::double precision AS raw_score,
+        em.artifact_id,
+        em.occurred_at,
+        em.namespace_id,
+        jsonb_build_object(
+          'tier', 'source_memory_support',
+          'source_uri', a.uri,
+          'artifact_observation_id', em.artifact_observation_id,
+          'metadata', em.metadata
+        ) AS provenance
+      FROM episodic_memory em
+      LEFT JOIN artifacts a ON a.id = em.artifact_id
+      WHERE em.namespace_id = $1
+        AND em.id = ANY($2::uuid[])
+      ORDER BY em.occurred_at DESC
+      LIMIT $3
+    `,
+    [namespaceId, sourceMemoryIds, Math.max(limit, sourceMemoryIds.length)]
+  );
+
+  return rows.map((row) => buildRecallResult(row, 0.7, { rrfScore: 0.7 }));
+}
+
+function parseUnresolvedClarificationTarget(queryText: string): {
+  readonly target: string;
+  readonly ambiguityTypes: readonly string[];
+} | null {
+  const normalized = queryText.trim();
+  const whoMatch = normalized.match(/^who\s+is\s+([A-Za-z][A-Za-z\s'-]{1,40})\??$/iu);
+  const whoTarget = normalizeWhitespace(whoMatch?.[1] ?? "");
+  if (whoTarget) {
+    const lowered = whoTarget.toLowerCase();
+    if (["uncle", "aunt", "mom", "mother", "dad", "father", "partner", "brother", "sister", "cousin"].includes(lowered)) {
+      return {
+        target: whoTarget,
+        ambiguityTypes: ["kinship_resolution"]
+      };
+    }
+  }
+
+  const whereMatch = normalized.match(/^where\s+(?:was|is)\s+(.+?)\??$/iu);
+  const whereTarget = normalizeWhitespace(whereMatch?.[1] ?? "");
+  if (whereTarget) {
+    const trimmed = whereTarget.replace(/^the\s+/iu, "").trim();
+    if (/\b(cabin|house|wing|office|lake)\b/iu.test(trimmed)) {
+      return {
+        target: whereTarget,
+        ambiguityTypes: ["place_grounding", "unknown_reference"]
+      };
+    }
+  }
+
+  return null;
+}
+
+async function hasUnresolvedClarification(namespaceId: string, queryText: string): Promise<boolean> {
+  const parsed = parseUnresolvedClarificationTarget(queryText);
+  if (!parsed) {
+    return false;
+  }
+
+  const rows = await queryRows<{ total: string }>(
+    `
+      SELECT COUNT(*)::text AS total
+      FROM claim_candidates
+      WHERE namespace_id = $1
+        AND ambiguity_state = 'requires_clarification'
+        AND ambiguity_type = ANY($3::text[])
+        AND (
+          lower(coalesce(subject_text, '')) = lower($2)
+          OR lower(coalesce(object_text, '')) = lower($2)
+          OR lower(coalesce(metadata->>'raw_ambiguous_text', '')) = lower($2)
+        )
+    `,
+    [namespaceId, parsed.target, parsed.ambiguityTypes]
+  );
+
+  return Number(rows[0]?.total ?? "0") > 0;
 }
 
 function buildScopedEventSqlMatch(terms: readonly string[]): {
@@ -1071,9 +1212,27 @@ function scoreBeliefRow(content: string, queryText: string): number {
   const normalizedQuery = queryText.toLowerCase();
   const normalizedContent = content.toLowerCase();
   let score = 0.5;
+  const queryTopic = normalizeBeliefTopic(extractBeliefTopic(queryText));
+  const contentTopic = normalizeBeliefTopic(extractBeliefTopic(content));
 
   if (/\b(?:stance|opinion|belief)\b/.test(normalizedQuery) && /\b(?:stance|opinion|belief)\b/.test(normalizedContent)) {
     score += 0.8;
+  }
+  if (queryTopic) {
+    if (!contentTopic) {
+      return 0;
+    }
+    if (contentTopic === queryTopic) {
+      score += 3;
+    } else {
+      const queryTerms = queryTopic.split("_").filter(Boolean);
+      const contentTerms = new Set(contentTopic.split("_").filter(Boolean));
+      const overlap = queryTerms.filter((term) => contentTerms.has(term));
+      if (overlap.length === 0) {
+        return 0;
+      }
+      score += overlap.length / Math.max(queryTerms.length, 1);
+    }
   }
   if (/\binfrastructure\b/.test(normalizedQuery) && normalizedContent.includes("infrastructure")) {
     score += 1.2;
@@ -1092,6 +1251,72 @@ function scoreBeliefRow(content: string, queryText: string): number {
   }
 
   return score;
+}
+
+function scoreConstraintRow(content: string, queryText: string): number {
+  const normalizedQuery = queryText.toLowerCase();
+  const normalizedContent = content.toLowerCase();
+  let score = 0.5;
+
+  if (/\bconstraint|rule|policy|protocol\b/.test(normalizedQuery) && /\bconstraint|rule|policy|protocol\b/.test(normalizedContent)) {
+    score += 0.8;
+  }
+  if (/\b(?:dietary|allergy|allergic|blocker|blockers|safety)\b/.test(normalizedQuery)) {
+    score += 1.4;
+  }
+  if (/\bpeanut/.test(normalizedQuery) && normalizedContent.includes("peanut")) {
+    score += 2;
+  }
+  if (/\bdinner\b/.test(normalizedQuery) && normalizedContent.includes("dinner")) {
+    score += 0.8;
+  }
+  if (/\babsolute\b/.test(normalizedQuery) && /\babsolute|never\b/.test(normalizedContent)) {
+    score += 0.6;
+  }
+
+  return score;
+}
+
+function extractBeliefTopic(value: string): string | null {
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const patterns = [
+    /\b(?:stance|opinion|belief)\s+on\s+(.+?)\s+is\b/iu,
+    /\bcurrent\s+stance\s+on\s+(.+?)(?:\?|$)/iu,
+    /\bopinion\s+on\s+(.+?)(?:\?|$)/iu
+  ] as const;
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    const topic = typeof match?.[1] === "string" ? match[1].trim() : "";
+    if (topic) {
+      return topic;
+    }
+  }
+
+  return null;
+}
+
+function normalizeBeliefTopic(value: string | null): string {
+  if (!value) {
+    return "";
+  }
+
+  return value
+    .toLowerCase()
+    .replace(/\b(?:my|our|current|stance|opinion|belief|about|on|the)\b/gu, " ")
+    .replace(/^\s*using\s+/u, "")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/[^\p{L}\p{N}\s-]+/gu, "")
+    .replace(/\s+/gu, "_");
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
 }
 
 async function loadStyleSpecRows(
@@ -1152,6 +1377,64 @@ async function loadStyleSpecRows(
       return resultKey(left.row).localeCompare(resultKey(right.row));
     })
     .slice(0, Math.max(candidateLimit, 6))
+    .map((item) => item.row);
+}
+
+async function loadConstraintRows(
+  namespaceId: string,
+  queryText: string,
+  candidateLimit: number
+): Promise<SearchRow[]> {
+  const rows = await queryRows<SearchRow>(
+    `
+      SELECT
+        pm.id AS memory_id,
+        'procedural_memory'::text AS memory_type,
+        ${proceduralContentExpression()} AS content,
+        1::double precision AS raw_score,
+        em.artifact_id,
+        COALESCE(em.occurred_at, pm.updated_at) AS occurred_at,
+        pm.namespace_id,
+        jsonb_build_object(
+          'tier', 'current_procedural',
+          'state_type', pm.state_type,
+          'state_key', pm.state_key,
+          'version', pm.version,
+          'valid_from', pm.valid_from,
+          'valid_until', pm.valid_until,
+          'source_memory_id', em.id,
+          'source_uri', a.uri,
+          'metadata', pm.metadata
+        ) AS provenance
+      FROM procedural_memory pm
+      LEFT JOIN episodic_memory em
+        ON em.id = NULLIF(pm.state_value->>'source_memory_id', '')::uuid
+      LEFT JOIN artifacts a
+        ON a.id = em.artifact_id
+      WHERE pm.namespace_id = $1
+        AND pm.state_type = 'constraint'
+        AND pm.valid_until IS NULL
+      ORDER BY pm.updated_at DESC
+      LIMIT $2
+    `,
+    [namespaceId, Math.max(candidateLimit * 2, 12)]
+  );
+
+  return rows
+    .map((row) => ({ row, score: scoreConstraintRow(String(row.content ?? ""), queryText) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      const leftIso = toIsoString(left.row.occurred_at);
+      const rightIso = toIsoString(right.row.occurred_at);
+      if (leftIso && rightIso && leftIso !== rightIso) {
+        return rightIso.localeCompare(leftIso);
+      }
+      return resultKey(left.row).localeCompare(resultKey(right.row));
+    })
+    .slice(0, Math.max(candidateLimit, 4))
     .map((item) => item.row);
 }
 
@@ -1765,6 +2048,187 @@ function resultKey(row: SearchRow): string {
   return `${row.memory_type}:${row.memory_id}`;
 }
 
+interface SqlFusedRankingRow {
+  readonly row: SearchRow;
+  readonly lexicalRank?: number;
+  readonly vectorRank?: number;
+  readonly lexicalRawScore?: number;
+  readonly vectorDistance?: number;
+  readonly rrfScore: number;
+}
+
+async function fuseRankedRowsInSql(
+  lexicalRows: readonly RankedSearchRow[],
+  vectorRows: readonly RankedSearchRow[],
+  planner: ReturnType<typeof planRecallQuery>
+): Promise<readonly SqlFusedRankingRow[]> {
+  if (lexicalRows.length === 0 && vectorRows.length === 0) {
+    return [];
+  }
+
+  const lexicalPayload = lexicalRows.map((row, index) => ({
+    memory_id: row.memory_id,
+    memory_type: row.memory_type,
+    content: row.content,
+    artifact_id: row.artifact_id,
+    occurred_at: toIsoString(row.occurred_at),
+    namespace_id: row.namespace_id,
+    provenance: row.provenance,
+    lexical_rank: index + 1,
+    lexical_raw_score: row.scoreValue,
+    lexical_weight:
+      row.memory_type === "episodic_memory" || row.memory_type === "narrative_event"
+        ? planner.episodicWeight
+        : row.memory_type === "temporal_nodes"
+          ? planner.temporalSummaryWeight
+          : 1
+  }));
+  const vectorPayload = vectorRows.map((row, index) => ({
+    memory_id: row.memory_id,
+    memory_type: row.memory_type,
+    content: row.content,
+    artifact_id: row.artifact_id,
+    occurred_at: toIsoString(row.occurred_at),
+    namespace_id: row.namespace_id,
+    provenance: row.provenance,
+    vector_rank: index + 1,
+    vector_distance: row.scoreValue
+  }));
+
+  const rows = await queryRows<{
+    readonly memory_id: string;
+    readonly memory_type: RecallResult["memoryType"];
+    readonly content: string;
+    readonly artifact_id: string | null;
+    readonly occurred_at: string | null;
+    readonly namespace_id: string;
+    readonly provenance: Record<string, unknown>;
+    readonly lexical_rank: number | null;
+    readonly vector_rank: number | null;
+    readonly lexical_raw_score: number | null;
+    readonly vector_distance: number | null;
+    readonly rrf_score: number;
+  }>(
+    `
+      WITH lexical AS (
+        SELECT *
+        FROM jsonb_to_recordset($1::jsonb) AS x(
+          memory_id text,
+          memory_type text,
+          content text,
+          artifact_id uuid,
+          occurred_at timestamptz,
+          namespace_id text,
+          provenance jsonb,
+          lexical_rank integer,
+          lexical_raw_score double precision,
+          lexical_weight double precision
+        )
+      ),
+      vector AS (
+        SELECT *
+        FROM jsonb_to_recordset($2::jsonb) AS x(
+          memory_id text,
+          memory_type text,
+          content text,
+          artifact_id uuid,
+          occurred_at timestamptz,
+          namespace_id text,
+          provenance jsonb,
+          vector_rank integer,
+          vector_distance double precision
+        )
+      ),
+      contributors AS (
+        SELECT
+          memory_id,
+          memory_type,
+          content,
+          artifact_id,
+          occurred_at,
+          namespace_id,
+          provenance,
+          lexical_rank,
+          NULL::integer AS vector_rank,
+          lexical_raw_score,
+          NULL::double precision AS vector_distance,
+          lexical_weight / (60 + lexical_rank)::double precision AS rrf_part,
+          0 AS source_priority
+        FROM lexical
+
+        UNION ALL
+
+        SELECT
+          memory_id,
+          memory_type,
+          content,
+          artifact_id,
+          occurred_at,
+          namespace_id,
+          provenance,
+          NULL::integer AS lexical_rank,
+          vector_rank,
+          NULL::double precision AS lexical_raw_score,
+          vector_distance,
+          1 / (60 + vector_rank)::double precision AS rrf_part,
+          1 AS source_priority
+        FROM vector
+      ),
+      fused AS (
+        SELECT
+          memory_id::text AS memory_id,
+          (array_agg(memory_type ORDER BY source_priority ASC, lexical_rank ASC NULLS LAST, vector_rank ASC NULLS LAST))[1] AS memory_type,
+          (array_agg(content ORDER BY source_priority ASC, lexical_rank ASC NULLS LAST, vector_rank ASC NULLS LAST))[1] AS content,
+          (array_agg(artifact_id ORDER BY source_priority ASC, lexical_rank ASC NULLS LAST, vector_rank ASC NULLS LAST))[1]::text AS artifact_id,
+          (array_agg(occurred_at ORDER BY source_priority ASC, lexical_rank ASC NULLS LAST, vector_rank ASC NULLS LAST))[1] AS occurred_at,
+          (array_agg(namespace_id ORDER BY source_priority ASC, lexical_rank ASC NULLS LAST, vector_rank ASC NULLS LAST))[1] AS namespace_id,
+          (array_agg(provenance ORDER BY source_priority ASC, lexical_rank ASC NULLS LAST, vector_rank ASC NULLS LAST))[1] AS provenance,
+          MIN(lexical_rank) FILTER (WHERE lexical_rank IS NOT NULL) AS lexical_rank,
+          MIN(vector_rank) FILTER (WHERE vector_rank IS NOT NULL) AS vector_rank,
+          MAX(lexical_raw_score) FILTER (WHERE lexical_raw_score IS NOT NULL) AS lexical_raw_score,
+          MIN(vector_distance) FILTER (WHERE vector_distance IS NOT NULL) AS vector_distance,
+          SUM(rrf_part) AS rrf_score
+        FROM contributors
+        GROUP BY memory_id
+      )
+      SELECT
+        memory_id,
+        memory_type,
+        content,
+        artifact_id,
+        occurred_at::text AS occurred_at,
+        namespace_id,
+        provenance,
+        lexical_rank,
+        vector_rank,
+        lexical_raw_score,
+        vector_distance,
+        rrf_score
+      FROM fused
+      ORDER BY rrf_score DESC, occurred_at DESC NULLS LAST, memory_id ASC
+    `,
+    [JSON.stringify(lexicalPayload), JSON.stringify(vectorPayload)]
+  );
+
+  return rows.map((row) => ({
+    row: {
+      memory_id: row.memory_id,
+      memory_type: row.memory_type,
+      content: row.content,
+      raw_score: row.lexical_raw_score ?? row.vector_distance ?? row.rrf_score,
+      artifact_id: row.artifact_id,
+      occurred_at: row.occurred_at,
+      namespace_id: row.namespace_id,
+      provenance: row.provenance
+    },
+    lexicalRank: row.lexical_rank ?? undefined,
+    vectorRank: row.vector_rank ?? undefined,
+    lexicalRawScore: row.lexical_raw_score ?? undefined,
+    vectorDistance: row.vector_distance ?? undefined,
+    rrfScore: row.rrf_score
+  }));
+}
+
 function mergeUniqueRows(
   existingRows: readonly RankedSearchRow[],
   additionalRows: readonly RankedSearchRow[],
@@ -1964,6 +2428,7 @@ function proceduralContentExpression(): string {
         coalesce(state_value->>'person', 'User') || ' style spec work style response style formatting preference ' ||
         coalesce(state_value->>'style_spec', state_key) || ' ' || coalesce(state_value->>'scope', '') || ' ' ||
         CASE
+          WHEN state_key = 'style_spec:chunk_large_pdf_uploads_before_processing' THEN 'workflow protocol pdf upload chunk 50mb large file processing mandatory'
           WHEN state_value->>'scope' = 'workflow' THEN 'workflow protocol procedure mandatory implementation slice database integrity replay benchmark'
           WHEN state_value->>'scope' = 'retrieval_style' THEN 'retrieval protocol queryability natural language direct questions'
           ELSE 'response protocol formatting'
@@ -2259,8 +2724,10 @@ function pruneRankedResults(
     vectorDistance?: number;
     rrfScore: number;
   }[],
+  queryText: string,
   planner: ReturnType<typeof planRecallQuery>,
   relationshipExactFocus: boolean,
+  hierarchyTraversalFocus: boolean,
   precisionLexicalFocus: boolean,
   activeRelationshipFocus: boolean,
   dailyLifeEventFocus: boolean,
@@ -2270,6 +2737,7 @@ function pruneRankedResults(
   historicalWorkFocus: boolean,
   historicalRelationshipFocus: boolean,
   preferenceQueryFocus: boolean,
+  constraintQueryFocus: boolean,
   historicalPreferenceFocus: boolean,
   currentPreferenceFocus: boolean,
   styleQueryFocus: boolean,
@@ -2319,6 +2787,18 @@ function pruneRankedResults(
     return [...episodicRows.slice(0, 3), ...eventRows.slice(0, 2), ...semanticRows.slice(0, 1)].slice(0, 6);
   }
 
+  if (hierarchyTraversalFocus) {
+    const structuralHierarchyRows = relationshipMemoryRows.filter(
+      (item) => String(item.row.provenance.tier ?? "") === "structural_hierarchy"
+    );
+    const hierarchySupportRows = episodicRows.filter(
+      (item) => String(item.row.provenance.tier ?? "") === "hierarchical_containment_support"
+    );
+    if (structuralHierarchyRows.length > 0) {
+      return [...structuralHierarchyRows.slice(0, 4), ...hierarchySupportRows.slice(0, 2)].slice(0, 6);
+    }
+  }
+
   const focusedProceduralRows =
     activeRelationshipFocus && preferredRelationshipPredicates.length > 0
       ? proceduralRows.filter((item) => {
@@ -2364,9 +2844,19 @@ function pruneRankedResults(
   const goalRows = proceduralRows.filter((item) => String(item.row.provenance.state_type ?? "") === "goal");
   const planRows = proceduralRows.filter((item) => String(item.row.provenance.state_type ?? "") === "plan");
   const beliefRows = proceduralRows.filter((item) => String(item.row.provenance.state_type ?? "") === "belief");
+  const constraintRows = proceduralRows.filter((item) => String(item.row.provenance.state_type ?? "") === "constraint");
 
   if (styleQueryFocus && styleSpecRows.length > 0) {
     return [...styleSpecRows.slice(0, 6), ...semanticRows.slice(0, 1), ...episodicRows.slice(0, 1)].slice(0, 8);
+  }
+
+  if (constraintQueryFocus && constraintRows.length > 0) {
+    const prioritizedConstraintRows = [...constraintRows]
+      .map((item) => ({ item, score: scoreConstraintRow(String(item.row.content ?? ""), queryText) }))
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => right.score - left.score)
+      .map((entry) => entry.item);
+    return [...prioritizedConstraintRows.slice(0, 4), ...semanticRows.slice(0, 1), ...episodicRows.slice(0, 1)].slice(0, 6);
   }
 
   if (goalQueryFocus && goalRows.length > 0) {
@@ -2378,7 +2868,22 @@ function pruneRankedResults(
   }
 
   if (beliefQueryFocus && beliefRows.length > 0) {
-    const prioritizedBeliefRows = historicalBeliefFocus ? beliefRows.slice(0, 6) : beliefRows.slice(0, 2);
+    const prioritizedBeliefRows = [...beliefRows]
+      .map((item) => ({ item, score: scoreBeliefRow(String(item.row.content ?? ""), queryText) }))
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => {
+        if (right.score !== left.score) {
+          return right.score - left.score;
+        }
+        const leftIso = toIsoString(left.item.row.occurred_at);
+        const rightIso = toIsoString(right.item.row.occurred_at);
+        if (leftIso && rightIso && leftIso !== rightIso) {
+          return rightIso.localeCompare(leftIso);
+        }
+        return resultKey(left.item.row).localeCompare(resultKey(right.item.row));
+      })
+      .map((entry) => entry.item)
+      .slice(0, historicalBeliefFocus ? 6 : 2);
     return [...prioritizedBeliefRows, ...semanticRows.slice(0, 1), ...episodicRows.slice(0, 1)].slice(0, historicalBeliefFocus ? 8 : 4);
   }
 
@@ -3234,6 +3739,91 @@ async function loadHierarchicalContainmentSupportRows(
   );
 
   return toRankedRows(rows).sort((left, right) => compareLexical(left, right, Boolean(timeStart || timeEnd), temporalFocus));
+}
+
+async function loadDirectHierarchyRows(
+  namespaceId: string,
+  queryText: string,
+  candidateLimit: number
+): Promise<RankedSearchRow[]> {
+  const targets = [...new Set(extractHierarchyTargets(queryText).map(normalizeHierarchyKey).filter(Boolean))];
+  if (targets.length === 0) {
+    return [];
+  }
+
+  const rows = await queryRows<SearchRow>(
+    `
+      WITH RECURSIVE matched_entities AS (
+        SELECT DISTINCT e.id, e.canonical_name, e.entity_type
+        FROM entities e
+        WHERE e.namespace_id = $1
+          AND e.entity_type IN ('place', 'org', 'project')
+          AND e.normalized_name = ANY($2::text[])
+        UNION
+        SELECT DISTINCT e.id, e.canonical_name, e.entity_type
+        FROM entity_aliases ea
+        JOIN entities e ON e.id = ea.entity_id
+        WHERE e.namespace_id = $1
+          AND e.entity_type IN ('place', 'org', 'project')
+          AND ea.normalized_alias = ANY($2::text[])
+      ),
+      climb AS (
+        SELECT
+          me.id AS matched_entity_id,
+          me.canonical_name AS matched_name,
+          child.id AS child_entity_id,
+          child.canonical_name AS child_name,
+          child.entity_type AS child_type,
+          parent.id AS parent_entity_id,
+          parent.canonical_name AS parent_name,
+          parent.entity_type AS parent_type,
+          1 AS depth
+        FROM matched_entities me
+        JOIN entities child ON child.id = me.id
+        JOIN entities parent ON parent.id = child.parent_entity_id
+        UNION ALL
+        SELECT
+          climb.matched_entity_id,
+          climb.matched_name,
+          parent.id AS child_entity_id,
+          parent.canonical_name AS child_name,
+          parent.entity_type AS child_type,
+          grand.id AS parent_entity_id,
+          grand.canonical_name AS parent_name,
+          grand.entity_type AS parent_type,
+          climb.depth + 1 AS depth
+        FROM climb
+        JOIN entities parent ON parent.id = climb.parent_entity_id
+        JOIN entities grand ON grand.id = parent.parent_entity_id
+        WHERE climb.depth < 5
+      )
+      SELECT
+        concat('hierarchy:', child_entity_id::text, ':', parent_entity_id::text) AS memory_id,
+        'relationship_memory'::text AS memory_type,
+        concat(child_name, ' is contained in ', parent_name) AS content,
+        (1.15 / (4 + depth))::double precision AS raw_score,
+        NULL::uuid AS artifact_id,
+        NULL::timestamptz AS occurred_at,
+        $1::text AS namespace_id,
+        jsonb_build_object(
+          'tier', 'structural_hierarchy',
+          'matched_entity_id', matched_entity_id,
+          'matched_name', matched_name,
+          'subject_entity_id', child_entity_id,
+          'object_entity_id', parent_entity_id,
+          'predicate', 'contained_in',
+          'depth', depth,
+          'structural', true,
+          'source_uri', concat('entity://parent_chain/', child_entity_id::text, '/', parent_entity_id::text)
+        ) AS provenance
+      FROM climb
+      ORDER BY raw_score DESC, depth ASC, content ASC
+      LIMIT $3
+    `,
+    [namespaceId, targets, candidateLimit]
+  );
+
+  return toRankedRows(rows).sort((left, right) => compareLexical(left, right, false, false));
 }
 
 async function loadFtsLexicalRows(
@@ -4189,16 +4779,18 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
   const retrievalQueryText = normalizedRelationshipWhyQuery ?? queryText;
   const planner = planRecallQuery({
     ...query,
-    query: retrievalQueryText
+    query: queryText
   });
   const relationshipExactFocus = isRelationshipStyleExactQuery(retrievalQueryText);
   const activeRelationshipFocus = isActiveRelationshipQuery(retrievalQueryText);
+  const hierarchyTraversalFocus = isHierarchyTraversalQuery(retrievalQueryText);
   const dailyLifeEventFocus = isDailyLifeEventQuery(retrievalQueryText);
   const eventBoundedFocus = isEventBoundedQuery(retrievalQueryText);
   const dailyLifeSummaryFocus = isDailyLifeSummaryQuery(retrievalQueryText);
   const salienceQueryFocus = isSalienceQuery(retrievalQueryText);
   const temporalDetailFocus = isTemporalDetailQuery(retrievalQueryText);
   const preferenceQueryFocus = isPreferenceQuery(retrievalQueryText);
+  const constraintQueryFocus = isConstraintQuery(retrievalQueryText);
   const historicalPreferenceFocus = isHistoricalPreferenceQuery(retrievalQueryText);
   const pointInTimePreferenceFocus = preferenceQueryFocus && Boolean(query.timeStart || query.timeEnd || planner.inferredTimeStart || planner.inferredTimeEnd);
   const currentPreferenceFocus = isCurrentPreferenceQuery(retrievalQueryText) || (preferenceQueryFocus && !historicalPreferenceFocus && !pointInTimePreferenceFocus);
@@ -4306,6 +4898,22 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
     })()
   ]);
   let lexicalRows = lexicalResult.rows;
+  const directHierarchyRows = hierarchyTraversalFocus
+    ? await loadDirectHierarchyRows(query.namespaceId, retrievalQueryText, candidateLimit)
+    : [];
+  if (directHierarchyRows.length > 0) {
+    lexicalRows = mergeUniqueRows(
+      lexicalRows,
+      directHierarchyRows,
+      candidateLimit,
+      hasTimeWindow,
+      planner.temporalFocus,
+      dailyLifeEventFocus,
+      dailyLifeSummaryFocus,
+      timeStart,
+      timeEnd
+    );
+  }
   const placeContainmentSupportRows = await loadHierarchicalContainmentSupportRows(
     query.namespaceId,
     planner.lexicalTerms,
@@ -4391,6 +4999,22 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       lexicalRows = mergeUniqueRows(
         lexicalRows,
         styleRows,
+        Math.max(candidateLimit * 2, 12),
+        hasTimeWindow,
+        planner.temporalFocus,
+        dailyLifeEventFocus,
+        dailyLifeSummaryFocus,
+        timeStart,
+        timeEnd
+      );
+    }
+  }
+  if (constraintQueryFocus) {
+    const constraintRows = toRankedRows(await loadConstraintRows(query.namespaceId, retrievalQueryText, candidateLimit));
+    if (constraintRows.length > 0) {
+      lexicalRows = mergeUniqueRows(
+        lexicalRows,
+        constraintRows,
         Math.max(candidateLimit * 2, 12),
         hasTimeWindow,
         planner.temporalFocus,
@@ -4620,47 +5244,7 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       .slice(0, candidateLimit);
   }
 
-  const rankAccumulator = new Map<
-    string,
-    {
-      row: SearchRow;
-      lexicalRank?: number;
-      vectorRank?: number;
-      lexicalRawScore?: number;
-      vectorDistance?: number;
-      rrfScore: number;
-    }
-  >();
-
-  for (let index = 0; index < lexicalRows.length; index += 1) {
-    const row = lexicalRows[index];
-    const key = resultKey(row);
-    const current = rankAccumulator.get(key) ?? { row, rrfScore: 0 };
-    current.row = row;
-    current.lexicalRank = index + 1;
-    current.lexicalRawScore = row.scoreValue;
-    const weight =
-      row.memory_type === "episodic_memory" || row.memory_type === "narrative_event"
-        ? planner.episodicWeight
-        : row.memory_type === "temporal_nodes"
-          ? planner.temporalSummaryWeight
-          : 1;
-    current.rrfScore += weight / (60 + index + 1);
-    rankAccumulator.set(key, current);
-  }
-
-  for (let index = 0; index < vectorRows.length; index += 1) {
-    const row = vectorRows[index];
-    const key = resultKey(row);
-    const current = rankAccumulator.get(key) ?? { row, rrfScore: 0 };
-    current.row = row;
-    current.vectorRank = index + 1;
-    current.vectorDistance = row.scoreValue;
-    current.rrfScore += 1 / (60 + index + 1);
-    rankAccumulator.set(key, current);
-  }
-
-  const rankedResults = [...rankAccumulator.values()]
+  const rankedResults = [...(await fuseRankedRowsInSql(lexicalRows, vectorRows, planner))]
     .sort((left, right) => {
       const scoreDelta = right.rrfScore - left.rrfScore;
       if (scoreDelta !== 0) {
@@ -4697,8 +5281,10 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
 
   let results = pruneRankedResults(
     rankedResults,
+    retrievalQueryText,
     planner,
     relationshipExactFocus,
+    hierarchyTraversalFocus,
     precisionLexicalFocus,
     activeRelationshipFocus,
     dailyLifeEventFocus,
@@ -4708,6 +5294,7 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
     historicalWorkFocus,
     historicalRelationshipFocus,
     preferenceQueryFocus,
+    constraintQueryFocus,
     historicalPreferenceFocus,
     currentPreferenceFocus,
     styleQueryFocus,
@@ -4732,6 +5319,25 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       })
     );
 
+  if (planner.queryClass === "causal" && results.length > 0) {
+    const sourceSupportResults = await loadSourceMemorySupportRows(query.namespaceId, results, limit);
+    if (sourceSupportResults.length > 0) {
+      const merged: RecallResult[] = [];
+      const seen = new Set<string>();
+      for (const result of [...results, ...sourceSupportResults]) {
+        if (seen.has(result.memoryId)) {
+          continue;
+        }
+        merged.push(result);
+        seen.add(result.memoryId);
+        if (merged.length >= limit) {
+          break;
+        }
+      }
+      results = merged;
+    }
+  }
+
   let boundedEventSupportCount = 0;
   if (eventBoundedFocus) {
     const boundedEventIds = results
@@ -4746,12 +5352,15 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
   }
 
   const evidence = buildEvidenceBundle(results);
-  const answerAssessment = assessRecallAnswer(results, evidence, planner, temporalSummarySufficient, query.query);
-  const duality = buildDualityObject(results, evidence, answerAssessment, query.namespaceId, query.query);
+  const unresolvedClarification = await hasUnresolvedClarification(query.namespaceId, query.query);
+  const effectiveResults = unresolvedClarification ? [] : results;
+  const effectiveEvidence = unresolvedClarification ? [] : evidence;
+  const answerAssessment = assessRecallAnswer(effectiveResults, effectiveEvidence, planner, temporalSummarySufficient, query.query);
+  const duality = buildDualityObject(effectiveResults, effectiveEvidence, answerAssessment, query.namespaceId, query.query);
 
   return {
-    results,
-    evidence,
+    results: effectiveResults,
+    evidence: effectiveEvidence,
     duality,
     meta: {
       contractVersion: "duality_v2",

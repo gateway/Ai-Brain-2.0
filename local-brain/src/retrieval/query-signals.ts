@@ -169,6 +169,23 @@ export function isEventBoundedQuery(queryText: string): boolean {
   );
 }
 
+export function isHierarchyTraversalQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bwhat\s+(?:country|state|province|region|city)\s+is\s+.+\s+in\b/i.test(normalized) ||
+    /\bwhich\s+(?:country|state|province|region|city)\s+is\s+.+\s+in\b/i.test(normalized) ||
+    /\bwhere\s+in\s+the\s+hierarchy\s+is\b/i.test(normalized) ||
+    /\bwhat\s+is\s+.+\s+contained\s+in\b/i.test(normalized) ||
+    /\bwhat\s+contains\s+.+\b/i.test(normalized) ||
+    /\bparent\s+(?:place|organization|org|project)\b/i.test(normalized) ||
+    /\bcontained\s+in\b/i.test(normalized)
+  );
+}
+
 export function isDailyLifeSummaryQuery(queryText: string): boolean {
   const normalized = queryText.trim();
   if (!normalized) {
@@ -263,6 +280,21 @@ export function isStyleSpecQuery(queryText: string): boolean {
     (/\bdatabase\s+integrity\b/i.test(normalized) && /\bimplementation\s+slice\b/i.test(normalized)) ||
     (/\bprotocol\b/i.test(normalized) && /\bimplementation\s+slice\b/i.test(normalized)) ||
     /\bhow\s+should\s+(?:the\s+brain|you)\s+(?:answer|format|respond)\b/i.test(normalized)
+  );
+}
+
+export function isConstraintQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bwhat\s+constraints?\b/i.test(normalized) ||
+    /\bwhat\s+rules?\b/i.test(normalized) ||
+    /\bpolicy\b/i.test(normalized) ||
+    /\bmandatory\s+protocol\b/i.test(normalized) ||
+    /\b(?:dietary|allergy|allergic|blocker|blockers|safety)\b/i.test(normalized)
   );
 }
 

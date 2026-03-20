@@ -14,6 +14,7 @@ export interface RecallQuery {
 
 export type RecallIntent = "simple" | "hybrid" | "complex";
 export type RecallBranchPreference = "lexical_first" | "episodic_then_temporal";
+export type RecallQueryClass = "direct_fact" | "temporal_summary" | "temporal_detail" | "causal" | "graph_multi_hop";
 export type TemporalQueryLayer = "session" | "day" | "week" | "month" | "year" | "profile";
 export type TemporalDescendantLayer = Extract<TemporalQueryLayer, "day" | "week" | "month">;
 export type TemporalLayerBudgetMap = Readonly<Record<TemporalQueryLayer, number>>;
@@ -22,7 +23,9 @@ export type RecallFollowUpAction = "none" | "suggest_verification" | "route_to_c
 
 export interface RecallPlan {
   readonly intent: RecallIntent;
+  readonly queryClass: RecallQueryClass;
   readonly temporalFocus: boolean;
+  readonly leafEvidenceRequired: boolean;
   readonly inferredTimeStart?: string;
   readonly inferredTimeEnd?: string;
   readonly yearHints: readonly string[];
@@ -30,6 +33,8 @@ export interface RecallPlan {
   readonly targetLayers: readonly TemporalQueryLayer[];
   readonly descendantExpansionOrder: readonly TemporalDescendantLayer[];
   readonly maxTemporalDepth: number;
+  readonly hierarchyExpansionBudget: number;
+  readonly graphHopBudget: number;
   readonly ancestorLayerBudgets: TemporalLayerBudgetMap;
   readonly descendantLayerBudgets: TemporalLayerBudgetMap;
   readonly supportMemberBudget: number;
@@ -86,6 +91,10 @@ export interface RecallResponse {
       readonly query: string;
       readonly reason: string;
       readonly suggestedPrompt: string;
+      readonly mcpTool?: {
+        readonly name: string;
+        readonly arguments: Record<string, unknown>;
+      };
     };
   };
   readonly meta: {
@@ -126,6 +135,10 @@ export interface RecallResponse {
       readonly query: string;
       readonly reason: string;
       readonly suggestedPrompt: string;
+      readonly mcpTool?: {
+        readonly name: string;
+        readonly arguments: Record<string, unknown>;
+      };
     };
     readonly provenanceAnswer?: {
       readonly queryType: "why";

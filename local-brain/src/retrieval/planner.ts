@@ -1,11 +1,13 @@
 import type {
   RecallIntent,
+  RecallQueryClass,
   RecallPlan,
   RecallQuery,
   TemporalDescendantLayer,
   TemporalLayerBudgetMap,
   TemporalQueryLayer
 } from "./types.js";
+import { isHierarchyTraversalQuery } from "./query-signals.js";
 
 const MONTH_LOOKUP = new Map<string, number>([
   ["january", 0],
@@ -113,6 +115,30 @@ function expandLexicalVariants(term: string): readonly string[] {
 
   if (normalized === "style" || normalized === "styles" || normalized === "style_spec" || normalized === "style_specs") {
     return ["style", "style spec", "work style", "response style", "format", "concise"];
+  }
+
+  if (normalized === "blocker" || normalized === "blockers" || normalized === "dietary" || normalized === "allergy" || normalized === "allergies") {
+    return ["blocker", "blockers", "dietary", "allergy", "allergic", "never", "absolute", "peanut"];
+  }
+
+  if (normalized === "pdf" || normalized === "pdfs") {
+    return ["pdf", "pdfs", "upload", "uploads", "chunk", "chunking", "50mb"];
+  }
+
+  if (normalized === "protocol" || normalized === "protocols") {
+    return ["protocol", "policy", "rule", "rules", "mandatory"];
+  }
+
+  if (normalized === "signoff" || normalized === "sign-off" || normalized === "owner" || normalized === "ownership") {
+    return ["signoff", "sign-off", "owner", "ownership", "approval", "role"];
+  }
+
+  if (normalized === "concurrency" || normalized === "concurrent") {
+    return ["concurrency", "concurrent", "worker", "workers", "high-concurrency", "parallel"];
+  }
+
+  if (normalized === "python" || normalized === "rust") {
+    return [normalized, "worker", "workers", "high-concurrency"];
   }
 
   if (normalized === "goal" || normalized === "goals") {
@@ -252,6 +278,73 @@ function containsExplicitDateCue(queryText: string): boolean {
     /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i.test(queryText) ||
     tokenizeQuery(queryText).some((token) => /^(19\d{2}|20\d{2})$/.test(token))
   );
+}
+
+function isTemporalDetailQueryText(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const hasTemporalCue =
+    /\bon\s+[A-Z][a-z]+\s+\d{1,2}(?:,\s*|\s+)\d{4}\b/.test(normalized) ||
+    /\bon\s+\d{4}-\d{2}-\d{2}\b/.test(normalized) ||
+    /\b(today|yesterday|tonight|this\s+(?:day|week|month|year)|that\s+day|last\s+(?:day|week|month|year))\b/i.test(normalized) ||
+    /\b(19\d{2}|20\d{2})\b/.test(normalized);
+
+  if (!hasTemporalCue) {
+    return false;
+  }
+
+  return (
+    /\bhow\s+much\b/i.test(normalized) ||
+    /\bhow\s+many\b/i.test(normalized) ||
+    /\bwhat\s+time\b/i.test(normalized) ||
+    /\bwhen\s+exactly\b/i.test(normalized) ||
+    /\bwhich\s+\w+\b/i.test(normalized) ||
+    /\bexact\b/i.test(normalized) ||
+    /\b(?:cost|price|amount|paid|pay|spent|spend|invoice|receipt|fee|fees)\b/i.test(normalized)
+  );
+}
+
+function isWhyLikeQuery(queryText: string): boolean {
+  return /\bwhy\b/i.test(queryText) || /\brationale\b/i.test(queryText);
+}
+
+function isGraphMultiHopQuery(queryText: string): boolean {
+  return (
+    isHierarchyTraversalQuery(queryText) ||
+    /\bthrough\b/i.test(queryText) ||
+    /\bconnected\s+to\b/i.test(queryText) ||
+    /\bexpand\b/i.test(queryText) ||
+    /\bgraph\b/i.test(queryText) ||
+    /\bwhich\s+places?\b.*\bhas\b/i.test(queryText) ||
+    /\bpartner\b/i.test(queryText)
+  );
+}
+
+function inferQueryClass(
+  queryText: string,
+  temporalFocus: boolean,
+  temporalGranularity: "none" | "day" | "month" | "year" | "broad"
+): RecallQueryClass {
+  if (isWhyLikeQuery(queryText)) {
+    return "causal";
+  }
+
+  if (isGraphMultiHopQuery(queryText)) {
+    return "graph_multi_hop";
+  }
+
+  if (isTemporalDetailQueryText(queryText)) {
+    return "temporal_detail";
+  }
+
+  if (temporalFocus || temporalGranularity !== "none") {
+    return "temporal_summary";
+  }
+
+  return "direct_fact";
 }
 
 function isCodeOrVersionToken(token: string): boolean {
@@ -452,7 +545,14 @@ export function planRecallQuery(query: RecallQuery): RecallPlan {
   const inferredWindow = !hasExplicitWindow ? inferTemporalWindow(queryText, yearHints) : { granularity: "broad" as const };
   const temporalGranularity = inferredWindow.granularity;
   const hasSpecificTimeWindow = temporalGranularity === "day" || temporalGranularity === "month" || temporalGranularity === "year" || temporalGranularity === "broad";
-  const intent: RecallIntent = hasTemporalCue ? (hasSpecificTimeWindow ? "complex" : "hybrid") : "simple";
+  const queryClass = inferQueryClass(queryText, hasTemporalCue, temporalGranularity);
+  const hierarchyFocus = isHierarchyTraversalQuery(queryText);
+  const intent: RecallIntent =
+    queryClass === "causal" || queryClass === "graph_multi_hop" || queryClass === "temporal_detail"
+      ? "complex"
+      : hasTemporalCue
+        ? (hasSpecificTimeWindow ? "complex" : "hybrid")
+        : "simple";
   const isNarrowWindow = temporalGranularity === "day" || temporalGranularity === "month";
   const isBroadTemporal = temporalGranularity === "year" || temporalGranularity === "broad";
   const targetLayers = targetLayersForGranularity(intent, temporalGranularity);
@@ -463,7 +563,10 @@ export function planRecallQuery(query: RecallQuery): RecallPlan {
 
   return {
     intent,
+    queryClass,
     temporalFocus: hasTemporalCue,
+    leafEvidenceRequired:
+      queryClass === "causal" || queryClass === "temporal_detail" || (queryClass === "graph_multi_hop" && !hierarchyFocus),
     inferredTimeStart: inferredWindow?.start,
     inferredTimeEnd: inferredWindow?.end,
     yearHints,
@@ -471,6 +574,8 @@ export function planRecallQuery(query: RecallQuery): RecallPlan {
     targetLayers,
     descendantExpansionOrder,
     maxTemporalDepth: targetLayers.length,
+    hierarchyExpansionBudget: queryClass === "graph_multi_hop" ? 8 : queryClass === "causal" ? 6 : 4,
+    graphHopBudget: queryClass === "graph_multi_hop" ? 3 : queryClass === "causal" ? 2 : 1,
     ancestorLayerBudgets,
     descendantLayerBudgets,
     supportMemberBudget: intent === "complex" ? 8 : intent === "hybrid" ? 6 : 3,
