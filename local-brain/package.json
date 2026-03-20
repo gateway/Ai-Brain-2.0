@@ -33,6 +33,7 @@
     "benchmark:lexical": "npm run build && node dist/cli/benchmark-lexical.js",
     "benchmark:narrative": "npm run build && node dist/cli/benchmark-narrative.js",
     "benchmark:life": "npm run build && node dist/cli/benchmark-life.js",
+    "benchmark:life-scale": "npm run build && node dist/cli/benchmark-life-scale.js",
     "mock:external": "npm run build && node dist/cli/mock-external-provider.js",
     "serve": "npm run build && node dist/cli/serve.js"
   },

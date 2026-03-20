@@ -1,16 +1,15 @@
-import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { closePool, queryRows, withTransaction } from "../db/client.js";
 import { runMigrations } from "../db/migrations.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
-import { enqueueDerivationJob, processDerivationJobs } from "../jobs/derivation-queue.js";
 import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
 import { getOpsRelationshipGraph } from "../ops/service.js";
 import { runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
 import { runMemoryReconsolidation } from "../jobs/memory-reconsolidation.js";
+import { enqueueDerivationJob, processDerivationJobs } from "../jobs/derivation-queue.js";
 import { searchMemory } from "../retrieval/service.js";
 import type { RecallConfidenceGrade } from "../retrieval/types.js";
 import type { RecallResult, SourceType } from "../types.js";
@@ -20,6 +19,16 @@ interface ReplayFixture {
   readonly sourceType: SourceType;
   readonly sourceChannel: string;
   readonly capturedAt: string;
+}
+
+interface GeneratedReplayFixture extends ReplayFixture {
+  readonly contents: string | Uint8Array;
+  readonly derivation?: {
+    readonly manualContentText: string;
+    readonly jobKind?: "ocr" | "transcription" | "caption" | "summary" | "derive_text" | "embed";
+    readonly modality?: "image" | "pdf" | "audio" | "video" | "text";
+    readonly metadata?: Record<string, unknown>;
+  };
 }
 
 interface ReplayQueryExpectation {
@@ -35,6 +44,11 @@ interface ReplayQueryExpectation {
   readonly expectNoResults?: boolean;
   readonly expectedFollowUpAction?: "none" | "suggest_verification" | "route_to_clarifications";
   readonly beforeReconsolidationQuery?: string;
+  readonly expectedPlannerQueryClass?: "direct_fact" | "temporal_summary" | "temporal_detail" | "causal" | "graph_multi_hop";
+  readonly expectedLeafEvidenceRequired?: boolean;
+  readonly expectedTemporalGateTriggered?: boolean;
+  readonly expectedTemporalSummarySufficient?: boolean;
+  readonly expectedClarificationToolName?: string;
 }
 
 interface ReplayStateExpectation {
@@ -111,6 +125,99 @@ function replayFixtureRoot(): string {
 
 function replayFixturePath(fileName: string): string {
   return path.resolve(replayFixtureRoot(), fileName);
+}
+
+function generatedFixtureRoot(): string {
+  return path.resolve(rootDir(), "benchmark-generated", "life-replay");
+}
+
+async function ensureGeneratedFixtures(): Promise<readonly GeneratedReplayFixture[]> {
+  const dir = generatedFixtureRoot();
+  await mkdir(dir, { recursive: true });
+
+  const fixtures: readonly GeneratedReplayFixture[] = [
+    {
+      path: path.join(dir, "clarification-protocol-1.md"),
+      sourceType: "markdown",
+      sourceChannel: "life-replay:clarification-heuristic-1",
+      capturedAt: "2026-03-24T09:00:00Z",
+      contents:
+        "If we do not know who Uncle is, ask for clarification instead of guessing. Unknown identity should route to the clarifications inbox instead of polluting the graph.\n"
+    },
+    {
+      path: path.join(dir, "clarification-protocol-2.md"),
+      sourceType: "markdown",
+      sourceChannel: "life-replay:clarification-heuristic-2",
+      capturedAt: "2026-03-31T09:00:00Z",
+      contents:
+        "When identity or grounding is unclear, the brain should ask for clarification instead of guessing. That applies to kinship terms and vague places.\n"
+    },
+    {
+      path: path.join(dir, "clarification-protocol-3.md"),
+      sourceType: "markdown",
+      sourceChannel: "life-replay:clarification-heuristic-3",
+      capturedAt: "2026-04-07T09:00:00Z",
+      contents:
+        "Operational rule: unknown identity or vague place references should never be guessed. Ask for clarification instead of guessing and keep the answer explicit.\n"
+    },
+    {
+      path: path.join(dir, "march-redesign-whiteboard.png"),
+      sourceType: "image",
+      sourceChannel: "life-replay:whiteboard-photo",
+      capturedAt: "2026-03-14T10:30:00Z",
+      contents: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x42, 0x72, 0x61, 0x69, 0x6e]),
+      derivation: {
+        manualContentText:
+          "Whiteboard photo from the March redesign packet. Notes say: port 8787, keep Steve centered, expand Chiang Mai to Thailand, and use parent_entity_id for place hierarchy.",
+        jobKind: "ocr",
+        modality: "image",
+        metadata: {
+          derivation_source: "benchmark_multimodal_fixture",
+          fixture_kind: "whiteboard_photo"
+        }
+      }
+    },
+    {
+      path: path.join(dir, "march-redesign-packet.pdf"),
+      sourceType: "pdf",
+      sourceChannel: "life-replay:redesign-packet",
+      capturedAt: "2026-03-14T10:31:00Z",
+      contents: Buffer.from("%PDF-1.4\n%AI Brain replay packet\n", "utf8"),
+      derivation: {
+        manualContentText:
+          "March redesign packet says the Steve graph should expand through home, work, friends, and place hierarchy with evidence-backed edges and ground-truth source links.",
+        jobKind: "ocr",
+        modality: "pdf",
+        metadata: {
+          derivation_source: "benchmark_multimodal_fixture",
+          fixture_kind: "redesign_packet"
+        }
+      }
+    },
+    {
+      path: path.join(dir, "chiang-mai-graph-voice-memo.mp3"),
+      sourceType: "audio",
+      sourceChannel: "life-replay:graph-voice-memo",
+      capturedAt: "2026-03-15T08:00:00Z",
+      contents: Buffer.from("ID3AI Brain voice memo", "utf8"),
+      derivation: {
+        manualContentText:
+          "Voice memo says the graph should expand from Steve to Chiang Mai to Thailand, from Steve to Two-Way, and from Steve to Dan, Lauren, and Ben with provenance on every edge.",
+        jobKind: "transcription",
+        modality: "audio",
+        metadata: {
+          derivation_source: "benchmark_multimodal_fixture",
+          fixture_kind: "graph_voice_memo"
+        }
+      }
+    }
+  ];
+
+  for (const fixture of fixtures) {
+    await writeFile(fixture.path, fixture.contents);
+  }
+
+  return fixtures;
 }
 
 const FIXTURES: readonly ReplayFixture[] = [
@@ -359,6 +466,48 @@ const FIXTURES: readonly ReplayFixture[] = [
     sourceType: "markdown",
     sourceChannel: "life-replay:replay-integrity-2",
     capturedAt: "2026-03-22T14:00:00Z"
+  },
+  {
+    path: replayFixturePath("dietary-blocker-peanuts.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:dietary-blocker-peanuts",
+    capturedAt: "2024-07-14T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("python-workers-2025.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:python-workers-2025",
+    capturedAt: "2025-03-14T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("python-workers-2026.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:python-workers-2026",
+    capturedAt: "2026-02-14T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("pdf-protocol-1.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:pdf-protocol-1",
+    capturedAt: "2026-01-05T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("pdf-protocol-2.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:pdf-protocol-2",
+    capturedAt: "2026-01-19T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("pdf-protocol-3.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:pdf-protocol-3",
+    capturedAt: "2026-02-02T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("uncle-ambiguity.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:uncle-ambiguity",
+    capturedAt: "2026-03-18T15:00:00Z"
   }
 ];
 
@@ -408,7 +557,9 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     query: "why does the brain believe Steve works at Two-Way?",
     expectTopIncludes: ["Two-Way"],
     requireEvidence: true,
-    minimumConfidence: "confident"
+    minimumConfidence: "confident",
+    expectedPlannerQueryClass: "causal",
+    expectedLeafEvidenceRequired: true
   },
   {
     name: "lauren_locations_query",
@@ -552,7 +703,9 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     name: "postgres_decision_query",
     query: "why do we use Postgres?",
     expectTopIncludes: ["Postgres"],
-    requireEvidence: true
+    requireEvidence: true,
+    expectedPlannerQueryClass: "causal",
+    expectedLeafEvidenceRequired: true
   },
   {
     name: "constraints_query",
@@ -675,7 +828,9 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     query: "what did Steve do on March 20 2026?",
     expectTopTypes: ["temporal_nodes"],
     expectTopIncludes: ["Coworking", "Massage", "Dinner"],
-    requireEvidence: true
+    requireEvidence: true,
+    expectedPlannerQueryClass: "temporal_summary",
+    expectedLeafEvidenceRequired: false
   },
   {
     name: "day_summary_query_reconsolidated",
@@ -683,7 +838,10 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     expectTopTypes: ["semantic_memory"],
     expectTopIncludes: ["March 20, 2026", "Coworking", "Massage", "Dinner"],
     requireEvidence: true,
-    minimumConfidence: "confident"
+    minimumConfidence: "confident",
+    expectedPlannerQueryClass: "temporal_summary",
+    expectedLeafEvidenceRequired: false,
+    expectedTemporalSummarySufficient: true
   },
   {
     name: "temporal_detail_cost_query",
@@ -691,7 +849,9 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     expectTopTypes: ["episodic_memory", "narrative_event"],
     expectTopIncludes: ["250 baht", "Yellow"],
     requireEvidence: true,
-    minimumConfidence: "confident"
+    minimumConfidence: "confident",
+    expectedPlannerQueryClass: "temporal_detail",
+    expectedLeafEvidenceRequired: true
   },
   {
     name: "yellow_event_query",
@@ -706,11 +866,102 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     requireEvidence: true
   },
   {
-    name: "multimodal_whiteboard_query",
-    query: "what was written on the whiteboard photo from the March redesign packet?",
-    expectTopIncludes: ["where does Steve live", "who are Steve's friends", "what is Steve working on"],
+    name: "dietary_blocker_query",
+    query: "what are my absolute dietary blockers for tonight's dinner?",
+    expectTopIncludes: ["peanut"],
     requireEvidence: true,
     minimumConfidence: "confident"
+  },
+  {
+    name: "python_workers_current_belief_query",
+    query: "what is my current stance on using Python for high-concurrency jobs?",
+    expectTopIncludes: ["rust", "workers"],
+    requireEvidence: true,
+    minimumConfidence: "confident",
+    beforeReconsolidationQuery: "check belief summary for Python high-concurrency jobs for consistency."
+  },
+  {
+    name: "python_workers_historical_belief_query",
+    query: "how has my opinion on Python for high-concurrency jobs changed?",
+    expectTopIncludes: ["python", "rust"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "postgres_vector_db_why_query",
+    query: "why did we decide to use a unified Postgres substrate instead of a dedicated vector database?",
+    expectTopIncludes: ["postgres", "vectors", "graph"],
+    requireEvidence: true,
+    minimumConfidence: "confident",
+    expectedPlannerQueryClass: "causal",
+    expectedLeafEvidenceRequired: true
+  },
+  {
+    name: "pdf_protocol_query",
+    query: "what is the mandatory protocol for handling large PDF uploads in this substrate?",
+    expectTopIncludes: ["pdf", "50mb", "chunk"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "whiteboard_derivation_query",
+    query: "what was written on the whiteboard photo from the March redesign packet?",
+    expectTopTypes: ["artifact_derivation"],
+    expectTopIncludes: ["port 8787", "parent_entity_id", "Chiang Mai", "Thailand"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "packet_derivation_query",
+    query: "what did the March redesign packet say about the Steve graph?",
+    expectTopTypes: ["artifact_derivation"],
+    expectTopIncludes: ["Steve graph", "friends", "place hierarchy", "source links"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "voice_memo_derivation_query",
+    query: "what did the Chiang Mai graph voice memo say?",
+    expectTopTypes: ["artifact_derivation"],
+    expectTopIncludes: ["Chiang Mai", "Thailand", "Two-Way", "Dan", "Lauren", "Ben"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "chiang_mai_hierarchy_query",
+    query: "what country is Chiang Mai in?",
+    expectTopTypes: ["relationship_memory"],
+    expectTopIncludes: ["Chiang Mai", "Thailand"],
+    requireEvidence: true,
+    minimumConfidence: "confident",
+    expectedPlannerQueryClass: "graph_multi_hop",
+    expectedLeafEvidenceRequired: false
+  },
+  {
+    name: "tahoe_city_hierarchy_query",
+    query: "where in the hierarchy is Tahoe City?",
+    expectTopTypes: ["relationship_memory"],
+    expectTopIncludes: ["Tahoe City", "Lake Tahoe", "California"],
+    requireEvidence: true,
+    minimumConfidence: "confident",
+    expectedPlannerQueryClass: "graph_multi_hop",
+    expectedLeafEvidenceRequired: false
+  },
+  {
+    name: "clarification_constraint_query",
+    query: "what constraint should the brain follow when identity is unclear?",
+    expectTopIncludes: ["clarification", "guessing"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "uncle_clarification_query",
+    query: "who is Uncle?",
+    expectTopIncludes: [],
+    requireDuality: true,
+    minimumConfidence: "missing",
+    expectedFollowUpAction: "route_to_clarifications",
+    expectedClarificationToolName: "memory.get_clarifications"
   }
 ];
 
@@ -718,8 +969,8 @@ const GRAPH_EXPECTATIONS: readonly ReplayGraphExpectation[] = [
   {
     name: "steve_focus_graph",
     entityName: "Steve Tietze",
-    expectNodeIncludes: ["Yellow co-working space", "Dinner with Dan at Chiang Mai", "Dan", "Two-Way"],
-    expectEdgePredicates: ["participated_in", "includes"]
+    expectNodeIncludes: ["Yellow co-working space", "Dinner with Dan at Chiang Mai", "Dan", "Two-Way", "Lake Tahoe", "Chiang Mai", "Thailand", "Factor 5", "Lauren"],
+    expectEdgePredicates: ["participated_in", "includes", "resides_at", "worked_at", "friend_of", "contained_in"]
   }
 ];
 
@@ -1081,7 +1332,34 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
         AND entity_type = 'constraint'
       ORDER BY canonical_name
     `,
-    expectIncludes: ["constraint Ask For Clarification Instead Of Guessing", "constraint Never Silently Rewrite Raw Source Truth", "constraint Return Ground-Truth Source Document With Search Results"]
+    expectIncludes: [
+      "constraint Ask For Clarification Instead Of Guessing",
+      "constraint Never Silently Rewrite Raw Source Truth",
+      "constraint Return Ground-Truth Source Document With Search Results",
+      "constraint Peanuts are an absolute dietary blocker for Steve"
+    ]
+  },
+  {
+    name: "artifact_derivations_exist",
+    sql: `
+      SELECT concat(derivation_type, ' ', content_text) AS value
+      FROM artifact_derivations
+      ORDER BY created_at ASC
+    `,
+    expectIncludes: [
+      "ocr Whiteboard photo from the March redesign packet",
+      "ocr March redesign packet says the Steve graph should expand",
+      "transcription Voice memo says the graph should expand from Steve to Chiang Mai to Thailand"
+    ]
+  },
+  {
+    name: "derivation_jobs_completed",
+    sql: `
+      SELECT concat(job_kind, ' ', status) AS value
+      FROM derivation_jobs
+      ORDER BY created_at ASC
+    `,
+    expectIncludes: ["ocr completed", "transcription completed"]
   },
   {
     name: "routine_entities_exist",
@@ -1106,6 +1384,7 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     `,
     expectIncludes: [
       "style_spec Ask NotebookLM First Before Changing Ontology",
+      "style_spec Chunk Large PDF Uploads Before Processing",
       "style_spec Keep Responses Concise",
       "style_spec Prefer Natural-Language Queryability",
       "style_spec Wipe And Replay The Database After Each Slice"
@@ -1123,9 +1402,29 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     `,
     expectIncludes: [
       "style_spec:ask_notebooklm_first_before_changing_ontology",
+      "style_spec:chunk_large_pdf_uploads_before_processing",
       "style_spec:keep_responses_concise",
       "style_spec:prefer_natural-language_queryability",
       "style_spec:wipe_and_replay_database_after_each_slice"
+    ]
+  },
+  {
+    name: "heuristic_clarification_constraint_state_exists",
+    sql: `
+      SELECT concat(state_key, ' ', state_value::text, ' ', metadata::text) AS value
+      FROM procedural_memory
+      WHERE namespace_id = 'personal'
+        AND state_type = 'constraint'
+        AND state_key = 'constraint:ask_for_clarification_instead_of_guessing'
+        AND valid_until IS NULL
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `,
+    expectIncludes: [
+      "constraint:ask_for_clarification_instead_of_guessing",
+      "heuristic_induction",
+      "rule_of_3_distinct_days",
+      "\"induced\": true"
     ]
   },
   {
@@ -1204,7 +1503,9 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     `,
     expectIncludes: [
       "belief Hosted infrastructure is the pragmatic choice for Brain 2.0 while the local stack is not ready yet",
-      "belief Local-first architecture with local Qwen embeddings is the right direction for Brain 2.0"
+      "belief Local-first architecture with local Qwen embeddings is the right direction for Brain 2.0",
+      "belief Python is fine for most work, including workers, when delivery speed matters more than raw concurrency",
+      "belief Rust is the better choice for high-concurrency workers because Python's GIL is too restrictive"
     ]
   },
   {
@@ -1216,7 +1517,24 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
         AND state_type = 'belief'
       ORDER BY valid_from
     `,
-    expectIncludes: ["belief:infrastructure", "Hosted infrastructure", "Local-first architecture with local Qwen embeddings"]
+    expectIncludes: [
+      "belief:infrastructure",
+      "Hosted infrastructure",
+      "Local-first architecture with local Qwen embeddings",
+      "belief:python_high-concurrency_jobs",
+      "Rust is the better choice for high-concurrency workers"
+    ]
+  },
+  {
+    name: "clarification_uncle_exists",
+    sql: `
+      SELECT concat(ambiguity_type, ' ', coalesce(subject_text, ''), ' ', coalesce(object_text, ''), ' ', coalesce(metadata->>'raw_ambiguous_text', '')) AS value
+      FROM claim_candidates
+      WHERE namespace_id = 'personal'
+        AND ambiguity_state = 'requires_clarification'
+      ORDER BY created_at DESC
+    `,
+    expectIncludes: ["kinship_resolution", "Uncle"]
   },
   {
     name: "salience_metadata_exists",
@@ -1290,33 +1608,67 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     expectIncludes: ["profile_summary", "Superseded a stale relationship profile summary"]
   },
   {
-    name: "multimodal_derivation_exists",
+    name: "belief_profile_summary_active",
     sql: `
-      SELECT coalesce(string_agg(content_text, ' | ' ORDER BY created_at DESC), '') AS value
-      FROM artifact_derivations
-      WHERE derivation_type = 'ocr'
-        AND metadata->>'derivation_source' = 'life_replay_manual_multimodal'
+      SELECT concat(memory_kind, ' ', canonical_key, ' ', content_abstract) AS value
+      FROM semantic_memory
+      WHERE namespace_id = 'personal'
+        AND canonical_key = 'reconsolidated:belief_summary:python_high_concurrency_jobs'
+        AND status = 'active'
+        AND valid_until IS NULL
+      ORDER BY valid_from DESC
     `,
     expectIncludes: [
-      "March redesign packet",
-      "where does Steve live",
-      "who are Steve's friends",
-      "what is Steve working on"
+      "belief_summary reconsolidated:belief_summary:python_high_concurrency_jobs",
+      "current stance on python high concurrency jobs",
+      "Rust is the better choice"
     ]
   },
   {
-    name: "multimodal_derivation_job_completed",
+    name: "belief_profile_summary_superseded",
     sql: `
-      SELECT coalesce(string_agg(status || ' ' || job_kind, ' | ' ORDER BY created_at DESC), '') AS value
-      FROM derivation_jobs
+      SELECT concat(status, ' ', canonical_key, ' ', content_abstract) AS value
+      FROM semantic_memory
       WHERE namespace_id = 'personal'
-        AND metadata->>'derivation_source' = 'life_replay_manual_multimodal'
+        AND canonical_key = 'reconsolidated:belief_summary:python_high_concurrency_jobs'
+        AND status = 'superseded'
+      ORDER BY valid_from DESC
     `,
-    expectIncludes: ["completed ocr"]
-  }
+    expectIncludes: ["superseded reconsolidated:belief_summary:python_high_concurrency_jobs", "Python is still the right choice for all workers"]
+  },
+  {
+    name: "belief_profile_reconsolidation_event_logged",
+    sql: `
+      SELECT concat(action, ' ', target_memory_kind, ' ', reason) AS value
+      FROM memory_reconsolidation_events
+      WHERE namespace_id = 'personal'
+        AND query_text = 'check belief summary for Python high-concurrency jobs for consistency.'
+      ORDER BY created_at DESC
+    `,
+    expectIncludes: ["belief_summary", "Superseded a stale belief summary"]
+  },
+  {
+    name: "heuristic_large_pdf_state_exists",
+    sql: `
+      SELECT concat(state_key, ' ', state_value::text, ' ', metadata::text) AS value
+      FROM procedural_memory
+      WHERE namespace_id = 'personal'
+        AND state_type = 'style_spec'
+        AND state_key = 'style_spec:chunk_large_pdf_uploads_before_processing'
+        AND valid_until IS NULL
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `,
+    expectIncludes: [
+      "style_spec:chunk_large_pdf_uploads_before_processing",
+      "induced",
+      "large_pdf_protocol",
+      "rule_of_3_distinct_days"
+    ]
+  },
 ];
 
-async function resetDatabase(): Promise<void> {
+export async function resetDatabase(): Promise<void> {
   await withTransaction(async (client) => {
     const rows = await client.query<{ table_name: string }>(
       `
@@ -1337,7 +1689,8 @@ async function resetDatabase(): Promise<void> {
   });
 }
 
-async function seedNamespace(namespaceId: string): Promise<number> {
+export async function seedNamespace(namespaceId: string): Promise<number> {
+  const generatedFixtures = await ensureGeneratedFixtures();
   const missingFixtures: string[] = [];
   for (const fixture of FIXTURES) {
     try {
@@ -1359,15 +1712,38 @@ async function seedNamespace(namespaceId: string): Promise<number> {
     );
   }
 
-  for (const fixture of FIXTURES) {
-    await ingestArtifact({
+  const allFixtures: readonly ReplayFixture[] = [...FIXTURES, ...generatedFixtures];
+
+  for (const fixture of allFixtures) {
+    const ingestResult = await ingestArtifact({
       inputUri: fixture.path,
       namespaceId,
       sourceType: fixture.sourceType,
       sourceChannel: fixture.sourceChannel,
       capturedAt: fixture.capturedAt
     });
+
+    const generatedFixture = generatedFixtures.find((entry) => entry.path === fixture.path);
+    if (generatedFixture?.derivation) {
+      await enqueueDerivationJob({
+        namespaceId,
+        artifactId: ingestResult.artifact.artifactId,
+        artifactObservationId: ingestResult.artifact.observationId,
+        jobKind: generatedFixture.derivation.jobKind,
+        modality: generatedFixture.derivation.modality,
+        metadata: {
+          manual_content_text: generatedFixture.derivation.manualContentText,
+          ...(generatedFixture.derivation.metadata ?? {})
+        }
+      });
+    }
   }
+
+  await processDerivationJobs({
+    namespaceId,
+    limit: 16,
+    workerId: "life-replay:derivation-worker"
+  });
 
   await runRelationshipAdjudication(namespaceId, {
     limit: 1200,
@@ -1383,40 +1759,6 @@ async function seedNamespace(namespaceId: string): Promise<number> {
       maxMembersPerNode: 256
     });
   }
-
-  const multimodalTempDir = await mkdtemp(path.join(os.tmpdir(), "life-replay-multimodal-"));
-  const whiteboardPath = path.join(multimodalTempDir, "march-redesign-whiteboard.png");
-  await writeFile(
-    whiteboardPath,
-    Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9XK3sAAAAASUVORK5CYII=",
-      "base64"
-    )
-  );
-  const whiteboardIngest = await ingestArtifact({
-    inputUri: whiteboardPath,
-    namespaceId,
-    sourceType: "image",
-    sourceChannel: "life-replay:whiteboard-photo",
-    capturedAt: "2026-03-24T09:00:00Z"
-  });
-  await enqueueDerivationJob({
-    namespaceId,
-    artifactId: whiteboardIngest.artifact.artifactId,
-    artifactObservationId: whiteboardIngest.artifact.observationId,
-    jobKind: "ocr",
-    modality: "image",
-    metadata: {
-      derivation_source: "life_replay_manual_multimodal",
-      manual_content_text:
-        "Whiteboard photo from the March redesign packet listed the query smoke checks: where does Steve live, who are Steve's friends, and what is Steve working on."
-    }
-  });
-  await processDerivationJobs({
-    namespaceId,
-    limit: 20,
-    workerId: "life-replay-derivation-worker"
-  });
 
   await withTransaction(async (client) => {
     const sourceResult = await client.query<{ id: string }>(
@@ -1466,9 +1808,57 @@ async function seedNamespace(namespaceId: string): Promise<number> {
         })
       ]
     );
+
+    const staleBeliefSource = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM episodic_memory
+        WHERE namespace_id = $1
+          AND content ILIKE '%Python is fine for most work%'
+        ORDER BY occurred_at ASC
+        LIMIT 1
+      `,
+      [namespaceId]
+    );
+
+    await client.query(
+      `
+        INSERT INTO semantic_memory (
+          namespace_id,
+          content_abstract,
+          importance_score,
+          valid_from,
+          valid_until,
+          status,
+          is_anchor,
+          source_episodic_id,
+          memory_kind,
+          canonical_key,
+          normalized_value,
+          metadata,
+          decay_exempt
+        )
+        VALUES ($1, $2, 0.82, $3::timestamptz, NULL, 'active', true, $4::uuid, 'belief_summary', $5, $6::jsonb, $7::jsonb, true)
+      `,
+      [
+        namespaceId,
+        "Steve's current stance on python high concurrency jobs is Python is still the right choice for all workers.",
+        "2025-03-20T09:00:00Z",
+        staleBeliefSource.rows[0]?.id ?? null,
+        "reconsolidated:belief_summary:python_high_concurrency_jobs",
+        JSON.stringify({
+          topic: "Python high-concurrency jobs",
+          belief_text: "Python is still the right choice for all workers."
+        }),
+        JSON.stringify({
+          source: "life_replay_stale_belief_seed",
+          seeded_for_reconsolidation: true
+        })
+      ]
+    );
   });
 
-  return FIXTURES.length + 1;
+  return allFixtures.length;
 }
 
 function aggregateContent(values: readonly RecallResult[]): string {
@@ -1546,6 +1936,44 @@ async function runQueryExpectation(namespaceId: string, expectation: ReplayQuery
 
   if (expectation.expectedFollowUpAction && result.meta.followUpAction !== expectation.expectedFollowUpAction) {
     failures.push(`expected follow-up action ${expectation.expectedFollowUpAction}, got ${result.meta.followUpAction ?? "none"}`);
+  }
+
+  if (expectation.expectedPlannerQueryClass && result.meta.planner.queryClass !== expectation.expectedPlannerQueryClass) {
+    failures.push(`expected planner query class ${expectation.expectedPlannerQueryClass}, got ${result.meta.planner.queryClass}`);
+  }
+
+  if (
+    expectation.expectedLeafEvidenceRequired !== undefined &&
+    result.meta.planner.leafEvidenceRequired !== expectation.expectedLeafEvidenceRequired
+  ) {
+    failures.push(
+      `expected leafEvidenceRequired=${String(expectation.expectedLeafEvidenceRequired)}, got ${String(result.meta.planner.leafEvidenceRequired)}`
+    );
+  }
+
+  if (
+    expectation.expectedTemporalGateTriggered !== undefined &&
+    Boolean(result.meta.temporalGateTriggered) !== expectation.expectedTemporalGateTriggered
+  ) {
+    failures.push(
+      `expected temporalGateTriggered=${String(expectation.expectedTemporalGateTriggered)}, got ${String(Boolean(result.meta.temporalGateTriggered))}`
+    );
+  }
+
+  if (
+    expectation.expectedTemporalSummarySufficient !== undefined &&
+    Boolean(result.meta.temporalSummarySufficient) !== expectation.expectedTemporalSummarySufficient
+  ) {
+    failures.push(
+      `expected temporalSummarySufficient=${String(expectation.expectedTemporalSummarySufficient)}, got ${String(Boolean(result.meta.temporalSummarySufficient))}`
+    );
+  }
+
+  if (expectation.expectedClarificationToolName) {
+    const toolName = result.duality.clarificationHint?.mcpTool?.name ?? result.meta.clarificationHint?.mcpTool?.name;
+    if (toolName !== expectation.expectedClarificationToolName) {
+      failures.push(`expected clarification tool ${expectation.expectedClarificationToolName}, got ${toolName ?? "none"}`);
+    }
   }
 
   if (expectation.minimumConfidence && confidenceRank(confidence) < confidenceRank(expectation.minimumConfidence)) {

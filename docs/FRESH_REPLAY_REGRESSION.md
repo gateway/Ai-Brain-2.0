@@ -61,7 +61,18 @@ source corpus reconstructs the same life graph and active truth.
 - `who is Alex dating now?`
 - `who was Nina dating?`
 - `who is Nina dating now?`
+- `what are my absolute dietary blockers for tonight's dinner?`
+- `what is my current stance on using Python for high-concurrency jobs?`
+- `how has my opinion on Python for high-concurrency jobs changed?`
+- `why did we decide to use a unified Postgres substrate instead of a dedicated vector database?`
+- `what is the mandatory protocol for handling large PDF uploads in this substrate?`
 - `what was written on the whiteboard photo from the March redesign packet?`
+- `what did the March redesign packet say about the Steve graph?`
+- `what did the Chiang Mai graph voice memo say?`
+- `what country is Chiang Mai in?`
+- `where in the hierarchy is Tahoe City?`
+- `what constraint should the brain follow when identity is unclear?`
+- `who is Uncle?`
 
 ## Core State Checks
 
@@ -74,11 +85,16 @@ source corpus reconstructs the same life graph and active truth.
 - evidence bundle is present on query responses
 - claim-plus-evidence duality object is present on evidence-backed query responses
 - event-bounded answers preserve source-evidence bundles
-- multimodal derivation rows and derivation job completion survive replay
 - recurrence-gated operational heuristics survive replay with induction metadata
 - focused graph expansion for the self anchor includes connected event nodes and related people/projects/places
 - direct breakup or paused-contact evidence can justify a confident current-state abstention as `Unknown.`
 - stale relationship profile summaries are superseded by reconsolidation when active tenure state changes
+- unresolved kinship placeholders route to clarifications instead of returning guessed identities
+- unresolved vague-place placeholders route to clarifications instead of returning guessed grounding
+- belief-summary reconsolidation supersedes stale summaries after explicit state changes
+- deterministic multimodal derivation jobs complete and persist replay-safe `artifact_derivations`
+- hierarchy lookup queries can stop at structural `parent_entity_id` facts without forcing noisy episodic descent
+- generalized heuristic induction can promote reusable `constraint` truth, not just `style_spec`
 
 ## Output
 
@@ -91,4 +107,26 @@ Each run should write:
 
 Current green reference run:
 
-- `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T05-59-19-839Z.json`
+- clean replay:
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T08-17-33-725Z.json`
+- scale replay:
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T08-17-47-452Z.json`
+
+## Scale Replay Addendum
+
+The scale harness should:
+
+1. run the clean replay benchmark first for the current baseline
+2. wipe the database again
+3. ingest the canonical corpus plus deterministic medium / large / noisy generated artifacts
+4. rerun adjudication, consolidation, and temporal summaries
+5. execute a smaller natural-language scale query pack with latency reporting
+6. execute Steve-focused graph stress checks
+7. report clarification counts by ambiguity type
+
+Current scale assertions:
+
+- no quality delta on the scale query pack versus the clean baseline pack
+- `who is Uncle?` routes to clarifications instead of hallucinating
+- `where was the summer cabin?` routes to clarifications instead of hallucinating
+- Steve-focused scale graph remains provenance-backed and does not collapse under the noisier corpus
