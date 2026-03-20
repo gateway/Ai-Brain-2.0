@@ -98,6 +98,9 @@ source corpus reconstructs the same life graph and active truth.
 - the runtime derivation worker can process queued multimodal jobs and record healthy worker runs in `ops.worker_runs`
 - universal mutable-state reconsolidation can supersede stale `state_summary` semantic rows when active procedural truth changes
 - ops timeline responses surface `containmentAudit` and `causalOverlays` so operators can inspect TMT integrity and supersession chains
+- non-anchor derived semantic summaries can archive to `cold` without deleting source episodic evidence
+- old temporal summaries can archive to `cold` while temporal node members still preserve the evidence trail
+- anchor-backed current summaries remain active while archival only demotes or archives derived non-anchor layers
 
 ## Output
 
@@ -111,9 +114,9 @@ Each run should write:
 Current green reference run:
 
 - clean replay:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T09-34-07-426Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T09-34-18-545Z.json`
 - scale replay:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T09-34-48-854Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T09-34-33-428Z.json`
 
 ## Scale Replay Addendum
 
@@ -123,9 +126,10 @@ The scale harness should:
 2. wipe the database again
 3. ingest the canonical corpus plus deterministic medium / large / noisy generated artifacts
 4. rerun adjudication, consolidation, and temporal summaries
-5. execute a smaller natural-language scale query pack with latency reporting
-6. execute Steve-focused graph stress checks
-7. report clarification counts by ambiguity type
+5. run derived-layer archival for semantic and temporal summaries
+6. execute a smaller natural-language scale query pack with latency reporting
+7. execute Steve-focused graph stress checks
+8. report clarification counts by ambiguity type
 
 Current scale assertions:
 

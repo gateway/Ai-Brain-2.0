@@ -38,18 +38,19 @@ Research guidance for sequencing:
   - deterministic multimodal-native derivation fixtures for image / pdf / audio via `derivation_jobs`
   - hierarchy-aware recall for structural `parent_entity_id` chains with exact hierarchy stopping rules
   - generalized heuristic induction from repeated evidence into reusable `constraint` truth
+  - conservative hot/warm/cold archival for derived semantic summaries and temporal summaries, with anchor protection and no raw episodic deletion
 - latest green replay report:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T09-34-07-426Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T09-34-18-545Z.json`
 - latest green scale report:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T09-34-48-854Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T09-34-33-428Z.json`
 - current replay snapshot:
   - `60 confident`
   - `1 weak`
   - `1 missing`
 - current scale snapshot:
   - `86 generated artifacts`
-  - `p50 31.22ms`
-  - `p95 44.14ms`
+  - `p50 29.44ms`
+  - `p95 43.93ms`
   - `Steve focus graph: 54 nodes / 70 edges`
 - the remaining weak/missing cases are intentional:
   - pre-reconsolidation day-summary support is `weak`
@@ -58,8 +59,8 @@ Research guidance for sequencing:
 - NotebookLM final review agrees this is the conservative right direction.
 - NotebookLM agreed with the conservative order on the latest pass.
 - next highest-value deterministic gap if we do not want to overbuild:
-  - deeper sufficiency-gated TMT descent beyond the current exact day/session coverage
-  - live operator wiring for multimodal worker outputs back into richer session/operator UX
+  - storage-level policy-driven forgetting and archival for derived layers is now in place conservatively
+  - deeper sufficiency-gated TMT descent beyond the current exact day/session coverage is the next single deterministic gap
 
 ## Phase 1: Substrate Hardening
 
