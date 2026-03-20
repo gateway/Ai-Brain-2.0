@@ -31,6 +31,10 @@ function layerTone(layer: string): string {
   }
 }
 
+function formatMetadataList(value: unknown): string | null {
+  return Array.isArray(value) && value.length > 0 ? value.filter((item): item is string => typeof item === "string").join(" · ") : null;
+}
+
 export default async function TimelinePage({ searchParams }: { readonly searchParams: SearchParams }) {
   const params = await searchParams;
   const defaults = await getConsoleDefaults();
@@ -140,12 +144,36 @@ export default async function TimelinePage({ searchParams }: { readonly searchPa
                     <span className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] ${layerTone(summary.layer)}`}>
                       {summary.layer}
                     </span>
+                    <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] uppercase tracking-[0.22em] text-slate-200">
+                      {summary.generatedBy.replace(/_/g, " ")}
+                    </span>
                     <span className="text-xs text-slate-400">
                       {formatDate(summary.periodStart)} → {formatDate(summary.periodEnd)}
                     </span>
                     <span className="text-xs text-slate-400">sources {summary.sourceCount}</span>
                   </div>
                   <p className="mt-3 text-sm leading-7 text-slate-300">{summary.summaryText}</p>
+                  {summary.metadata.semantic_summary_provider || summary.metadata.semantic_summary_model || summary.metadata.semantic_summary_recurring_themes ? (
+                    <div className="mt-3 space-y-2 rounded-[18px] border border-white/8 bg-white/5 p-3 text-xs leading-6 text-slate-300">
+                      <p>
+                        Semantic layer:
+                        {" "}
+                        <span className="font-medium text-white">
+                          {String(summary.metadata.semantic_summary_provider ?? "unknown")}
+                          {summary.metadata.semantic_summary_model ? ` / ${String(summary.metadata.semantic_summary_model)}` : ""}
+                        </span>
+                      </p>
+                      {formatMetadataList(summary.metadata.semantic_summary_recurring_themes) ? (
+                        <p>Recurring themes: <span className="font-medium text-white">{formatMetadataList(summary.metadata.semantic_summary_recurring_themes)}</span></p>
+                      ) : null}
+                      {formatMetadataList(summary.metadata.semantic_summary_uncertainties) ? (
+                        <p>Uncertainties: <span className="font-medium text-white">{formatMetadataList(summary.metadata.semantic_summary_uncertainties)}</span></p>
+                      ) : null}
+                      {typeof summary.metadata.deterministic_summary_text === "string" ? (
+                        <p>Deterministic base: <span className="font-medium text-white">{summary.metadata.deterministic_summary_text}</span></p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </CardContent>

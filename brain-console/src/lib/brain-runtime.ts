@@ -206,6 +206,7 @@ export interface OpsTemporalSummary {
   readonly temporalNodeId: string;
   readonly layer: "session" | "day" | "week" | "month" | "year" | "profile";
   readonly summaryText: string;
+  readonly generatedBy: string;
   readonly periodStart: string;
   readonly periodEnd: string;
   readonly sourceCount: number;

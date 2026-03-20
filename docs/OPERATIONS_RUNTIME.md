@@ -9,6 +9,7 @@ There are three important operational loops behind the workbench:
 - monitored source scanning and import
 - clarification/inbox outbox propagation
 - temporal summary generation
+- durable worker run ledger and health reporting
 
 These are runtime concerns, not UI concerns.
 
@@ -32,6 +33,7 @@ Key files:
 Control endpoint:
 
 - `POST /ops/sources/process`
+- `GET /ops/workers`
 
 ## Inbox and outbox propagation
 
@@ -47,6 +49,7 @@ Key files:
 Control endpoint:
 
 - `POST /ops/outbox/process`
+- `GET /ops/workers`
 
 ## Temporal summaries
 
@@ -67,6 +70,7 @@ Key files:
 Control endpoint:
 
 - `POST /ops/temporal/process`
+- `GET /ops/workers`
 
 When you pass:
 
@@ -82,6 +86,38 @@ The semantic overlay stores metadata such as:
 - `semantic_summary_preset`
 - `semantic_summary_updated_at`
 - recurring themes and uncertainties extracted from the LLM output
+
+## Worker ledger and health
+
+The runtime now persists background worker runs in `ops.worker_runs`.
+
+That ledger powers compact operator-facing health panels for:
+
+- `source_monitor`
+- `outbox`
+- `temporal_summary`
+
+The current UI status model is:
+
+- `disabled`
+- `never`
+- `running`
+- `healthy`
+- `degraded`
+- `failed`
+- `stale`
+
+Each run records:
+
+- worker key
+- trigger type
+- namespace/source scope
+- start and finish timestamps
+- duration
+- next due time
+- attempted / processed / failed / skipped counts
+- structured summary JSON
+- error class and error message when applicable
 
 ## Combined operations worker
 

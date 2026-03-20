@@ -294,6 +294,17 @@ Useful body fields:
 
 ## Operations Workers
 
+### `GET /ops/workers`
+
+Read the compact runtime worker health snapshot used by the Dashboard and Settings pages.
+
+It includes:
+
+- per-worker state
+- latest run metadata
+- next due time
+- recent failure history
+
 ### `POST /ops/outbox/process`
 
 Run clarification/outbox propagation manually.
@@ -318,3 +329,4 @@ Useful body fields:
 - Core brain mutation should go through these runtime endpoints, not direct database edits.
 - Query/debug SQL is intentionally separate from normal memory mutation.
 - Session, clarification, source monitor, and temporal summary flows are all first-class runtime behaviors.
+- Worker health is now backed by a durable runtime ledger instead of only transient UI banners.

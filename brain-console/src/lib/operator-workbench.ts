@@ -273,6 +273,43 @@ export interface WorkbenchTemporalSummaryProcessResult {
   readonly linkedMembers: number;
 }
 
+export interface WorkbenchWorkerRun {
+  readonly id: string;
+  readonly workerKey: "source_monitor" | "outbox" | "temporal_summary";
+  readonly triggerType: "manual" | "scheduled" | "loop" | "onboarding" | "repair";
+  readonly namespaceId?: string | null;
+  readonly sourceId?: string | null;
+  readonly workerId?: string | null;
+  readonly status: "running" | "succeeded" | "partial" | "failed" | "skipped";
+  readonly startedAt: string;
+  readonly finishedAt?: string | null;
+  readonly durationMs?: number | null;
+  readonly nextDueAt?: string | null;
+  readonly attemptedCount: number;
+  readonly processedCount: number;
+  readonly failedCount: number;
+  readonly skippedCount: number;
+  readonly errorClass?: string | null;
+  readonly errorMessage?: string | null;
+  readonly summary: Record<string, unknown>;
+}
+
+export interface WorkbenchWorkerHealth {
+  readonly workerKey: "source_monitor" | "outbox" | "temporal_summary";
+  readonly enabled: boolean;
+  readonly intervalSeconds?: number;
+  readonly state: "disabled" | "never" | "running" | "healthy" | "degraded" | "failed" | "stale";
+  readonly nextDueAt?: string;
+  readonly latestRun?: WorkbenchWorkerRun;
+  readonly recentFailures: readonly WorkbenchWorkerRun[];
+}
+
+export interface WorkbenchRuntimeWorkerStatus {
+  readonly checkedAt: string;
+  readonly namespaceId: string;
+  readonly workers: readonly WorkbenchWorkerHealth[];
+}
+
 export interface WorkbenchMonitoredSource {
   readonly id: string;
   readonly sourceType: "openclaw" | "folder";
@@ -524,6 +561,11 @@ export function getWorkbenchRuntimeBaseUrl(): string {
 
 export async function getRuntimeHealth(): Promise<{ readonly ok: boolean }> {
   return fetchJson<{ readonly ok: boolean }>("/health", { method: "GET", headers: {} });
+}
+
+export async function getWorkbenchWorkerStatus(): Promise<WorkbenchRuntimeWorkerStatus> {
+  const payload = await fetchJson<{ readonly status: WorkbenchRuntimeWorkerStatus }>("/ops/workers", { method: "GET", headers: {} });
+  return payload.status;
 }
 
 export async function getNamespaceCatalog(): Promise<{
@@ -1064,8 +1106,14 @@ export async function runWorkbenchTemporalSummaries(input: {
   readonly model?: string;
   readonly presetId?: string;
   readonly systemPrompt?: string;
-}): Promise<readonly WorkbenchTemporalSummaryProcessResult[]> {
-  const payload = await fetchJson<{ readonly summaries: readonly WorkbenchTemporalSummaryProcessResult[] }>("/ops/temporal/process", {
+}): Promise<{
+  readonly summaries: readonly WorkbenchTemporalSummaryProcessResult[];
+  readonly semanticOverlayUpdatedNodes: number;
+}> {
+  const payload = await fetchJson<{
+    readonly summaries: readonly WorkbenchTemporalSummaryProcessResult[];
+    readonly semanticOverlayUpdatedNodes?: number;
+  }>("/ops/temporal/process", {
     method: "POST",
     body: JSON.stringify({
       namespace_id: input.namespaceId,
@@ -1078,7 +1126,10 @@ export async function runWorkbenchTemporalSummaries(input: {
       system_prompt: input.systemPrompt ?? null
     })
   });
-  return payload.summaries;
+  return {
+    summaries: payload.summaries,
+    semanticOverlayUpdatedNodes: payload.semanticOverlayUpdatedNodes ?? 0
+  };
 }
 
 export async function resolveWorkbenchClarification(input: {

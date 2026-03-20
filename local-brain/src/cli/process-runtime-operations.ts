@@ -1,7 +1,11 @@
 import { closePool } from "../db/client.js";
-import { processBrainOutboxEvents } from "../clarifications/service.js";
-import { runSemanticTemporalSummaryOverlay, runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
-import { getBootstrapState, processScheduledMonitoredSources, resolveRuntimeOperationsSettings } from "../ops/source-service.js";
+import { getBootstrapState, resolveRuntimeOperationsSettings } from "../ops/source-service.js";
+import {
+  buildRuntimeLoopWorkerId,
+  executeOutboxWorker,
+  executeSourceMonitorWorker,
+  executeTemporalSummaryWorker
+} from "../ops/runtime-worker-service.js";
 
 function readFlag(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -42,37 +46,32 @@ async function runOnce(): Promise<{
   };
 
   if (settings.sourceMonitor.enabled) {
-    result.sourceMonitor = await processScheduledMonitoredSources({
-      importAfterScan: settings.sourceMonitor.autoImportOnScan
+    result.sourceMonitor = await executeSourceMonitorWorker({
+      importAfterScan: settings.sourceMonitor.autoImportOnScan,
+      triggerType: "loop",
+      workerId: buildRuntimeLoopWorkerId("source-monitor")
     });
   }
 
-  result.outbox = await processBrainOutboxEvents({
+  result.outbox = await executeOutboxWorker({
     namespaceId,
-    limit: settings.outbox.batchLimit
+    limit: settings.outbox.batchLimit,
+    triggerType: "loop",
+    workerId: buildRuntimeLoopWorkerId("outbox")
   });
 
   if (settings.temporalSummary.enabled) {
-    const summaries = [];
-    for (const layer of ["day", "week", "month", "year"] as const) {
-      summaries.push(
-        await runTemporalSummaryScaffold(namespaceId, {
-          layer,
-          lookbackDays: settings.temporalSummary.lookbackDays
-        })
-      );
-      if (settings.temporalSummary.strategy === "deterministic_plus_llm") {
-        await runSemanticTemporalSummaryOverlay(namespaceId, {
-          layer,
-          lookbackDays: settings.temporalSummary.lookbackDays,
-          provider: settings.temporalSummary.summarizerProvider,
-          model: settings.temporalSummary.summarizerModel,
-          presetId: settings.temporalSummary.summarizerPreset,
-          systemPrompt: settings.temporalSummary.systemPrompt
-        });
-      }
-    }
-    result.temporalSummary = summaries;
+    result.temporalSummary = await executeTemporalSummaryWorker({
+      namespaceId,
+      lookbackDays: settings.temporalSummary.lookbackDays,
+      strategy: settings.temporalSummary.strategy,
+      provider: settings.temporalSummary.summarizerProvider,
+      model: settings.temporalSummary.summarizerModel,
+      presetId: settings.temporalSummary.summarizerPreset,
+      systemPrompt: settings.temporalSummary.systemPrompt,
+      triggerType: "loop",
+      workerId: buildRuntimeLoopWorkerId("temporal-summary")
+    });
   }
 
   return result;

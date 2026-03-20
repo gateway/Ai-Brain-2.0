@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { OperatorShell } from "@/components/operator-shell";
 import {
   getBootstrapState,
+  getWorkbenchWorkerStatus,
   listWorkbenchSources,
   listOpenRouterModels,
   resolveBootstrapEmbeddingSettings,
@@ -26,16 +27,58 @@ function searchValue(value: string | readonly string[] | undefined): string | un
   return typeof value === "string" ? value : Array.isArray(value) ? value[0] : undefined;
 }
 
+function formatDateTime(value?: string | null): string {
+  if (!value) {
+    return "not yet";
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function workerLabel(value: "source_monitor" | "outbox" | "temporal_summary"): string {
+  switch (value) {
+    case "source_monitor":
+      return "Source monitor";
+    case "outbox":
+      return "Inbox propagation";
+    case "temporal_summary":
+      return "Temporal summaries";
+  }
+}
+
+function workerTone(value: "disabled" | "never" | "running" | "healthy" | "degraded" | "failed" | "stale"): string {
+  switch (value) {
+    case "healthy":
+      return "border-emerald-300/25 bg-emerald-300/12 text-emerald-50";
+    case "running":
+      return "border-cyan-300/25 bg-cyan-300/12 text-cyan-50";
+    case "degraded":
+    case "stale":
+      return "border-amber-300/25 bg-amber-300/12 text-amber-50";
+    case "failed":
+      return "border-rose-300/25 bg-rose-300/10 text-rose-100";
+    case "disabled":
+    case "never":
+    default:
+      return "border-white/10 bg-white/6 text-slate-200";
+  }
+}
+
 export default async function SettingsPage({
   searchParams
 }: {
   readonly searchParams: Promise<Record<string, string | readonly string[] | undefined>>;
 }) {
   const params = await searchParams;
-  const [bootstrap, openRouterModels, sources] = await Promise.all([
+  const [bootstrap, openRouterModels, sources, workerStatus] = await Promise.all([
     getBootstrapState(),
     listOpenRouterModels().catch(() => []),
-    listWorkbenchSources().catch(() => [])
+    listWorkbenchSources().catch(() => []),
+    getWorkbenchWorkerStatus().catch(() => ({
+      checkedAt: new Date(0).toISOString(),
+      namespaceId: "personal",
+      workers: []
+    }))
   ]);
   const llmModels = openRouterModels.filter((model) => model.supportsChat).slice(0, 12);
   const embeddingModels = openRouterModels.filter((model) => model.supportsEmbeddings).slice(0, 16);
@@ -55,7 +98,7 @@ export default async function SettingsPage({
     <OperatorShell
       currentPath="/settings"
       title="Settings"
-      subtitle="Control embedding routing, verify the active provider path, and re-embed a namespace when the model changes."
+      subtitle="Control provider routing, worker cadence, and operational visibility so the brain stays alive instead of silently drifting."
     >
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="xl:col-span-2">
@@ -119,7 +162,7 @@ export default async function SettingsPage({
             }`}
           >
             {temporalStatus === "success"
-              ? <>Temporal summary run rebuilt <span className="font-medium text-white">{searchValue(params.temporal_layers) ?? "0"}</span> layers and upserted <span className="font-medium text-white">{searchValue(params.temporal_upserted) ?? "0"}</span> nodes.</>
+              ? <>Temporal summary run rebuilt <span className="font-medium text-white">{searchValue(params.temporal_layers) ?? "0"}</span> layers, upserted <span className="font-medium text-white">{searchValue(params.temporal_upserted) ?? "0"}</span> nodes, semantic overlays <span className="font-medium text-white">{searchValue(params.temporal_semantic) ?? "0"}</span>.</>
               : <>Temporal summary run failed. {searchValue(params.temporal_reason) ? <>reason <span className="font-medium text-white">{searchValue(params.temporal_reason)}</span></> : null}</>}
           </div>
         ) : null}
@@ -206,6 +249,48 @@ export default async function SettingsPage({
             <p>Monitored folders: <span className="font-medium text-white">{monitoredSources.length}</span></p>
             <p>Source monitor worker: <span className="font-medium text-white">{operationsSettings.sourceMonitor.enabled ? "enabled" : "disabled"}</span></p>
             <p>Set provider to <span className="font-medium text-white">none</span> if you want deliberate lexical-only retrieval.</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] xl:col-span-2">
+          <CardHeader>
+            <CardDescription>Worker health</CardDescription>
+            <CardTitle>Background operations status</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm leading-7 text-slate-300">
+              Checked <span className="font-medium text-white">{formatDateTime(workerStatus.checkedAt)}</span>. This panel shows whether source monitoring,
+              inbox propagation, and temporal summaries are actually alive, when they last ran, and what failed most recently.
+            </p>
+            <div className="grid gap-4 lg:grid-cols-3">
+              {workerStatus.workers.map((worker) => (
+                <div key={worker.workerKey} className={`rounded-[24px] border p-4 ${workerTone(worker.state)}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium text-white">{workerLabel(worker.workerKey)}</p>
+                    <span className="rounded-full border border-white/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.22em]">
+                      {worker.state}
+                    </span>
+                  </div>
+                  <div className="mt-3 space-y-2 text-sm leading-7">
+                    <p>Last run: <span className="font-medium text-white">{formatDateTime(worker.latestRun?.finishedAt ?? worker.latestRun?.startedAt)}</span></p>
+                    <p>Next due: <span className="font-medium text-white">{formatDateTime(worker.nextDueAt)}</span></p>
+                    <p>Interval: <span className="font-medium text-white">{worker.intervalSeconds ? `${worker.intervalSeconds}s` : "n/a"}</span></p>
+                    {worker.latestRun ? (
+                      <p>
+                        Last result:
+                        {" "}
+                        <span className="font-medium text-white">
+                          attempted {worker.latestRun.attemptedCount}, processed {worker.latestRun.processedCount}, failed {worker.latestRun.failedCount}
+                        </span>
+                      </p>
+                    ) : null}
+                    {worker.recentFailures[0]?.errorMessage ? (
+                      <p>Latest failure: <span className="font-medium text-white">{worker.recentFailures[0].errorMessage}</span></p>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
           </CardContent>
         </Card>
 
@@ -420,7 +505,7 @@ export default async function SettingsPage({
               <div className="lg:col-span-2 grid gap-3 rounded-[20px] border border-white/10 bg-white/5 p-4">
                 <div>
                   <p className="text-sm font-medium text-slate-100">Temporal summaries and summarizer routing</p>
-                  <p className="text-sm leading-6 text-slate-300">The active implementation is the deterministic temporal scaffold. The provider/model fields below are for the next semantic-summary layer so operators can choose local, OpenRouter, or Gemini when that pass is enabled.</p>
+                  <p className="text-sm leading-6 text-slate-300">The deterministic scaffold is the authoritative layer. When you choose <span className="font-medium text-white">deterministic + semantic LLM</span>, the provider, model, preset, and system prompt below actively control the live semantic overlay on top of those deterministic buckets.</p>
                 </div>
                 <label className="flex items-center gap-3 rounded-[18px] border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200">
                   <input type="checkbox" name="temporal_summary_enabled" defaultChecked={operationsSettings.temporalSummary.enabled} className="h-4 w-4 rounded border-white/20 bg-transparent" />

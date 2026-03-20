@@ -31,6 +31,12 @@ import {
   updateBootstrapState,
   updateMonitoredSource
 } from "../ops/source-service.js";
+import {
+  executeOutboxWorker,
+  executeSourceMonitorWorker,
+  executeTemporalSummaryWorker,
+  getRuntimeWorkerStatus
+} from "../ops/runtime-worker-service.js";
 import type { SourceType } from "../types.js";
 
 type SearchResponse = Awaited<ReturnType<typeof searchMemory>>;
@@ -822,10 +828,11 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
 
   if (request.method === "POST" && url.pathname === "/ops/sources/process") {
     const body = await readJsonBody(request);
-    const monitorRun = await processScheduledMonitoredSources({
+    const monitorRun = await executeSourceMonitorWorker({
       sourceId: optionalString(body.source_id),
       limit: optionalNumber(body.limit),
-      importAfterScan: body.scan_only === true ? false : true
+      importAfterScan: body.scan_only === true ? false : true,
+      triggerType: "manual"
     });
 
     return {
@@ -833,6 +840,16 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
       body: {
         ok: true,
         monitorRun
+      }
+    };
+  }
+
+  if (request.method === "GET" && url.pathname === "/ops/workers") {
+    return {
+      statusCode: 200,
+      body: {
+        ok: true,
+        status: await getRuntimeWorkerStatus()
       }
     };
   }
@@ -1070,9 +1087,10 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
 
   if (request.method === "POST" && url.pathname === "/ops/outbox/process") {
     const body = await readJsonBody(request);
-    const outbox = await processBrainOutboxEvents({
+    const outbox = await executeOutboxWorker({
       namespaceId: optionalString(body.namespace_id),
-      limit: optionalNumber(body.limit) ?? 25
+      limit: optionalNumber(body.limit) ?? 25,
+      triggerType: "manual"
     });
 
     return {
@@ -1096,30 +1114,24 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
     const layers = Array.isArray(body.layers)
       ? body.layers.filter((value): value is TemporalLayer => value === "day" || value === "week" || value === "month" || value === "year")
       : (["day", "week", "month", "year"] as const);
-    const summaries = [];
-    for (const layer of layers) {
-      const summary = await runTemporalSummaryScaffold(namespaceId, {
-        layer,
-        lookbackDays
-      });
-      if (strategy === "deterministic_plus_llm" && provider) {
-        await runSemanticTemporalSummaryOverlay(namespaceId, {
-          layer,
-          lookbackDays,
-          provider,
-          model: model ?? undefined,
-          presetId: presetId ?? undefined,
-          systemPrompt: systemPrompt ?? undefined
-        });
-      }
-      summaries.push(summary);
-    }
+    const result = await executeTemporalSummaryWorker({
+      namespaceId,
+      lookbackDays,
+      layers,
+      strategy,
+      provider: provider ?? undefined,
+      model: model ?? undefined,
+      presetId: presetId ?? undefined,
+      systemPrompt: systemPrompt ?? undefined,
+      triggerType: "manual"
+    });
 
     return {
       statusCode: 200,
       body: {
         ok: true,
-        summaries
+        summaries: result.summaries,
+        semanticOverlayUpdatedNodes: result.semanticOverlayUpdatedNodes
       }
     };
   }

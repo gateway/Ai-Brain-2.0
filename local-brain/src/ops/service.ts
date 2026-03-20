@@ -23,6 +23,7 @@ interface TemporalSummaryRow {
   readonly temporal_node_id: string;
   readonly layer: "session" | "day" | "week" | "month" | "year" | "profile";
   readonly summary_text: string;
+  readonly generated_by: string;
   readonly period_start: string;
   readonly period_end: string;
   readonly source_count: number;
@@ -116,6 +117,7 @@ export interface OpsTemporalSummary {
   readonly temporalNodeId: string;
   readonly layer: "session" | "day" | "week" | "month" | "year" | "profile";
   readonly summaryText: string;
+  readonly generatedBy: string;
   readonly periodStart: string;
   readonly periodEnd: string;
   readonly sourceCount: number;
@@ -1090,6 +1092,7 @@ export async function getOpsTimelineView(
           tn.id AS temporal_node_id,
           tn.layer,
           tn.summary_text,
+          tn.generated_by,
           tn.period_start::text,
           tn.period_end::text,
           tn.source_count,
@@ -1141,6 +1144,7 @@ export async function getOpsTimelineView(
       temporalNodeId: row.temporal_node_id,
       layer: row.layer,
       summaryText: row.summary_text,
+      generatedBy: row.generated_by,
       periodStart: row.period_start,
       periodEnd: row.period_end,
       sourceCount: row.source_count,

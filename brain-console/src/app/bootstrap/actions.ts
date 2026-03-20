@@ -362,7 +362,7 @@ export async function runTemporalSummariesNowAction(formData: FormData): Promise
   const operations = resolveWorkbenchOperationsSettings(bootstrap.metadata);
 
   try {
-    const summaries = await runWorkbenchTemporalSummaries({
+    const result = await runWorkbenchTemporalSummaries({
       namespaceId,
       lookbackDays: lookbackDays ?? undefined,
       strategy: operations.temporalSummary.strategy,
@@ -371,9 +371,9 @@ export async function runTemporalSummariesNowAction(formData: FormData): Promise
       presetId: operations.temporalSummary.summarizerPreset ?? undefined,
       systemPrompt: operations.temporalSummary.systemPrompt ?? undefined
     });
-    const upserted = summaries.reduce((sum, item) => sum + item.upsertedNodes, 0);
+    const upserted = result.summaries.reduce((sum, item) => sum + item.upsertedNodes, 0);
     refreshBootstrapPaths();
-    redirect(`/settings?temporal=success&temporal_layers=${summaries.length}&temporal_upserted=${upserted}`);
+    redirect(`/settings?temporal=success&temporal_layers=${result.summaries.length}&temporal_upserted=${upserted}&temporal_semantic=${result.semanticOverlayUpdatedNodes}`);
   } catch (error) {
     redirect(`/settings?temporal=failed&temporal_reason=${encodeURIComponent(error instanceof Error ? error.message : String(error))}`);
   }

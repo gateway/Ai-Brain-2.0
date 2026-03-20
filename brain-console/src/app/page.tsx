@@ -4,10 +4,34 @@ import { MetricCard } from "@/components/metric-card";
 import { SetupStepGuide } from "@/components/setup-step-guide";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getBootstrapState, getNamespaceCatalog, getRuntimeHealth, listWorkbenchSessions, listWorkbenchSources } from "@/lib/operator-workbench";
+import { getBootstrapState, getNamespaceCatalog, getRuntimeHealth, getWorkbenchWorkerStatus, listWorkbenchSessions, listWorkbenchSources } from "@/lib/operator-workbench";
+
+function formatDateTime(value?: string | null): string {
+  if (!value) {
+    return "not yet";
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function workerStateTone(value: "disabled" | "never" | "running" | "healthy" | "degraded" | "failed" | "stale"): string {
+  switch (value) {
+    case "healthy":
+      return "text-emerald-200";
+    case "running":
+      return "text-cyan-200";
+    case "degraded":
+    case "stale":
+      return "text-amber-200";
+    case "failed":
+      return "text-rose-200";
+    default:
+      return "text-slate-300";
+  }
+}
 
 export default async function WorkbenchDashboardPage() {
-  const [sessions, health, namespaces, bootstrap, sources] = await Promise.all([
+  const [sessions, health, namespaces, bootstrap, sources, workerStatus] = await Promise.all([
     listWorkbenchSessions().catch(() => []),
     getRuntimeHealth().catch(() => ({ ok: false })),
     getNamespaceCatalog(),
@@ -23,7 +47,12 @@ export default async function WorkbenchDashboardPage() {
         onboardingComplete: false
       }
     })),
-    listWorkbenchSources().catch(() => [])
+    listWorkbenchSources().catch(() => []),
+    getWorkbenchWorkerStatus().catch(() => ({
+      checkedAt: new Date(0).toISOString(),
+      namespaceId: "personal",
+      workers: []
+    }))
   ]);
   const importedSources = sources.filter((source) => source.lastImportAt).length;
 
@@ -234,6 +263,26 @@ export default async function WorkbenchDashboardPage() {
                 <p>Session CRUD is now explicit instead of hidden behind namespace-only tooling.</p>
                 <p>Text intake runs through the brain runtime, persists durable source text, and can trigger chunked LLM classification.</p>
                 <p>Review surfaces show entities, relationships, claims, and unresolved items tied back to session-linked chunks.</p>
+              </CardContent>
+            </Card>
+
+            <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
+              <CardHeader>
+                <CardDescription>Operations health</CardDescription>
+                <CardTitle className="text-[1.35rem] tracking-tight">Background workers</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4 pt-0">
+                {workerStatus.workers.map((worker) => (
+                  <div key={worker.workerKey} className="rounded-[22px] border border-white/8 bg-white/5 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-medium text-white">{worker.workerKey.replace(/_/g, " ")}</p>
+                      <p className={`text-xs uppercase tracking-[0.22em] ${workerStateTone(worker.state)}`}>{worker.state}</p>
+                    </div>
+                    <p className="mt-2 text-sm leading-7 text-slate-300">
+                      Last run {formatDateTime(worker.latestRun?.finishedAt ?? worker.latestRun?.startedAt)}. Next due {formatDateTime(worker.nextDueAt)}.
+                    </p>
+                  </div>
+                ))}
               </CardContent>
             </Card>
           </div>
