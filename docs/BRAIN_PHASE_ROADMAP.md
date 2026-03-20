@@ -11,7 +11,7 @@ Each phase follows the same loop:
 4. run the fresh replay benchmark
 5. self-heal failures before moving on
 
-NotebookLM guidance for sequencing:
+Research guidance for sequencing:
 
 - stabilize substrate before adding cognitive complexity
 - expand daily-life event handling before higher abstractions
@@ -160,7 +160,7 @@ Prove that changing truth does not pollute current state.
   - explicit capability evidence now promotes first-class `skill` entities like `Full-Stack Web Development`, `Photogrammetry`, and `Stable Diffusion`
   - explicit durable choices now promote first-class `decision` entities like `Stay in Thailand long term` and `Keep Brain 2.0 on Postgres`
   - explicit operating rules now promote first-class `constraint` entities like `Return Ground-Truth Source Document With Search Results` and `Ask For Clarification Instead Of Guessing`
-  - explicit work-style and response-style directives now promote first-class `style_spec` entities like `Keep Responses Concise`, `Ask NotebookLM First Before Changing Ontology`, `Wipe And Replay The Database After Each Slice`, and `Prefer Natural-Language Queryability`
+  - explicit work-style and response-style directives now promote first-class `style_spec` entities like `Keep Responses Concise`, `Review Ontology Changes Carefully`, `Wipe And Replay The Database After Each Slice`, and `Prefer Natural-Language Queryability`
   - natural queries still pass after the typed expansion
   - latest clean replay report:
     - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T04-21-09-332Z.json`
@@ -300,7 +300,7 @@ tenures.
 - active `works_at` edge exists for the current employer
 - historical `worked_at` rows remain queryable for prior employers
 
-### Next Ranked Slices (NotebookLM)
+### Next Ranked Slices
 
 1. additional group-membership edge cases as corpus expands
 2. deeper relationship transition queries with more time-bounded status coverage
@@ -352,7 +352,7 @@ stable.
 - evidence-backed plan/goal retrieval
 - `what routines does Steve have?`
 
-### Next Ranked Slices (NotebookLM)
+### Next Ranked Slices
 
 1. conflict-aware memory reconsolidation for contradictory beliefs and preference drift
 2. goal and plan abstraction

@@ -129,7 +129,7 @@ The settings surface now stores:
 - summarizer preset
 - optional summarizer system prompt
 
-The default semantic-summary prompt is based on the NotebookLM research pass and is designed to:
+The default semantic-summary prompt is based on the project research pass and is designed to:
 
 - stay grounded in deterministic rollups and source evidence
 - avoid inventing facts

@@ -450,9 +450,8 @@ The first stdio tool surface is:
 - `memory.save_candidate`
 - `memory.upsert_state`
 
-NotebookLM's guidance for the first assistant-facing slice was to keep
-consolidation deferred and expose a small read-first surface plus safe
-candidate/state write paths.
+The first assistant-facing slice keeps consolidation deferred and exposes a
+small read-first surface plus safe candidate/state write paths.
 
 Live producer security knobs:
 

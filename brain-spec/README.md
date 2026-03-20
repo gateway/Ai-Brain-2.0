@@ -17,11 +17,11 @@ Design stance:
 - preserve raw artifacts as source of truth
 - use PostgreSQL as the brain substrate
 - prefer local-first, but keep a hosted path available
-- use NotebookLM as a research sanity-check, not as unquestioned truth
+- use external research as a sanity-check, not as unquestioned truth
 
 Cross-check highlights:
 
-- NotebookLM strongly supports the tripartite memory model, hybrid retrieval,
+- research strongly supports the tripartite memory model, hybrid retrieval,
   provenance, temporal hierarchy, and consolidation loops
 - local Mac target should keep `pgvector`, `pgvectorscale`, `pgai`,
   Timescale hypertables, BM25, RRF, relationships, TMT, and MCP

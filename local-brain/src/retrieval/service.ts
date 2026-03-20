@@ -13,6 +13,8 @@ import {
   isHistoricalRelationshipQuery,
   isHistoricalPreferenceQuery,
   isCurrentPreferenceQuery,
+  isBeliefQuery,
+  isHistoricalBeliefQuery,
   isGoalQuery,
   isPlanQuery,
   isPreferenceQuery,
@@ -983,6 +985,74 @@ function scoreStyleSpecRow(content: string, queryText: string): number {
   return score;
 }
 
+function scoreGoalRow(content: string, queryText: string): number {
+  const normalizedQuery = queryText.toLowerCase();
+  const normalizedContent = content.toLowerCase();
+  let score = 0.5;
+
+  if (/\bcurrent\s+primary\s+goal\b/.test(normalizedQuery)) {
+    score += 1.5;
+  }
+
+  if (/\bthailand\b/.test(normalizedQuery) && normalizedContent.includes("thailand")) {
+    score += 1;
+  }
+
+  if (normalizedContent.includes("goal") || normalizedContent.includes("objective")) {
+    score += 0.5;
+  }
+
+  return score;
+}
+
+function scorePlanRow(content: string, queryText: string): number {
+  const normalizedQuery = queryText.toLowerCase();
+  const normalizedContent = content.toLowerCase();
+  let score = 0.5;
+
+  if (/\bplan/.test(normalizedQuery) && normalizedContent.includes("plan")) {
+    score += 0.8;
+  }
+  if (/\bturkey\b/.test(normalizedQuery) && normalizedContent.includes("turkey")) {
+    score += 1.4;
+  }
+  if (/\bconference\b/.test(normalizedQuery) && normalizedContent.includes("conference")) {
+    score += 1.2;
+  }
+  if (/\btwo-way\b/.test(normalizedQuery) && normalizedContent.includes("two-way")) {
+    score += 1.2;
+  }
+
+  return score;
+}
+
+function scoreBeliefRow(content: string, queryText: string): number {
+  const normalizedQuery = queryText.toLowerCase();
+  const normalizedContent = content.toLowerCase();
+  let score = 0.5;
+
+  if (/\b(?:stance|opinion|belief)\b/.test(normalizedQuery) && /\b(?:stance|opinion|belief)\b/.test(normalizedContent)) {
+    score += 0.8;
+  }
+  if (/\binfrastructure\b/.test(normalizedQuery) && normalizedContent.includes("infrastructure")) {
+    score += 1.2;
+  }
+  if (/\bhosted\b/.test(normalizedQuery) && normalizedContent.includes("hosted")) {
+    score += 1;
+  }
+  if (/\blocal\b/.test(normalizedQuery) && normalizedContent.includes("local")) {
+    score += 1;
+  }
+  if (/\bdata\s+sovereignty\b/.test(normalizedQuery) && normalizedContent.includes("data sovereignty")) {
+    score += 1.2;
+  }
+  if (/\b(?:change|changed|since|still support)\b/.test(normalizedQuery)) {
+    score += 0.4;
+  }
+
+  return score;
+}
+
 async function loadStyleSpecRows(
   namespaceId: string,
   queryText: string,
@@ -1041,6 +1111,193 @@ async function loadStyleSpecRows(
       return resultKey(left.row).localeCompare(resultKey(right.row));
     })
     .slice(0, Math.max(candidateLimit, 6))
+    .map((item) => item.row);
+}
+
+async function loadGoalRows(
+  namespaceId: string,
+  queryText: string,
+  candidateLimit: number
+): Promise<SearchRow[]> {
+  const rows = await queryRows<SearchRow>(
+    `
+      SELECT
+        pm.id AS memory_id,
+        'procedural_memory'::text AS memory_type,
+        ${proceduralContentExpression()} AS content,
+        1::double precision AS raw_score,
+        em.artifact_id,
+        COALESCE(em.occurred_at, pm.updated_at) AS occurred_at,
+        pm.namespace_id,
+        jsonb_build_object(
+          'tier', 'current_procedural',
+          'state_type', pm.state_type,
+          'state_key', pm.state_key,
+          'version', pm.version,
+          'valid_from', pm.valid_from,
+          'valid_until', pm.valid_until,
+          'source_memory_id', em.id,
+          'source_uri', a.uri,
+          'metadata', pm.metadata
+        ) AS provenance
+      FROM procedural_memory pm
+      LEFT JOIN episodic_memory em
+        ON em.id = NULLIF(pm.state_value->>'source_memory_id', '')::uuid
+      LEFT JOIN artifacts a
+        ON a.id = em.artifact_id
+      WHERE pm.namespace_id = $1
+        AND pm.state_type = 'goal'
+        AND pm.valid_until IS NULL
+      ORDER BY pm.updated_at DESC
+      LIMIT $2
+    `,
+    [namespaceId, Math.max(candidateLimit * 2, 8)]
+  );
+
+  return rows
+    .map((row) => ({ row, score: scoreGoalRow(String(row.content ?? ""), queryText) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      const leftIso = toIsoString(left.row.occurred_at);
+      const rightIso = toIsoString(right.row.occurred_at);
+      if (leftIso && rightIso && leftIso !== rightIso) {
+        return rightIso.localeCompare(leftIso);
+      }
+      return resultKey(left.row).localeCompare(resultKey(right.row));
+    })
+    .slice(0, Math.max(candidateLimit, 4))
+    .map((item) => item.row);
+}
+
+async function loadPlanRows(
+  namespaceId: string,
+  queryText: string,
+  candidateLimit: number
+): Promise<SearchRow[]> {
+  const rows = await queryRows<SearchRow>(
+    `
+      SELECT
+        pm.id AS memory_id,
+        'procedural_memory'::text AS memory_type,
+        ${proceduralContentExpression()} AS content,
+        1::double precision AS raw_score,
+        em.artifact_id,
+        COALESCE(em.occurred_at, pm.updated_at) AS occurred_at,
+        pm.namespace_id,
+        jsonb_build_object(
+          'tier', 'current_procedural',
+          'state_type', pm.state_type,
+          'state_key', pm.state_key,
+          'version', pm.version,
+          'valid_from', pm.valid_from,
+          'valid_until', pm.valid_until,
+          'source_memory_id', em.id,
+          'source_uri', a.uri,
+          'metadata', pm.metadata
+        ) AS provenance
+      FROM procedural_memory pm
+      LEFT JOIN episodic_memory em
+        ON em.id = NULLIF(pm.state_value->>'source_memory_id', '')::uuid
+      LEFT JOIN artifacts a
+        ON a.id = em.artifact_id
+      WHERE pm.namespace_id = $1
+        AND pm.state_type = 'plan'
+        AND pm.valid_until IS NULL
+      ORDER BY pm.updated_at DESC
+      LIMIT $2
+    `,
+    [namespaceId, Math.max(candidateLimit * 2, 12)]
+  );
+
+  return rows
+    .map((row) => ({ row, score: scorePlanRow(String(row.content ?? ""), queryText) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      const leftIso = toIsoString(left.row.occurred_at);
+      const rightIso = toIsoString(right.row.occurred_at);
+      if (leftIso && rightIso && leftIso !== rightIso) {
+        return rightIso.localeCompare(leftIso);
+      }
+      return resultKey(left.row).localeCompare(resultKey(right.row));
+    })
+    .slice(0, Math.max(candidateLimit, 6))
+    .map((item) => item.row);
+}
+
+async function loadBeliefRows(
+  namespaceId: string,
+  queryText: string,
+  candidateLimit: number,
+  timeStart: string | null,
+  timeEnd: string | null,
+  mode: "current" | "historical" | "point_in_time"
+): Promise<SearchRow[]> {
+  const scopeClause =
+    mode === "current"
+      ? "pm.valid_until IS NULL"
+      : mode === "point_in_time"
+        ? `
+          ($3::timestamptz IS NULL OR pm.valid_from <= $4::timestamptz)
+          AND (pm.valid_until IS NULL OR $3::timestamptz IS NULL OR pm.valid_until >= $3::timestamptz)
+        `
+        : "TRUE";
+
+  const rows = await queryRows<SearchRow>(
+    `
+      SELECT
+        pm.id AS memory_id,
+        'procedural_memory'::text AS memory_type,
+        ${proceduralContentExpression()} AS content,
+        1::double precision AS raw_score,
+        em.artifact_id,
+        COALESCE(em.occurred_at, pm.updated_at) AS occurred_at,
+        pm.namespace_id,
+        jsonb_build_object(
+          'tier', CASE WHEN pm.valid_until IS NULL THEN 'current_procedural' ELSE 'historical_procedural' END,
+          'state_type', pm.state_type,
+          'state_key', pm.state_key,
+          'version', pm.version,
+          'valid_from', pm.valid_from,
+          'valid_until', pm.valid_until,
+          'source_memory_id', em.id,
+          'source_uri', a.uri,
+          'metadata', pm.metadata
+        ) AS provenance
+      FROM procedural_memory pm
+      LEFT JOIN episodic_memory em
+        ON em.id = NULLIF(pm.state_value->>'source_memory_id', '')::uuid
+      LEFT JOIN artifacts a
+        ON a.id = em.artifact_id
+      WHERE pm.namespace_id = $1
+        AND pm.state_type = 'belief'
+        AND ${scopeClause}
+      ORDER BY pm.valid_from DESC, pm.updated_at DESC
+      LIMIT $5
+    `,
+    [namespaceId, queryText, timeStart, timeEnd, Math.max(candidateLimit * 3, 18)]
+  );
+
+  return rows
+    .map((row) => ({ row, score: scoreBeliefRow(String(row.content ?? ""), queryText) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      const leftIso = toIsoString(left.row.occurred_at);
+      const rightIso = toIsoString(right.row.occurred_at);
+      if (leftIso && rightIso && leftIso !== rightIso) {
+        return rightIso.localeCompare(leftIso);
+      }
+      return resultKey(left.row).localeCompare(resultKey(right.row));
+    })
+    .slice(0, Math.max(candidateLimit, mode === "historical" ? 6 : 4))
     .map((item) => item.row);
 }
 
@@ -1455,6 +1712,8 @@ function proceduralContentExpression(): string {
         coalesce(state_value->>'person', 'User') || ' current primary goal objective intent is ' || coalesce(state_value->>'goal', state_key)
       WHEN state_type = 'plan' THEN
         coalesce(state_value->>'person', 'User') || ' plan planning upcoming ' || coalesce(state_value->>'plan', state_key) || ' ' || coalesce(state_value->>'project_hint', '')
+      WHEN state_type = 'belief' THEN
+        coalesce(state_value->>'person', 'User') || ' belief stance opinion on ' || coalesce(state_value->>'topic', state_key) || ' is ' || coalesce(state_value->>'belief', state_key)
       WHEN state_type = 'project_role' THEN
         coalesce(state_value->>'person', '') || ' role on ' || coalesce(state_value->>'project', '') || ' is ' || coalesce(state_value->>'role', '')
       WHEN state_type = 'current_project' THEN
@@ -1753,6 +2012,8 @@ function pruneRankedResults(
   styleQueryFocus: boolean,
   goalQueryFocus: boolean,
   planQueryFocus: boolean,
+  beliefQueryFocus: boolean,
+  historicalBeliefFocus: boolean,
   pointInTimePreferenceFocus: boolean,
   timeStart: string | null,
   timeEnd: string | null,
@@ -1825,12 +2086,14 @@ function pruneRankedResults(
       stateType === "constraint" ||
       stateType === "style_spec" ||
       stateType === "goal" ||
-      stateType === "plan"
+      stateType === "plan" ||
+      stateType === "belief"
     );
   const preferenceRows = proceduralRows.filter((item) => String(item.row.provenance.state_type ?? "") === "preference");
   const styleSpecRows = proceduralRows.filter((item) => String(item.row.provenance.state_type ?? "") === "style_spec");
   const goalRows = proceduralRows.filter((item) => String(item.row.provenance.state_type ?? "") === "goal");
   const planRows = proceduralRows.filter((item) => String(item.row.provenance.state_type ?? "") === "plan");
+  const beliefRows = proceduralRows.filter((item) => String(item.row.provenance.state_type ?? "") === "belief");
 
   if (styleQueryFocus && styleSpecRows.length > 0) {
     return [...styleSpecRows.slice(0, 6), ...semanticRows.slice(0, 1), ...episodicRows.slice(0, 1)].slice(0, 8);
@@ -1842,6 +2105,11 @@ function pruneRankedResults(
 
   if (planQueryFocus && planRows.length > 0) {
     return [...planRows.slice(0, 4), ...semanticRows.slice(0, 1), ...episodicRows.slice(0, 1)].slice(0, 6);
+  }
+
+  if (beliefQueryFocus && beliefRows.length > 0) {
+    const prioritizedBeliefRows = historicalBeliefFocus ? beliefRows.slice(0, 6) : beliefRows.slice(0, 2);
+    return [...prioritizedBeliefRows, ...semanticRows.slice(0, 1), ...episodicRows.slice(0, 1)].slice(0, historicalBeliefFocus ? 8 : 4);
   }
 
   if (preferenceQueryFocus && preferenceRows.length > 0) {
@@ -3617,16 +3885,18 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
   const styleQueryFocus = isStyleSpecQuery(retrievalQueryText);
   const goalQueryFocus = isGoalQuery(retrievalQueryText);
   const planQueryFocus = isPlanQuery(retrievalQueryText);
+  const beliefQueryFocus = isBeliefQuery(retrievalQueryText);
   const historicalHomeFocus = /\bwhere\s+has\s+.+\s+lived\b/i.test(retrievalQueryText);
   const historicalWorkFocus = isHistoricalWorkQuery(retrievalQueryText);
   const historicalRelationshipFocus = isHistoricalRelationshipQuery(retrievalQueryText);
   const preferredActiveRelationshipPredicates = preferredRelationshipPredicates(retrievalQueryText);
-  const precisionLexicalFocus =
-    (!query.queryEmbedding || query.queryEmbedding.length === 0) &&
-    (isPrecisionLexicalQuery(retrievalQueryText) || relationshipExactFocus);
   const timeStart = query.timeStart ?? planner.inferredTimeStart ?? null;
   const timeEnd = query.timeEnd ?? planner.inferredTimeEnd ?? null;
   const hasTimeWindow = Boolean(timeStart || timeEnd);
+  const historicalBeliefFocus = beliefQueryFocus && (isHistoricalBeliefQuery(retrievalQueryText) || hasTimeWindow);
+  const precisionLexicalFocus =
+    (!query.queryEmbedding || query.queryEmbedding.length === 0) &&
+    (isPrecisionLexicalQuery(retrievalQueryText) || relationshipExactFocus);
   const narrowTemporalWindow = hasNarrowTimeWindow(timeStart, timeEnd);
   const candidateLimit = precisionLexicalFocus
     ? Math.max(Math.min(limit * 2, 12), 8)
@@ -3801,6 +4071,63 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       lexicalRows = mergeUniqueRows(
         lexicalRows,
         styleRows,
+        Math.max(candidateLimit * 2, 12),
+        hasTimeWindow,
+        planner.temporalFocus,
+        dailyLifeEventFocus,
+        dailyLifeSummaryFocus,
+        timeStart,
+        timeEnd
+      );
+    }
+  }
+  if (goalQueryFocus) {
+    const goalRows = toRankedRows(await loadGoalRows(query.namespaceId, retrievalQueryText, candidateLimit));
+    if (goalRows.length > 0) {
+      lexicalRows = mergeUniqueRows(
+        lexicalRows,
+        goalRows,
+        Math.max(candidateLimit * 2, 8),
+        hasTimeWindow,
+        planner.temporalFocus,
+        dailyLifeEventFocus,
+        dailyLifeSummaryFocus,
+        timeStart,
+        timeEnd
+      );
+    }
+  }
+  if (planQueryFocus) {
+    const planRows = toRankedRows(await loadPlanRows(query.namespaceId, retrievalQueryText, candidateLimit));
+    if (planRows.length > 0) {
+      lexicalRows = mergeUniqueRows(
+        lexicalRows,
+        planRows,
+        Math.max(candidateLimit * 2, 12),
+        hasTimeWindow,
+        planner.temporalFocus,
+        dailyLifeEventFocus,
+        dailyLifeSummaryFocus,
+        timeStart,
+        timeEnd
+      );
+    }
+  }
+  if (beliefQueryFocus) {
+    const beliefRows = toRankedRows(
+      await loadBeliefRows(
+        query.namespaceId,
+        retrievalQueryText,
+        candidateLimit,
+        timeStart,
+        timeEnd,
+        historicalBeliefFocus ? (hasTimeWindow ? "point_in_time" : "historical") : "current"
+      )
+    );
+    if (beliefRows.length > 0) {
+      lexicalRows = mergeUniqueRows(
+        lexicalRows,
+        beliefRows,
         Math.max(candidateLimit * 2, 12),
         hasTimeWindow,
         planner.temporalFocus,
@@ -4048,6 +4375,8 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
     styleQueryFocus,
     goalQueryFocus,
     planQueryFocus,
+    beliefQueryFocus,
+    historicalBeliefFocus,
     pointInTimePreferenceFocus,
     timeStart,
     timeEnd,

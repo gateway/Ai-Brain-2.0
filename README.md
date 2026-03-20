@@ -114,9 +114,7 @@ The live app path is currently:
 
 Python is currently used as an isolated helper/sidecar environment, not as the main app runtime:
 
-- [/.venv-brain](/Users/evilone/Documents/Development/AI-Brain/ai-brain/.venv-brain)
-  - repo-local helper Python environment
-  - intended for optional helper tooling like `pgai`, OCR/document processing, and related sidecar experiments
+ - repo-local Python helper environments can be used for optional tooling like `pgai`, OCR/document processing, and related sidecar experiments
 Release policy:
 
 - no dependency on system Python packages
@@ -224,9 +222,7 @@ Latest verified run log:
 - [brain-console](brain-console)
   Local Next.js + Tailwind + shadcn operator console for query/debug/benchmark visibility.
 - [brain-spec/local](brain-spec/local)
-  The detailed local-first architecture, run logs, self-critique passes, and NotebookLM-grounded design docs.
-- `artifacts/the-digital-brain`
-  Local-only mirrored NotebookLM media and exports. Excluded from Git because of size.
+  The detailed local-first architecture, run logs, and engineering deep dives.
 - [notes](notes)
   Research notes and earlier synthesis passes.
 
