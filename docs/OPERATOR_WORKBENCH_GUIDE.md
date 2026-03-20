@@ -159,6 +159,7 @@ Use it to:
 - run scan/import manually
 - pause or resume monitoring
 - inspect file-level import state for a selected source
+- inspect file deltas, latest import outcomes, and targeted retry buttons for a selected source
 - spot overdue scans and pending imports before data quietly drifts
 
 This is the page to use when you want operational visibility, not the onboarding import step.
@@ -261,8 +262,10 @@ Use it to:
 - confirm the brain runtime is reachable
 - confirm the local model runtime is reachable
 - see OpenRouter catalog visibility
+- see provider catalog latency and last verified provider checks
 - inspect worker health and recent failures
 - drill into multiple recent failures per worker with retry guidance
+- see the last successful model-backed derivation and temporal summary runs
 - manually trigger source monitor, inbox propagation, and temporal summaries
 
 This is where the operator checks whether the machine part of the brain is actually awake.
@@ -290,6 +293,8 @@ Use it to:
 - inspect the current self anchor
 - read the current answer for home, projects, people, routines, beliefs, and preferences
 - check that evidence is attached to those answers
+- drill into why the current answer is believed
+- inspect older or superseded state when the substrate can surface it
 - spot whether a bad answer is really a clarification or source problem
 
 This page is meant to answer “what does the brain think is true right now?” without making the operator dig through graph, query, and review pages first.

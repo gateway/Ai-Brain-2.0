@@ -122,6 +122,12 @@ The Dashboard now treats worker health as a first-class operator signal instead 
 - retry guidance
 - next due timing
 
+The runtime page now also surfaces:
+
+- provider catalog latency for local runtime and OpenRouter discovery
+- last verified provider checks
+- last successful model-backed derivation and temporal summary runs
+
 Each run records:
 
 - worker key
@@ -152,6 +158,19 @@ This lets the operator UI distinguish between things like a bad provider key, a 
 
 Settings now also surfaces a short recent failure history per worker instead of only the latest error.
 
+## Source details and retry flow
+
+The dedicated Sources page now includes a real selected-source details table.
+
+That table shows:
+
+- file-level delta state such as `new`, `changed`, `deleted`, `imported`, and `error`
+- latest import outcome per file
+- modified/imported timestamps
+- targeted retry buttons for pending or failed files
+
+The targeted retry path uses the existing source import endpoint with `file_ids`, so retry still flows through the normal evidence ingestion path instead of a side-channel mutation.
+
 ## Combined operations worker
 
 The repo now has a combined runtime worker that can run these loops together:
@@ -172,6 +191,22 @@ Or alongside the full stack:
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
 BRAIN_RUNTIME_OPS_ENABLED=true npm run dev
 ```
+
+## Maintenance mode and advisory locking
+
+Replay and scale benchmarks now acquire a global advisory lock before they reset or rebuild the database.
+
+The runtime exposes that state at:
+
+- `GET /ops/maintenance`
+
+While the advisory lock is active:
+
+- benchmark work keeps exclusive control of destructive replay/reset steps
+- mutating runtime routes return `503`
+- read routes remain available so operators can still inspect the system
+
+This prevents the live runtime and benchmark jobs from deadlocking each other during replay runs.
 
 ## Session timeline surface
 

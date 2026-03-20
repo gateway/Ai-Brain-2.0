@@ -105,6 +105,9 @@ function refreshBootstrapPaths(): void {
   revalidatePath("/bootstrap/verify");
   revalidatePath("/models");
   revalidatePath("/settings");
+  revalidatePath("/sources");
+  revalidatePath("/runtime");
+  revalidatePath("/knowledge");
 }
 
 export async function saveBootstrapPurposeAction(formData: FormData): Promise<void> {
@@ -399,6 +402,7 @@ export async function saveSystemOperationsSettingsAction(formData: FormData): Pr
     metadata: {
       ...bootstrap.metadata,
       operationsSettings: {
+        derivation: existing.derivation,
         sourceMonitor: {
           enabled: readBoolean(formData, "source_monitor_enabled"),
           workerIntervalSeconds: readNumberValue(formData, "source_monitor_interval_seconds") ?? existing.sourceMonitor.workerIntervalSeconds,
@@ -764,6 +768,18 @@ export async function importSourceAction(formData: FormData): Promise<void> {
       latestImportedSourceId: sourceId
     }
   });
+  refreshBootstrapPaths();
+  redirect(`${nextUrlBase}?source=${sourceId}`);
+}
+
+export async function retrySourceFileAction(formData: FormData): Promise<void> {
+  const sourceId = readString(formData, "source_id");
+  const fileId = readString(formData, "file_id");
+  const nextUrlBase = readString(formData, "next_url") || "/sources";
+  if (!sourceId || !fileId) {
+    redirect(`${nextUrlBase}?error=missing-source-file`);
+  }
+  await importWorkbenchSource(sourceId, "manual", [fileId]);
   refreshBootstrapPaths();
   redirect(`${nextUrlBase}?source=${sourceId}`);
 }

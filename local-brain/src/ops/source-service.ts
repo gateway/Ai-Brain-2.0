@@ -1386,7 +1386,8 @@ export async function scanMonitoredSource(sourceId: string): Promise<OpsMonitore
 
 export async function importMonitoredSource(
   sourceId: string,
-  triggerType: ImportTriggerType = "manual"
+  triggerType: ImportTriggerType = "manual",
+  fileIds?: readonly string[]
 ): Promise<{
   readonly source: OpsMonitoredSourceSummary;
   readonly importRun: OpsSourceImportRun;
@@ -1394,6 +1395,8 @@ export async function importMonitoredSource(
 }> {
   await scanMonitoredSource(sourceId);
   const sourceRow = await getSourceRow(sourceId);
+  const normalizedFileIds =
+    fileIds?.filter((value): value is string => typeof value === "string" && value.trim().length > 0) ?? [];
   const pendingRows = await queryRows<MonitoredSourceFileRow>(
     `
       SELECT
@@ -1422,9 +1425,10 @@ export async function importMonitoredSource(
         AND exists_now = true
         AND content_hash IS NOT NULL
         AND (last_imported_hash IS DISTINCT FROM content_hash OR last_imported_hash IS NULL)
+        AND ($2::uuid[] IS NULL OR id = ANY($2::uuid[]))
       ORDER BY relative_path ASC
     `,
-    [sourceId]
+    [sourceId, normalizedFileIds.length > 0 ? normalizedFileIds : null]
   );
 
   const importRunRows = await queryRows<ImportRunRow>(
@@ -1567,7 +1571,8 @@ export async function importMonitoredSource(
         JSON.stringify(importedArtifactIds),
         JSON.stringify({
           imported_artifact_ids: importedArtifactIds,
-          source_label: sourceRow.label
+          source_label: sourceRow.label,
+          targeted_file_ids: normalizedFileIds
         })
       ]
     )

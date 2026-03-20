@@ -3,6 +3,7 @@ import {
   deleteSourceAction,
   importSourceAction,
   processSourceMonitorNowAction,
+  retrySourceFileAction,
   saveSourceAction,
   scanSourceAction,
   toggleSourceMonitoringAction
@@ -17,6 +18,7 @@ import {
   getBootstrapState,
   getWorkbenchSourcePreview,
   type WorkbenchMonitoredSource,
+  type WorkbenchMonitoredSourceFile,
   type WorkbenchWorkerHealth,
   getWorkbenchWorkerStatus,
   listWorkbenchSourceFiles,
@@ -54,6 +56,99 @@ function scheduleIntervalMs(schedule: string): number {
     default:
       return 60 * 60 * 1000;
   }
+}
+
+function formatBytes(value?: number): string {
+  if (!value || value <= 0) {
+    return "0 B";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function fileDeltaLabel(status: string): string {
+  switch (status) {
+    case "new":
+      return "new file";
+    case "changed":
+      return "changed";
+    case "deleted":
+      return "deleted";
+    case "imported":
+      return "imported";
+    case "error":
+      return "failed";
+    default:
+      return status;
+  }
+}
+
+function fileDeltaTone(status: string): string {
+  switch (status) {
+    case "new":
+      return "border-cyan-300/20 bg-cyan-300/10 text-cyan-100";
+    case "changed":
+      return "border-amber-300/20 bg-amber-300/10 text-amber-100";
+    case "deleted":
+      return "border-white/10 bg-white/5 text-slate-200";
+    case "imported":
+      return "border-emerald-300/20 bg-emerald-300/10 text-emerald-100";
+    case "error":
+      return "border-rose-300/20 bg-rose-300/10 text-rose-100";
+    default:
+      return "border-white/10 bg-white/5 text-slate-100";
+  }
+}
+
+function importOutcome(file: WorkbenchMonitoredSourceFile): {
+  readonly label: string;
+  readonly tone: string;
+  readonly detail: string;
+  readonly retryable: boolean;
+} {
+  if (file.lastStatus === "error") {
+    return {
+      label: "last import failed",
+      tone: "border-rose-300/20 bg-rose-300/10 text-rose-100",
+      detail: file.errorMessage ?? "The latest import attempt failed for this file.",
+      retryable: file.existsNow
+    };
+  }
+  if (file.lastStatus === "imported") {
+    return {
+      label: "imported",
+      tone: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
+      detail: `Imported ${formatDateTime(file.lastImportedAt)}.`,
+      retryable: false
+    };
+  }
+  if (file.lastStatus === "deleted") {
+    return {
+      label: "missing on disk",
+      tone: "border-white/10 bg-white/5 text-slate-100",
+      detail: "The file disappeared after the last scan. Re-scan the source to settle the lane.",
+      retryable: false
+    };
+  }
+  if (file.lastStatus === "new" || file.lastStatus === "changed") {
+    return {
+      label: "waiting to import",
+      tone: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+      detail: file.lastStatus === "new" ? "New evidence found and waiting for import." : "Content changed and needs a fresh import.",
+      retryable: file.existsNow
+    };
+  }
+  return {
+    label: "up to date",
+    tone: "border-white/10 bg-white/5 text-slate-100",
+    detail: "No pending import work for this file right now.",
+    retryable: false
+  };
 }
 
 function sourceHealth(source: WorkbenchMonitoredSource, worker?: WorkbenchWorkerHealth): {
@@ -374,20 +469,77 @@ export default async function SourcesPage({
                         <p>New {selectedPreview.latestScan.newFiles}, changed {selectedPreview.latestScan.changedFiles}, deleted {selectedPreview.latestScan.deletedFiles}, errored {selectedPreview.latestScan.erroredFiles}.</p>
                       </div>
                     ) : null}
-                    <div className="space-y-3">
-                      {selectedFiles.slice(0, 12).map((file) => (
-                        <div key={file.id} className="rounded-[18px] border border-white/8 bg-black/15 p-3 text-sm leading-6 text-slate-300">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="font-medium text-white">{file.relativePath}</p>
-                            <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-100">
-                              {file.lastStatus}
-                            </Badge>
-                          </div>
-                          <p className="mt-1 text-xs text-slate-400">Last imported {formatDateTime(file.lastImportedAt)} · modified {formatDateTime(file.modifiedAt)}</p>
-                          {file.errorMessage ? <p className="mt-2 text-rose-100">{file.errorMessage}</p> : null}
+                    {selectedPreview?.latestImport ? (
+                      <div className="rounded-[18px] border border-white/8 bg-white/5 p-4 text-sm leading-7 text-slate-300">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-medium text-white">Latest import outcome</p>
+                          <Badge variant="outline" className={selectedPreview.latestImport.status === "failed" ? "border-rose-300/20 bg-rose-300/10 text-rose-100" : selectedPreview.latestImport.status === "partial" ? "border-amber-300/20 bg-amber-300/10 text-amber-100" : "border-emerald-300/20 bg-emerald-300/10 text-emerald-100"}>
+                            {selectedPreview.latestImport.status}
+                          </Badge>
                         </div>
-                      ))}
+                        <p className="mt-2">Attempted {selectedPreview.latestImport.filesAttempted}, imported {selectedPreview.latestImport.filesImported}, skipped {selectedPreview.latestImport.filesSkipped}, failed {selectedPreview.latestImport.filesFailed}.</p>
+                        <p>Finished {formatDateTime(selectedPreview.latestImport.finishedAt ?? selectedPreview.latestImport.startedAt)} via {selectedPreview.latestImport.triggerType} trigger.</p>
+                      </div>
+                    ) : null}
+                    <div className="overflow-hidden rounded-[24px] border border-white/8 bg-black/15">
+                      <div className="overflow-x-auto">
+                        <table className="min-w-full text-left text-sm">
+                          <thead className="bg-white/5 text-xs uppercase tracking-[0.18em] text-slate-400">
+                            <tr>
+                              <th className="px-4 py-3 font-medium">File</th>
+                              <th className="px-4 py-3 font-medium">Delta</th>
+                              <th className="px-4 py-3 font-medium">Latest outcome</th>
+                              <th className="px-4 py-3 font-medium">Modified</th>
+                              <th className="px-4 py-3 font-medium text-right">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {selectedFiles.slice(0, 24).map((file) => {
+                              const outcome = importOutcome(file);
+                              return (
+                                <tr key={file.id} className="border-t border-white/6 align-top">
+                                  <td className="px-4 py-4">
+                                    <p className="font-medium text-white">{file.relativePath}</p>
+                                    <p className="mt-1 text-xs text-slate-400">{file.extension || "file"} · {formatBytes(file.sizeBytes)} · last seen {formatDateTime(file.lastSeenAt)}</p>
+                                  </td>
+                                  <td className="px-4 py-4">
+                                    <Badge variant="outline" className={fileDeltaTone(file.lastStatus)}>
+                                      {fileDeltaLabel(file.lastStatus)}
+                                    </Badge>
+                                  </td>
+                                  <td className="px-4 py-4">
+                                    <Badge variant="outline" className={outcome.tone}>
+                                      {outcome.label}
+                                    </Badge>
+                                    <p className="mt-2 max-w-md text-xs leading-6 text-slate-300">{outcome.detail}</p>
+                                    {file.artifactId ? <p className="mt-1 text-[11px] leading-5 text-slate-500">artifact {file.artifactId}</p> : null}
+                                  </td>
+                                  <td className="px-4 py-4 text-xs leading-6 text-slate-400">
+                                    <p>{formatDateTime(file.modifiedAt)}</p>
+                                    <p>Imported {formatDateTime(file.lastImportedAt)}</p>
+                                  </td>
+                                  <td className="px-4 py-4 text-right">
+                                    {outcome.retryable ? (
+                                      <form action={retrySourceFileAction} className="inline-flex">
+                                        <input type="hidden" name="source_id" value={selectedSource.id} />
+                                        <input type="hidden" name="file_id" value={file.id} />
+                                        <input type="hidden" name="next_url" value="/sources" />
+                                        <PendingSubmitButton idleLabel="Retry" pendingLabel="Retrying..." variant="outline" className="rounded-2xl border border-white/10 bg-white/5 text-white hover:bg-white/10" />
+                                      </form>
+                                    ) : (
+                                      <span className="text-xs text-slate-500">no action</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
+                    {selectedFiles.length > 24 ? (
+                      <p className="text-xs leading-6 text-slate-500">Showing the first 24 files in this lane. The watcher still knows about {selectedFiles.length - 24} more.</p>
+                    ) : null}
                   </>
                 )}
               </CardContent>

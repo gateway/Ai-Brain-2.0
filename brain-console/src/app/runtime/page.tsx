@@ -13,6 +13,7 @@ import {
   getBootstrapState,
   getRuntimeHealth,
   getWorkbenchWorkerStatus,
+  type WorkbenchWorkerHealth,
   listOpenRouterModels,
   resolveBootstrapEmbeddingSettings,
   resolveWorkbenchOperationsSettings
@@ -56,12 +57,35 @@ function workerTone(value: "disabled" | "never" | "running" | "healthy" | "degra
   }
 }
 
+function latestSuccessfulRun(worker?: WorkbenchWorkerHealth) {
+  if (!worker?.latestRun) {
+    return undefined;
+  }
+  return worker.latestRun.status === "succeeded" || worker.latestRun.status === "partial" ? worker.latestRun : undefined;
+}
+
+async function measureAsync<T>(loader: () => Promise<T>): Promise<{ readonly value: T; readonly latencyMs?: number }> {
+  const startedAt = new Date().getTime();
+  try {
+    const value = await loader();
+    return {
+      value,
+      latencyMs: new Date().getTime() - startedAt
+    };
+  } catch {
+    return {
+      value: null as T,
+      latencyMs: undefined
+    };
+  }
+}
+
 export default async function RuntimePage() {
   await requireSetupComplete("/runtime");
-  const [health, runtime, openRouterModels, workerStatus, bootstrap] = await Promise.all([
+  const [health, runtimeResult, openRouterResult, workerStatus, bootstrap] = await Promise.all([
     getRuntimeHealth().catch(() => ({ ok: false })),
-    getModelRuntimeOverview().catch(() => null),
-    listOpenRouterModels().catch(() => []),
+    measureAsync(() => getModelRuntimeOverview()),
+    measureAsync(() => listOpenRouterModels()),
     getWorkbenchWorkerStatus().catch(() => ({
       checkedAt: new Date(0).toISOString(),
       namespaceId: "personal",
@@ -70,10 +94,17 @@ export default async function RuntimePage() {
     getBootstrapState()
   ]);
 
+  const runtime = runtimeResult.value;
+  const openRouterModels = openRouterResult.value ?? [];
   const embeddings = resolveBootstrapEmbeddingSettings(bootstrap.metadata);
   const operations = resolveWorkbenchOperationsSettings(bootstrap.metadata);
   const openRouterChatCount = openRouterModels.filter((model) => model.supportsChat).length;
   const openRouterEmbeddingCount = openRouterModels.filter((model) => model.supportsEmbeddings).length;
+  const lastEmbeddingTest = bootstrap.metadata.lastEmbeddingTest;
+  const derivationWorker = workerStatus.workers.find((worker) => worker.workerKey === "derivation");
+  const temporalWorker = workerStatus.workers.find((worker) => worker.workerKey === "temporal_summary");
+  const derivationSuccess = latestSuccessfulRun(derivationWorker);
+  const temporalSuccess = latestSuccessfulRun(temporalWorker);
 
   return (
     <OperatorShell
@@ -141,6 +172,44 @@ export default async function RuntimePage() {
                   </Link>
                   .
                 </p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+              <CardHeader>
+                <CardDescription>Provider telemetry</CardDescription>
+                <CardTitle>Latency and last verified success</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-3">
+                <div className="rounded-[18px] border border-white/8 bg-white/5 p-4 text-sm leading-7 text-slate-300">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-medium text-white">Local runtime</p>
+                    <Badge variant="outline" className={runtime?.reachable ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-100" : "border-white/10 bg-white/5 text-slate-100"}>
+                      {runtime?.reachable ? "reachable" : "not reachable"}
+                    </Badge>
+                  </div>
+                  <p className="mt-2">Catalog latency: <span className="font-medium text-white">{runtimeResult.latencyMs ? `${runtimeResult.latencyMs}ms` : "not measured"}</span></p>
+                  <p>Last verified embedding check: <span className="font-medium text-white">{lastEmbeddingTest?.provider === "external" && lastEmbeddingTest.success ? formatDateTime(lastEmbeddingTest.testedAt) : "not yet"}</span></p>
+                  <p>Verified model: <span className="font-medium text-white">{lastEmbeddingTest?.provider === "external" && lastEmbeddingTest.success ? (lastEmbeddingTest.model ?? "provider default") : (runtime?.families.find((family) => family.family === "llm")?.activeModel ?? "unknown")}</span></p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/5 p-4 text-sm leading-7 text-slate-300">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-medium text-white">OpenRouter</p>
+                    <Badge variant="outline" className={openRouterModels.length > 0 ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-100" : "border-white/10 bg-white/5 text-slate-100"}>
+                      {openRouterModels.length > 0 ? "reachable" : "not configured"}
+                    </Badge>
+                  </div>
+                  <p className="mt-2">Catalog latency: <span className="font-medium text-white">{openRouterResult.latencyMs ? `${openRouterResult.latencyMs}ms` : "not measured"}</span></p>
+                  <p>Last verified embedding check: <span className="font-medium text-white">{lastEmbeddingTest?.provider === "openrouter" && lastEmbeddingTest.success ? formatDateTime(lastEmbeddingTest.testedAt) : "not yet"}</span></p>
+                  <p>Verified model: <span className="font-medium text-white">{lastEmbeddingTest?.provider === "openrouter" && lastEmbeddingTest.success ? (lastEmbeddingTest.model ?? "provider default") : "not yet"}</span></p>
+                </div>
+                <div className="rounded-[18px] border border-white/8 bg-white/5 p-4 text-sm leading-7 text-slate-300">
+                  <p className="font-medium text-white">Last model-backed jobs</p>
+                  <p className="mt-2">Temporal summary success: <span className="font-medium text-white">{temporalSuccess ? formatDateTime(temporalSuccess.finishedAt ?? temporalSuccess.startedAt) : "not yet"}</span></p>
+                  <p>Temporal route: <span className="font-medium text-white">{typeof temporalSuccess?.summary.provider === "string" ? temporalSuccess.summary.provider : operations.temporalSummary.summarizerProvider}</span> / <span className="font-medium text-white">{typeof temporalSuccess?.summary.model === "string" && temporalSuccess.summary.model ? temporalSuccess.summary.model : (operations.temporalSummary.summarizerModel ?? "provider default")}</span></p>
+                  <p className="mt-2">Derivation success: <span className="font-medium text-white">{derivationSuccess ? formatDateTime(derivationSuccess.finishedAt ?? derivationSuccess.startedAt) : "not yet"}</span></p>
+                  <p>Derivation route: <span className="font-medium text-white">{typeof derivationSuccess?.summary.provider === "string" ? derivationSuccess.summary.provider : (operations.derivation.provider ?? "not set")}</span> / <span className="font-medium text-white">{typeof derivationSuccess?.summary.model === "string" && derivationSuccess.summary.model ? derivationSuccess.summary.model : (operations.derivation.model ?? "provider default")}</span></p>
+                </div>
               </CardContent>
             </Card>
 

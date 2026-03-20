@@ -14,6 +14,10 @@ All responses are JSON unless noted otherwise.
 
 Returns basic runtime health.
 
+### `GET /ops/maintenance`
+
+Returns whether the runtime is currently in maintenance mode because a replay or scale benchmark is holding the advisory lock.
+
 ## Sessions
 
 ### `POST /ops/sessions`
@@ -201,6 +205,13 @@ List discovered files for a monitored source.
 ### `POST /ops/sources/:sourceId/import`
 
 Import a monitored source through the normal ingestion path.
+
+Optional body fields:
+
+- `trigger_type`
+- `file_ids`
+
+When `file_ids` is supplied, the runtime retries import only for those discovered source files instead of re-importing the full pending lane.
 
 ### `POST /ops/sources/process`
 

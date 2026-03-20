@@ -44,10 +44,34 @@ async function loadQueryCard(namespaceId: string, query: string, fallback: strin
   }
 
   return {
+    query,
     answer: formatAnswer(response, fallback),
     evidence: compactEvidence(response),
     retrievalMode: typeof response.meta.retrievalMode === "string" ? response.meta.retrievalMode : "unknown",
     fallbackReason: typeof response.meta.fallbackReason === "string" ? response.meta.fallbackReason : undefined
+  };
+}
+
+async function loadKnowledgeCard(
+  namespaceId: string,
+  input: {
+    readonly query: string;
+    readonly fallback: string;
+    readonly historyQuery?: string;
+    readonly historyFallback?: string;
+  }
+) {
+  const [current, historical] = await Promise.all([
+    loadQueryCard(namespaceId, input.query, input.fallback),
+    input.historyQuery
+      ? loadQueryCard(namespaceId, input.historyQuery, input.historyFallback ?? "No superseded value has been surfaced yet.")
+      : Promise.resolve(null)
+  ]);
+
+  return {
+    ...current,
+    historyQuery: input.historyQuery,
+    historical
   };
 }
 
@@ -61,12 +85,42 @@ export default async function KnowledgePage() {
     getWorkbenchSelfProfile(namespaceId).catch(() => null),
     getWorkbenchClarifications(namespaceId, 10).catch(() => null),
     getOpsOverview().catch(() => null),
-    loadQueryCard(namespaceId, "where do I live?", "The brain has not verified your current home yet."),
-    loadQueryCard(namespaceId, "what am I working on?", "No active project answer yet."),
-    loadQueryCard(namespaceId, "who are my friends?", "Important people are not grounded clearly yet."),
-    loadQueryCard(namespaceId, "what routines do I have?", "No stable routine answer yet."),
-    loadQueryCard(namespaceId, "what is my current stance on infrastructure?", "No active belief summary yet."),
-    loadQueryCard(namespaceId, "what do I like?", "Preferences are still too foggy.")
+    loadKnowledgeCard(namespaceId, {
+      query: "where do I live?",
+      fallback: "The brain has not verified your current home yet.",
+      historyQuery: "where did I live before now?",
+      historyFallback: "No older home signal has been grounded yet."
+    }),
+    loadKnowledgeCard(namespaceId, {
+      query: "what am I working on?",
+      fallback: "No active project answer yet.",
+      historyQuery: "what projects was I working on before this?",
+      historyFallback: "No older project state surfaced yet."
+    }),
+    loadKnowledgeCard(namespaceId, {
+      query: "who are my friends?",
+      fallback: "Important people are not grounded clearly yet.",
+      historyQuery: "who used to be close to me or no longer shows up?",
+      historyFallback: "No older people shift surfaced yet."
+    }),
+    loadKnowledgeCard(namespaceId, {
+      query: "what routines do I have?",
+      fallback: "No stable routine answer yet.",
+      historyQuery: "what routines changed over time?",
+      historyFallback: "No routine change signal surfaced yet."
+    }),
+    loadKnowledgeCard(namespaceId, {
+      query: "what is my current stance on infrastructure?",
+      fallback: "No active belief summary yet.",
+      historyQuery: "what was my previous stance on infrastructure?",
+      historyFallback: "No older infrastructure stance surfaced yet."
+    }),
+    loadKnowledgeCard(namespaceId, {
+      query: "what do I like?",
+      fallback: "Preferences are still too foggy.",
+      historyQuery: "what preferences changed over time?",
+      historyFallback: "No superseded preference surfaced yet."
+    })
   ]);
 
   const topClarifications = clarifications?.items.slice(0, 5) ?? [];
@@ -117,7 +171,7 @@ export default async function KnowledgePage() {
 
         <div className="grid gap-4 xl:grid-cols-2">
           {[
-            { title: "Self identity", description: "Who this brain belongs to", answer: selfProfile ? `${selfProfile.canonicalName}${selfProfile.aliases.length ? ` · aliases: ${selfProfile.aliases.join(", ")}` : ""}` : "No self profile has been saved yet.", evidence: [] as const, retrievalMode: "profile" },
+            { title: "Self identity", description: "Who this brain belongs to", answer: selfProfile ? `${selfProfile.canonicalName}${selfProfile.aliases.length ? ` · aliases: ${selfProfile.aliases.join(", ")}` : ""}` : "No self profile has been saved yet.", evidence: [] as const, retrievalMode: "profile", query: "who am i?", historyQuery: undefined, historical: null },
             { title: "Current location", description: "Where the brain believes you live", ...home },
             { title: "Current projects", description: "What the brain thinks is active right now", ...projects },
             { title: "Important people", description: "Who keeps showing up in your graph", ...people },
@@ -154,6 +208,38 @@ export default async function KnowledgePage() {
                     ))}
                   </div>
                 ) : null}
+                <details className="rounded-[18px] border border-white/8 bg-black/15 p-4 text-sm leading-7 text-slate-300">
+                  <summary className="cursor-pointer list-none font-medium text-white">Why this is believed</summary>
+                  <div className="mt-3 space-y-3">
+                    <p>This answer comes from the current retrieval pass for <span className="font-medium text-white">{item.query ?? "the active knowledge card"}</span> using the evidence shown above. If retrieval falls back or looks thin, treat the answer as a cue to inspect source material, not divine truth.</p>
+                    {item.query ? (
+                      <Link href={`/console/query?query=${encodeURIComponent(item.query)}`} className="text-cyan-100 hover:text-white">
+                        Open this question in Query
+                      </Link>
+                    ) : null}
+                  </div>
+                </details>
+                <details className="rounded-[18px] border border-white/8 bg-black/15 p-4 text-sm leading-7 text-slate-300">
+                  <summary className="cursor-pointer list-none font-medium text-white">What superseded the old value</summary>
+                  <div className="mt-3 space-y-3">
+                    <p className="text-slate-200">{item.historical?.answer ?? "No older signal surfaced yet."}</p>
+                    {item.historical?.evidence.length ? (
+                      <div className="space-y-2">
+                        {item.historical.evidence.map((evidence) => (
+                          <div key={`${item.title}:history:${evidence.sourceUri ?? evidence.snippet}`} className="rounded-[16px] border border-white/8 bg-white/5 p-3 text-xs leading-6 text-slate-300">
+                            <p>{evidence.snippet}</p>
+                            {evidence.sourceUri ? <p className="mt-1 text-slate-500">{evidence.sourceUri}</p> : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {item.historyQuery ? (
+                      <Link href={`/console/query?query=${encodeURIComponent(item.historyQuery)}`} className="text-cyan-100 hover:text-white">
+                        Open the older-state query
+                      </Link>
+                    ) : null}
+                  </div>
+                </details>
               </CardContent>
             </Card>
           ))}

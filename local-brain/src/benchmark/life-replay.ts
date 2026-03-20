@@ -1,7 +1,7 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { closePool, queryRows, withTransaction } from "../db/client.js";
+import { closePool, queryRows, withMaintenanceLock, withTransaction } from "../db/client.js";
 import { runMigrations } from "../db/migrations.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
@@ -1798,6 +1798,25 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
       "rule_of_3_distinct_days"
     ]
   },
+  {
+    name: "episodic_blocking_fk_count_zero",
+    sql: `
+      SELECT count(*)::text AS value
+      FROM pg_constraint
+      WHERE confrelid = 'episodic_memory'::regclass
+        AND contype = 'f'
+    `,
+    expectIncludes: ["0"]
+  },
+  {
+    name: "episodic_loose_provenance_orphans_zero",
+    sql: `
+      SELECT count(*)::text AS value
+      FROM episodic_loose_provenance_audit
+      WHERE orphan_count > 0
+    `,
+    expectIncludes: ["0"]
+  },
 ];
 
 export async function resetDatabase(): Promise<void> {
@@ -1812,12 +1831,28 @@ export async function resetDatabase(): Promise<void> {
       `
     );
 
-    const tables = rows.rows.map((row) => `"${row.table_name}"`);
+    const tables = rows.rows
+      .map((row) => row.table_name)
+      .sort((left, right) => {
+        const priority = (name: string): number => {
+          if (name === "episodic_timeline_legacy") {
+            return 0;
+          }
+          if (name === "episodic_memory") {
+            return 2;
+          }
+          return 1;
+        };
+        return priority(left) - priority(right) || left.localeCompare(right);
+      });
+
     if (tables.length === 0) {
       return;
     }
 
-    await client.query(`TRUNCATE TABLE ${tables.join(", ")} RESTART IDENTITY CASCADE`);
+    for (const tableName of tables) {
+      await client.query(`TRUNCATE TABLE "${tableName}" RESTART IDENTITY CASCADE`);
+    }
   });
 }
 
@@ -2369,63 +2404,65 @@ function toMarkdown(report: LifeReplayBenchmarkReport): string {
 }
 
 export async function runLifeReplayBenchmark(): Promise<LifeReplayBenchmarkReport> {
-  const namespaceId = "personal";
-  await runMigrations();
-  await resetDatabase();
-  const seededArtifacts = await seedNamespace(namespaceId);
+  return withMaintenanceLock("the life replay benchmark", async () => {
+    const namespaceId = "personal";
+    await runMigrations();
+    await resetDatabase();
+    const seededArtifacts = await seedNamespace(namespaceId);
 
-  const queryResults: ReplayQueryResult[] = [];
-  for (const expectation of QUERY_EXPECTATIONS) {
-    if (expectation.name === "day_summary_query_reconsolidated") {
-      await runMemoryReconsolidation({
-        namespaceId,
-        query: "what did Steve do on March 20 2026?",
-        limit: 8
-      });
+    const queryResults: ReplayQueryResult[] = [];
+    for (const expectation of QUERY_EXPECTATIONS) {
+      if (expectation.name === "day_summary_query_reconsolidated") {
+        await runMemoryReconsolidation({
+          namespaceId,
+          query: "what did Steve do on March 20 2026?",
+          limit: 8
+        });
+      }
+      if (expectation.beforeReconsolidationQuery) {
+        await runMemoryReconsolidation({
+          namespaceId,
+          query: expectation.beforeReconsolidationQuery,
+          limit: 8
+        });
+      }
+      queryResults.push(await runQueryExpectation(namespaceId, expectation));
     }
-    if (expectation.beforeReconsolidationQuery) {
-      await runMemoryReconsolidation({
-        namespaceId,
-        query: expectation.beforeReconsolidationQuery,
-        limit: 8
-      });
+
+    const stateResults: ReplayStateResult[] = [];
+    for (const expectation of STATE_EXPECTATIONS) {
+      stateResults.push(await runStateExpectation(expectation));
     }
-    queryResults.push(await runQueryExpectation(namespaceId, expectation));
-  }
 
-  const stateResults: ReplayStateResult[] = [];
-  for (const expectation of STATE_EXPECTATIONS) {
-    stateResults.push(await runStateExpectation(expectation));
-  }
+    const graphResults: ReplayGraphResult[] = [];
+    for (const expectation of GRAPH_EXPECTATIONS) {
+      graphResults.push(await runGraphExpectation(namespaceId, expectation));
+    }
 
-  const graphResults: ReplayGraphResult[] = [];
-  for (const expectation of GRAPH_EXPECTATIONS) {
-    graphResults.push(await runGraphExpectation(namespaceId, expectation));
-  }
+    const opsResults: ReplayOpsResult[] = [];
+    for (const expectation of OPS_EXPECTATIONS) {
+      opsResults.push(await runOpsExpectation(namespaceId, expectation));
+    }
 
-  const opsResults: ReplayOpsResult[] = [];
-  for (const expectation of OPS_EXPECTATIONS) {
-    opsResults.push(await runOpsExpectation(namespaceId, expectation));
-  }
+    const confidentCount = queryResults.filter((item) => item.confidence === "confident").length;
+    const weakCount = queryResults.filter((item) => item.confidence === "weak").length;
+    const missingCount = queryResults.filter((item) => item.confidence === "missing").length;
 
-  const confidentCount = queryResults.filter((item) => item.confidence === "confident").length;
-  const weakCount = queryResults.filter((item) => item.confidence === "weak").length;
-  const missingCount = queryResults.filter((item) => item.confidence === "missing").length;
-
-  return {
-    generatedAt: new Date().toISOString(),
-    namespaceId,
-    resetDatabase: true,
-    seededArtifacts,
-    queryResults,
-    stateResults,
-    graphResults,
-    opsResults,
-    confidentCount,
-    weakCount,
-    missingCount,
-    passed: [...queryResults, ...stateResults, ...graphResults, ...opsResults].every((item) => item.passed)
-  };
+    return {
+      generatedAt: new Date().toISOString(),
+      namespaceId,
+      resetDatabase: true,
+      seededArtifacts,
+      queryResults,
+      stateResults,
+      graphResults,
+      opsResults,
+      confidentCount,
+      weakCount,
+      missingCount,
+      passed: [...queryResults, ...stateResults, ...graphResults, ...opsResults].every((item) => item.passed)
+    };
+  });
 }
 
 export async function runAndWriteLifeReplayBenchmark(): Promise<{

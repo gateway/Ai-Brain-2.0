@@ -54,6 +54,24 @@ In practice, the app is built to let an operator:
 For a fuller product tour with examples, see [docs/BRAIN_FEATURES_AND_EXAMPLES.md](docs/BRAIN_FEATURES_AND_EXAMPLES.md).
 For a section-by-section guide to the app itself, see [docs/OPERATOR_WORKBENCH_GUIDE.md](docs/OPERATOR_WORKBENCH_GUIDE.md).
 
+## Product Screens
+
+Main dashboard:
+
+![AI Brain dashboard](docs/assets/dashboard-home.png)
+
+Sources and file-level deltas:
+
+![AI Brain sources](docs/assets/dashboard-sources.png)
+
+Runtime and worker control room:
+
+![AI Brain runtime](docs/assets/dashboard-runtime.png)
+
+What the brain currently believes:
+
+![AI Brain knowledge](docs/assets/dashboard-knowledge.png)
+
 ## Quick Start
 
 On a new Mac, the shortest supported path is:
@@ -166,6 +184,18 @@ The intended summary strategy is:
 - deterministic temporal buckets remain authoritative
 - an optional small-LLM semantic overlay can rewrite the readable summary text
 - provider choice can be local runtime, OpenRouter, or Gemini depending on what the operator has configured
+
+The monitored-source surface now also exposes:
+
+- file-level delta state
+- latest import outcomes
+- per-file retry actions for pending or failed imports
+
+The runtime surface now also exposes:
+
+- provider catalog latency
+- last verified provider checks
+- last successful model-backed derivation and temporal summary runs
 
 ## Local Runtime Vs OpenRouter
 
@@ -446,6 +476,17 @@ npm run quality:gates
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
 npm run smoke:graph
 ```
+
+## Maintenance And Benchmarks
+
+Replay and scale benchmarks now take a maintenance advisory lock before they reset or rebuild the local database.
+
+While that lock is active:
+
+- `GET /ops/maintenance` reports `active: true`
+- mutating runtime routes return `503` instead of racing the benchmark
+
+This keeps the live runtime and the replay harness from fighting over Postgres locks during benchmark runs.
 
 ## Honest Current Limits
 

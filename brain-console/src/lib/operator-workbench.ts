@@ -262,6 +262,13 @@ export interface WorkbenchOperationsSettings {
     readonly defaultScanSchedule: string;
     readonly autoImportOnScan: boolean;
   };
+  readonly derivation: {
+    readonly enabled: boolean;
+    readonly workerIntervalSeconds: number;
+    readonly batchLimit: number;
+    readonly provider?: WorkbenchModelProvider;
+    readonly model?: string | null;
+  };
   readonly outbox: {
     readonly workerIntervalSeconds: number;
     readonly batchLimit: number;
@@ -857,6 +864,13 @@ Return structured summary material only.`;
       defaultScanSchedule: stored?.sourceMonitor?.defaultScanSchedule ?? "every_30_minutes",
       autoImportOnScan: stored?.sourceMonitor?.autoImportOnScan ?? true
     },
+    derivation: {
+      enabled: stored?.derivation?.enabled ?? true,
+      workerIntervalSeconds: stored?.derivation?.workerIntervalSeconds ?? 120,
+      batchLimit: stored?.derivation?.batchLimit ?? 12,
+      provider: stored?.derivation?.provider ?? undefined,
+      model: stored?.derivation?.model ?? null
+    },
     outbox: {
       workerIntervalSeconds: stored?.outbox?.workerIntervalSeconds ?? 30,
       batchLimit: stored?.outbox?.batchLimit ?? 25
@@ -979,7 +993,8 @@ export async function scanWorkbenchSource(sourceId: string): Promise<WorkbenchSo
 
 export async function importWorkbenchSource(
   sourceId: string,
-  triggerType: "manual" | "scheduled" | "onboarding" = "manual"
+  triggerType: "manual" | "scheduled" | "onboarding" = "manual",
+  fileIds?: readonly string[]
 ): Promise<{
   readonly source: WorkbenchMonitoredSource;
   readonly importRun: WorkbenchSourcePreview["latestImport"];
@@ -992,7 +1007,8 @@ export async function importWorkbenchSource(
   }>(`/ops/sources/${sourceId}/import`, {
     method: "POST",
     body: JSON.stringify({
-      trigger_type: triggerType
+      trigger_type: triggerType,
+      file_ids: fileIds ?? null
     })
   });
 }

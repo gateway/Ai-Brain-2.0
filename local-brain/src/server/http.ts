@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { ignoreClarification, keepIdentityConflictSeparate, mergeEntityAlias, processBrainOutboxEvents, resolveClarification, resolveIdentityConflict } from "../clarifications/service.js";
 import { classifyDerivationTextToCandidates, classifyTextToCandidates } from "../classification/service.js";
 import { readConfig } from "../config.js";
-import { queryRows } from "../db/client.js";
+import { isMaintenanceLockActive, queryRows } from "../db/client.js";
 import { attachTextDerivation, deriveArtifactViaProvider } from "../derivations/service.js";
 import { getNamespaceSelfProfile, upsertNamespaceSelfProfile } from "../identity/service.js";
 import { ingestArtifact } from "../ingest/worker.js";
@@ -101,6 +101,14 @@ function optionalNumber(value: unknown): number | undefined {
 
 function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function optionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizeProvider(value: unknown): "external" | "openrouter" | "gemini" | undefined {
@@ -395,6 +403,32 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
         ok: true
       }
     };
+  }
+
+  if (request.method === "GET" && url.pathname === "/ops/maintenance") {
+    return {
+      statusCode: 200,
+      body: {
+        ok: true,
+        active: await isMaintenanceLockActive()
+      }
+    };
+  }
+
+  if (
+    request.method &&
+    !["GET", "HEAD", "OPTIONS"].includes(request.method) &&
+    !(request.method === "POST" && (url.pathname === "/health" || url.pathname === "/ops/maintenance"))
+  ) {
+    const maintenanceActive = await isMaintenanceLockActive();
+    if (maintenanceActive) {
+      return {
+        statusCode: 503,
+        body: {
+          error: "Maintenance mode is active for a replay or scale benchmark. Wait for the benchmark to finish before mutating the live brain."
+        }
+      };
+    }
   }
 
   if (request.method === "POST" && url.pathname === "/ops/sessions") {
@@ -955,7 +989,8 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
     const body = await readJsonBody(request);
     const result = await importMonitoredSource(
       sourceImportMatch[1]!,
-      (optionalString(body.trigger_type) as "manual" | "scheduled" | "onboarding" | undefined) ?? "manual"
+      (optionalString(body.trigger_type) as "manual" | "scheduled" | "onboarding" | undefined) ?? "manual",
+      optionalStringArray(body.file_ids)
     );
 
     return {

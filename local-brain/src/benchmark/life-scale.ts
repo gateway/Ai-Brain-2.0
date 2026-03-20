@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { closePool, queryRows } from "../db/client.js";
+import { closePool, queryRows, withMaintenanceLock } from "../db/client.js";
 import { runMigrations } from "../db/migrations.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
@@ -267,6 +267,26 @@ async function rebuildNamespace(namespaceId: string): Promise<void> {
   });
 }
 
+async function analyzeScaleTables(): Promise<void> {
+  const tables = [
+    "episodic_memory",
+    "semantic_memory",
+    "procedural_memory",
+    "relationship_memory",
+    "relationship_candidates",
+    "memory_entity_mentions",
+    "temporal_nodes",
+    "temporal_node_members",
+    "narrative_events",
+    "narrative_event_members",
+    "entities"
+  ];
+
+  for (const tableName of tables) {
+    await queryRows(`ANALYZE ${tableName}`);
+  }
+}
+
 const SCALE_QUERY_SPECS: readonly ScaleQuerySpec[] = [
   {
     name: "current_home",
@@ -452,72 +472,75 @@ function toMarkdown(report: LifeScaleBenchmarkReport): string {
 }
 
 export async function runLifeScaleBenchmark(): Promise<LifeScaleBenchmarkReport> {
-  const namespaceId = "personal";
-  await runMigrations();
-  const baseline = await runLifeReplayBenchmark();
-  const baselineQueryResults: ScaleQueryResult[] = [];
-  for (const spec of SCALE_QUERY_SPECS) {
-    baselineQueryResults.push(await runScaleQuery(namespaceId, spec));
-  }
+  return withMaintenanceLock("the life scale benchmark", async () => {
+    const namespaceId = "personal";
+    await runMigrations();
+    const baseline = await runLifeReplayBenchmark();
+    const baselineQueryResults: ScaleQueryResult[] = [];
+    for (const spec of SCALE_QUERY_SPECS) {
+      baselineQueryResults.push(await runScaleQuery(namespaceId, spec));
+    }
 
-  await resetDatabase();
-  await seedNamespace(namespaceId);
-  const generated = await writeGeneratedArtifacts();
-  await ingestGeneratedArtifacts(namespaceId, [...generated.medium, ...generated.large, ...generated.noisy]);
-  await rebuildNamespace(namespaceId);
+    await resetDatabase();
+    await seedNamespace(namespaceId);
+    const generated = await writeGeneratedArtifacts();
+    await ingestGeneratedArtifacts(namespaceId, [...generated.medium, ...generated.large, ...generated.noisy]);
+    await rebuildNamespace(namespaceId);
+    await analyzeScaleTables();
 
-  const queryResults: ScaleQueryResult[] = [];
-  for (const spec of SCALE_QUERY_SPECS) {
-    queryResults.push(await runScaleQuery(namespaceId, spec));
-  }
+    const queryResults: ScaleQueryResult[] = [];
+    for (const spec of SCALE_QUERY_SPECS) {
+      queryResults.push(await runScaleQuery(namespaceId, spec));
+    }
 
-  const graphResults = await runGraphStress(namespaceId);
-  const clarifications = await clarificationCounts(namespaceId);
-  const latencies = queryResults.map((item) => item.latencyMs);
-  const confidentCount = queryResults.filter((item) => item.confidence === "confident").length;
-  const weakCount = queryResults.filter((item) => item.confidence === "weak").length;
-  const missingCount = queryResults.filter((item) => item.confidence === "missing").length;
+    const graphResults = await runGraphStress(namespaceId);
+    const clarifications = await clarificationCounts(namespaceId);
+    const latencies = queryResults.map((item) => item.latencyMs);
+    const confidentCount = queryResults.filter((item) => item.confidence === "confident").length;
+    const weakCount = queryResults.filter((item) => item.confidence === "weak").length;
+    const missingCount = queryResults.filter((item) => item.confidence === "missing").length;
 
-  return {
-    generatedAt: new Date().toISOString(),
-    namespaceId,
-    baseline: {
-      confidentCount: baseline.confidentCount,
-      weakCount: baseline.weakCount,
-      missingCount: baseline.missingCount,
-      passed: baseline.passed,
-      pack: {
-        confidentCount: baselineQueryResults.filter((item) => item.confidence === "confident").length,
-        weakCount: baselineQueryResults.filter((item) => item.confidence === "weak").length,
-        missingCount: baselineQueryResults.filter((item) => item.confidence === "missing").length
-      }
-    },
-    generatedArtifacts: {
-      medium: generated.medium.length,
-      large: generated.large.length,
-      noisy: generated.noisy.length,
-      total: generated.medium.length + generated.large.length + generated.noisy.length
-    },
-    clarificationCounts: clarifications,
-    graphResults,
-    queryResults,
-    latency: {
-      p50Ms: percentile(latencies, 50),
-      p95Ms: percentile(latencies, 95),
-      maxMs: percentile(latencies, 100)
-    },
-    quality: {
-      confidentCount,
-      weakCount,
-      missingCount
-    },
-    qualityDelta: {
-      confidentDelta: confidentCount - baselineQueryResults.filter((item) => item.confidence === "confident").length,
-      weakDelta: weakCount - baselineQueryResults.filter((item) => item.confidence === "weak").length,
-      missingDelta: missingCount - baselineQueryResults.filter((item) => item.confidence === "missing").length
-    },
-    passed: [...queryResults, ...graphResults].every((item) => item.passed)
-  };
+    return {
+      generatedAt: new Date().toISOString(),
+      namespaceId,
+      baseline: {
+        confidentCount: baseline.confidentCount,
+        weakCount: baseline.weakCount,
+        missingCount: baseline.missingCount,
+        passed: baseline.passed,
+        pack: {
+          confidentCount: baselineQueryResults.filter((item) => item.confidence === "confident").length,
+          weakCount: baselineQueryResults.filter((item) => item.confidence === "weak").length,
+          missingCount: baselineQueryResults.filter((item) => item.confidence === "missing").length
+        }
+      },
+      generatedArtifacts: {
+        medium: generated.medium.length,
+        large: generated.large.length,
+        noisy: generated.noisy.length,
+        total: generated.medium.length + generated.large.length + generated.noisy.length
+      },
+      clarificationCounts: clarifications,
+      graphResults,
+      queryResults,
+      latency: {
+        p50Ms: percentile(latencies, 50),
+        p95Ms: percentile(latencies, 95),
+        maxMs: percentile(latencies, 100)
+      },
+      quality: {
+        confidentCount,
+        weakCount,
+        missingCount
+      },
+      qualityDelta: {
+        confidentDelta: confidentCount - baselineQueryResults.filter((item) => item.confidence === "confident").length,
+        weakDelta: weakCount - baselineQueryResults.filter((item) => item.confidence === "weak").length,
+        missingDelta: missingCount - baselineQueryResults.filter((item) => item.confidence === "missing").length
+      },
+      passed: [...queryResults, ...graphResults].every((item) => item.passed)
+    };
+  });
 }
 
 export async function runAndWriteLifeScaleBenchmark(): Promise<{
