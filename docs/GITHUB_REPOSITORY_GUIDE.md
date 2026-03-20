@@ -20,6 +20,7 @@ The following should remain local-only and should not be part of the public repo
 - NotebookLM auth state, browser profiles, and mirrored exports
 - Playwright logs, screenshots, and scratch output
 - generated benchmark and eval outputs
+- private benchmark corpora and personal sample memories
 - personal-only artifacts and inbox files
 - Codex or Claude local skill wiring that only exists to operate this workspace
 

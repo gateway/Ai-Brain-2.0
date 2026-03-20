@@ -1,5 +1,6 @@
 /.env
 /.DS_Store
+/AI Brain Operator Workbench/.DS_Store
 /.agents/
 /.claude/
 /AGENTS.md
@@ -29,3 +30,6 @@
 /local-brain/benchmark-results/narrative-benchmark-*.json
 /local-brain/benchmark-results/narrative-benchmark-*.md
 /local-brain/producer-inbox/
+/local-brain/examples/steve-*.md
+/local-brain/examples/live-personal-circle.md
+/local-brain/examples/live-project-two-way.md

@@ -55,7 +55,7 @@ proves the substrate, schema, and file ingestion loop without Docker.
 2. Create a dedicated local database once:
    - `/opt/homebrew/opt/postgresql@18/bin/createdb ai_brain_local`
 3. Optional for Python helper tooling:
-   - `source /Users/evilone/Documents/Development/AI-Brain/ai-brain/use_brain_env.sh`
+   - create or activate a repo-local helper virtual environment
    - install/evaluate `pgai` into the current DB:
      - `pgai install -d postgresql:///ai_brain_local`
 4. Install Node dependencies:

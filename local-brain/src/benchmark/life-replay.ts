@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { closePool, queryRows, withTransaction } from "../db/client.js";
@@ -99,177 +99,187 @@ function outputDir(): string {
   return path.resolve(rootDir(), "benchmark-results");
 }
 
+function replayFixtureRoot(): string {
+  return process.env.BRAIN_LIFE_REPLAY_FIXTURE_ROOT?.trim()
+    ? path.resolve(process.env.BRAIN_LIFE_REPLAY_FIXTURE_ROOT)
+    : path.resolve(rootDir(), "examples-private", "life-replay");
+}
+
+function replayFixturePath(fileName: string): string {
+  return path.resolve(replayFixtureRoot(), fileName);
+}
+
 const FIXTURES: readonly ReplayFixture[] = [
   {
-    path: path.resolve(rootDir(), "examples/steve-work-history-2026-03-18.md"),
+    path: replayFixturePath("work-history.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:work-history",
     capturedAt: "2026-03-18T09:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-location-timeline-signature-work-2026-03-18.md"),
+    path: replayFixturePath("location-history.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:location-history",
     capturedAt: "2026-03-18T10:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-thailand-friends-and-preferences-2026-03-18.md"),
+    path: replayFixturePath("friends-and-preferences.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:friends",
     capturedAt: "2026-03-18T11:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-lauren-relationship-thailand-2026-03-19.md"),
+    path: replayFixturePath("relationship-history.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:relationship",
     capturedAt: "2026-03-19T08:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/live-personal-circle.md"),
+    path: replayFixturePath("social-circle.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:social-circle",
     capturedAt: "2026-03-18T12:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/live-project-two-way.md"),
+    path: replayFixturePath("current-project.md"),
     sourceType: "project_note",
     sourceChannel: "life-replay:project",
     capturedAt: "2026-03-18T13:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-movies-and-watchlist-2026-03-19.md"),
+    path: replayFixturePath("movies-and-watchlist.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:movies",
     capturedAt: "2026-03-19T09:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-daily-life-multi-event-2026-03-19.md"),
+    path: replayFixturePath("daily-life.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:daily-life",
     capturedAt: "2026-03-20T10:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-preference-supersession-2026-03-19.md"),
+    path: replayFixturePath("preference-supersession.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:supersession",
     capturedAt: "2026-03-19T11:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-coffee-preference-2024-06-01.md"),
+    path: replayFixturePath("coffee-preference-2024.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:coffee-preference-2024",
     capturedAt: "2024-06-01T09:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-coffee-preference-2026-02-01.md"),
+    path: replayFixturePath("coffee-preference-2026.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:coffee-preference-2026",
     capturedAt: "2026-02-01T09:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-current-employer-2026-03-19.md"),
+    path: replayFixturePath("current-employer.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:current-employer",
     capturedAt: "2026-03-19T11:30:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-residence-tenure-koh-samui-2025-01-10.md"),
+    path: replayFixturePath("residence-koh-samui.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:residence-tenure-koh-samui",
     capturedAt: "2025-01-10T00:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-residence-tenure-chiang-mai-2025-07-15.md"),
+    path: replayFixturePath("residence-chiang-mai.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:residence-tenure-chiang-mai",
     capturedAt: "2025-07-15T00:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-employer-tenure-well-inked-2026-01-15.md"),
+    path: replayFixturePath("employer-well-inked.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:employer-tenure-well-inked",
     capturedAt: "2026-01-15T00:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-employer-tenure-two-way-2026-03-12.md"),
+    path: replayFixturePath("employer-two-way.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:employer-tenure-two-way",
     capturedAt: "2026-03-12T00:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-photo-club-mention-2026-03-01.md"),
+    path: replayFixturePath("photo-club-mention.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:photo-club-mention",
     capturedAt: "2026-03-01T10:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-photo-club-session-1-2026-03-08.md"),
+    path: replayFixturePath("photo-club-session-1.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:photo-club-1",
     capturedAt: "2026-03-08T10:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-photo-club-session-2-2026-03-15.md"),
+    path: replayFixturePath("photo-club-session-2.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:photo-club-2",
     capturedAt: "2026-03-15T19:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-photo-club-session-3-2026-03-22.md"),
+    path: replayFixturePath("photo-club-session-3.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:photo-club-3",
     capturedAt: "2026-03-22T19:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-decisions-and-constraints-2026-03-19.md"),
+    path: replayFixturePath("decisions-and-constraints.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:decisions-constraints",
     capturedAt: "2026-03-19T12:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-event-context-rich-2026-03-20.md"),
+    path: replayFixturePath("event-context.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:event-context",
     capturedAt: "2026-03-20T12:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-coworking-cost-2026-03-20.md"),
+    path: replayFixturePath("coworking-cost.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:event-cost",
     capturedAt: "2026-03-20T12:15:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-yellow-routine-week-1-2026-03-03.md"),
+    path: replayFixturePath("routine-week-1.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:routine-1",
     capturedAt: "2026-03-03T03:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-yellow-routine-week-2-2026-03-10.md"),
+    path: replayFixturePath("routine-week-2.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:routine-2",
     capturedAt: "2026-03-10T03:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-yellow-routine-week-3-2026-03-17.md"),
+    path: replayFixturePath("routine-week-3.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:routine-3",
     capturedAt: "2026-03-17T03:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-style-specs-1-2026-03-18.md"),
+    path: replayFixturePath("style-specs-1.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:style-specs-1",
     capturedAt: "2026-03-18T14:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-style-specs-2-2026-03-19.md"),
+    path: replayFixturePath("style-specs-2.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:style-specs-2",
     capturedAt: "2026-03-19T14:00:00Z"
   },
   {
-    path: path.resolve(rootDir(), "examples/steve-style-specs-3-2026-03-20.md"),
+    path: replayFixturePath("style-specs-3.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:style-specs-3",
     capturedAt: "2026-03-20T14:00:00Z"
@@ -603,7 +613,7 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
       FROM narrative_events ne
       INNER JOIN artifacts a ON a.id = ne.artifact_id
       WHERE ne.namespace_id = 'personal'
-        AND a.uri LIKE '%steve-daily-life-multi-event-2026-03-19.md'
+        AND a.uri LIKE '%daily-life.md'
       ORDER BY ne.created_at
     `,
     expectIncludes: ["Yellow co-working", "Massage", "Dinner"]
@@ -908,7 +918,7 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
         AND entity_type = 'goal'
       ORDER BY canonical_name
     `,
-    expectIncludes: ["goal Stay In Thailand"]
+    expectIncludes: ["goal Stay in Thailand"]
   },
   {
     name: "current_goal_state_exists",
@@ -920,7 +930,7 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
         AND valid_until IS NULL
       ORDER BY state_key
     `,
-    expectIncludes: ["current_primary_goal", "Stay In Thailand"]
+    expectIncludes: ["current_primary_goal", "Stay in Thailand"]
   },
   {
     name: "plan_entity_exists",
@@ -993,6 +1003,27 @@ async function resetDatabase(): Promise<void> {
 }
 
 async function seedNamespace(namespaceId: string): Promise<number> {
+  const missingFixtures: string[] = [];
+  for (const fixture of FIXTURES) {
+    try {
+      await access(fixture.path);
+    } catch {
+      missingFixtures.push(fixture.path);
+    }
+  }
+
+  if (missingFixtures.length > 0) {
+    throw new Error(
+      [
+        `Life replay fixtures are missing.`,
+        `Set BRAIN_LIFE_REPLAY_FIXTURE_ROOT to a private corpus directory containing the expected replay files.`,
+        `Fixture root: ${replayFixtureRoot()}`,
+        `Missing files:`,
+        ...missingFixtures.map((entry) => `- ${entry}`)
+      ].join("\n")
+    );
+  }
+
   for (const fixture of FIXTURES) {
     await ingestArtifact({
       inputUri: fixture.path,

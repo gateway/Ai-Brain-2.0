@@ -117,16 +117,12 @@ Python is currently used as an isolated helper/sidecar environment, not as the m
 - [/.venv-brain](/Users/evilone/Documents/Development/AI-Brain/ai-brain/.venv-brain)
   - repo-local helper Python environment
   - intended for optional helper tooling like `pgai`, OCR/document processing, and related sidecar experiments
-- [/.venv-notebooklm](/Users/evilone/Documents/Development/AI-Brain/ai-brain/.venv-notebooklm)
-  - separate repo-local NotebookLM environment
-  - not part of the shipping app runtime
-
 Release policy:
 
 - no dependency on system Python packages
 - all Python packages installed into repo-local venvs
 - Postgres and its extensions managed separately from Python
-- NotebookLM artifacts, local auth state, and research-only environments excluded from GitHub
+- local research artifacts, auth state, and workstation-only environments excluded from GitHub
 
 ## Summary And Worker Controls
 
