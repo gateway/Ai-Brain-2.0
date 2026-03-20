@@ -30,6 +30,23 @@ function workerStateTone(value: "disabled" | "never" | "running" | "healthy" | "
   }
 }
 
+function summarizeWorkerStates(workers: readonly {
+  readonly state: "disabled" | "never" | "running" | "healthy" | "degraded" | "failed" | "stale";
+}[]): { readonly healthy: number; readonly attention: number; readonly disabled: number } {
+  return workers.reduce(
+    (summary, worker) => {
+      if (worker.state === "healthy" || worker.state === "running") {
+        return { ...summary, healthy: summary.healthy + 1 };
+      }
+      if (worker.state === "disabled") {
+        return { ...summary, disabled: summary.disabled + 1 };
+      }
+      return { ...summary, attention: summary.attention + 1 };
+    },
+    { healthy: 0, attention: 0, disabled: 0 }
+  );
+}
+
 export default async function WorkbenchDashboardPage() {
   const [sessions, health, namespaces, bootstrap, sources, workerStatus] = await Promise.all([
     listWorkbenchSessions().catch(() => []),
@@ -55,6 +72,7 @@ export default async function WorkbenchDashboardPage() {
     }))
   ]);
   const importedSources = sources.filter((source) => source.lastImportAt).length;
+  const workerSummary = summarizeWorkerStates(workerStatus.workers);
 
   return (
     <OperatorShell
@@ -219,6 +237,56 @@ export default async function WorkbenchDashboardPage() {
           </Card>
 
           <div className="space-y-5">
+            <Card className="overflow-hidden border-cyan-300/14 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.1),_transparent_28%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
+              <CardHeader>
+                <CardDescription>Operations health</CardDescription>
+                <CardTitle className="text-[1.45rem] tracking-tight">Brain workers at a glance</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4 pt-0">
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="rounded-[22px] border border-emerald-300/16 bg-emerald-300/10 p-4">
+                    <p className="text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">Healthy or running</p>
+                    <p className="mt-2 text-2xl font-semibold tracking-tight text-white">{workerSummary.healthy}</p>
+                  </div>
+                  <div className="rounded-[22px] border border-amber-300/16 bg-amber-300/10 p-4">
+                    <p className="text-[10px] uppercase tracking-[0.22em] text-amber-100/80">Needs attention</p>
+                    <p className="mt-2 text-2xl font-semibold tracking-tight text-white">{workerSummary.attention}</p>
+                  </div>
+                  <div className="rounded-[22px] border border-white/10 bg-white/5 p-4">
+                    <p className="text-[10px] uppercase tracking-[0.22em] text-slate-300">Checked</p>
+                    <p className="mt-2 text-sm font-medium leading-7 text-white">{formatDateTime(workerStatus.checkedAt)}</p>
+                  </div>
+                </div>
+                <div className="grid gap-3">
+                  {workerStatus.workers.map((worker) => (
+                    <div key={worker.workerKey} className="rounded-[22px] border border-white/8 bg-white/5 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-sm font-medium text-white">{worker.workerKey.replace(/_/g, " ")}</p>
+                        <p className={`text-xs uppercase tracking-[0.22em] ${workerStateTone(worker.state)}`}>{worker.state}</p>
+                      </div>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        Last run {formatDateTime(worker.latestRun?.finishedAt ?? worker.latestRun?.startedAt)}. Next due {formatDateTime(worker.nextDueAt)}.
+                      </p>
+                      {worker.recentFailures[0] ? (
+                        <div className="mt-3 rounded-[18px] border border-rose-300/16 bg-rose-300/10 p-3 text-xs leading-6 text-rose-50">
+                          <p className="font-medium text-white">
+                            Latest failure
+                            {typeof worker.recentFailures[0].summary.failure_category === "string"
+                              ? ` · ${worker.recentFailures[0].summary.failure_category}`
+                              : ""}
+                          </p>
+                          {worker.recentFailures[0].errorMessage ? <p className="mt-1">{worker.recentFailures[0].errorMessage}</p> : null}
+                          {typeof worker.recentFailures[0].summary.retry_guidance === "string" ? (
+                            <p className="mt-1">Retry guidance: {worker.recentFailures[0].summary.retry_guidance}</p>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
             <div className="overflow-hidden rounded-[30px] border border-white/8 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.08),_transparent_26%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] px-5 py-5 shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
               <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-slate-300">What this home screen is for</p>
               <h3 className="mt-3 text-[1.3rem] font-semibold tracking-tight text-white">This is your operator control room.</h3>
@@ -266,25 +334,6 @@ export default async function WorkbenchDashboardPage() {
               </CardContent>
             </Card>
 
-            <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
-              <CardHeader>
-                <CardDescription>Operations health</CardDescription>
-                <CardTitle className="text-[1.35rem] tracking-tight">Background workers</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4 pt-0">
-                {workerStatus.workers.map((worker) => (
-                  <div key={worker.workerKey} className="rounded-[22px] border border-white/8 bg-white/5 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-medium text-white">{worker.workerKey.replace(/_/g, " ")}</p>
-                      <p className={`text-xs uppercase tracking-[0.22em] ${workerStateTone(worker.state)}`}>{worker.state}</p>
-                    </div>
-                    <p className="mt-2 text-sm leading-7 text-slate-300">
-                      Last run {formatDateTime(worker.latestRun?.finishedAt ?? worker.latestRun?.startedAt)}. Next due {formatDateTime(worker.nextDueAt)}.
-                    </p>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
           </div>
         </div>
       </div>

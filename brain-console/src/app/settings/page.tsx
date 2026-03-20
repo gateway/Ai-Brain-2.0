@@ -64,6 +64,14 @@ function workerTone(value: "disabled" | "never" | "running" | "healthy" | "degra
   }
 }
 
+function failureCategory(value: Record<string, unknown>): string | null {
+  return typeof value.failure_category === "string" ? value.failure_category : null;
+}
+
+function retryGuidance(value: Record<string, unknown>): string | null {
+  return typeof value.retry_guidance === "string" ? value.retry_guidance : null;
+}
+
 export default async function SettingsPage({
   searchParams
 }: {
@@ -287,7 +295,34 @@ export default async function SettingsPage({
                     {worker.recentFailures[0]?.errorMessage ? (
                       <p>Latest failure: <span className="font-medium text-white">{worker.recentFailures[0].errorMessage}</span></p>
                     ) : null}
+                    {failureCategory(worker.latestRun?.summary ?? {}) ? (
+                      <p>Failure category: <span className="font-medium text-white">{failureCategory(worker.latestRun?.summary ?? {})}</span></p>
+                    ) : null}
+                    {retryGuidance(worker.latestRun?.summary ?? {}) ? (
+                      <p>Retry guidance: <span className="font-medium text-white">{retryGuidance(worker.latestRun?.summary ?? {})}</span></p>
+                    ) : null}
                   </div>
+                  {worker.recentFailures.length > 0 ? (
+                    <div className="mt-4 rounded-[18px] border border-black/10 bg-black/10 p-3 text-xs leading-6 text-slate-100/90">
+                      <p className="font-medium text-white">Recent failure history</p>
+                      <div className="mt-2 space-y-2">
+                        {worker.recentFailures.map((failure) => (
+                          <div key={failure.id} className="rounded-[14px] border border-white/8 bg-white/5 p-3">
+                            <p>
+                              {formatDateTime(failure.finishedAt ?? failure.startedAt)}
+                              {" "}·
+                              {" "}
+                              <span className="font-medium text-white">
+                                {failureCategory(failure.summary) ?? failure.status}
+                              </span>
+                            </p>
+                            {failure.errorMessage ? <p className="mt-1">{failure.errorMessage}</p> : null}
+                            {retryGuidance(failure.summary) ? <p className="mt-1">Next step: {retryGuidance(failure.summary)}</p> : null}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>

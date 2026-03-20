@@ -115,6 +115,13 @@ The first compact status panels now live in:
 - Settings
 - session timeline views
 
+The Dashboard now treats worker health as a first-class operator signal instead of a secondary settings detail. Operators can see:
+
+- healthy vs attention-needed worker counts
+- latest failure category
+- retry guidance
+- next due timing
+
 Each run records:
 
 - worker key
@@ -142,6 +149,8 @@ Current normalized failure categories:
 - `unknown`
 
 This lets the operator UI distinguish between things like a bad provider key, a dimension mismatch, and a missing folder path instead of only showing a raw stack trace.
+
+Settings now also surfaces a short recent failure history per worker instead of only the latest error.
 
 ## Combined operations worker
 
@@ -178,6 +187,17 @@ That surface combines:
 Key endpoint:
 
 - `GET /ops/sessions/:sessionId/timeline`
+
+## Source intent defaults
+
+The setup/import flow now applies intent-aware monitoring defaults:
+
+- `owner_bootstrap` → monitoring off
+- `historical_archive` → monitoring off
+- `ongoing_folder_monitor` → monitoring on
+- `project_source` → monitoring on
+
+Operators can still override that recommendation before saving the source, but the default now matches the most common operational posture for each source type.
 
 ## Why this is not MCP
 

@@ -38,6 +38,7 @@ Use it to:
 
 - see whether setup is complete
 - check runtime health
+- see whether background workers are healthy or need attention
 - review trusted-source state
 - jump into the right next action
 - return to active sessions
@@ -114,6 +115,13 @@ Monitoring strategy in the current app:
 
 This keeps source monitoring aligned with the same evidence-first ingestion contract used everywhere else.
 
+The import flow now recommends monitoring defaults by source intent:
+
+- owner bootstrap: off
+- historical archive: off
+- ongoing folder monitor: on
+- project source: on
+
 The import surface now also shows the current source-monitor worker state, last run, next due time, and retry guidance when the latest background run failed or degraded.
 
 ### When OpenClaw is recommended
@@ -187,6 +195,7 @@ Use it to:
 - save preferred OpenRouter defaults
 - tune source monitor, inbox/outbox, and temporal summary operations
 - inspect runtime worker health and retry guidance
+- inspect recent failure history per worker
 
 Current provider meanings:
 

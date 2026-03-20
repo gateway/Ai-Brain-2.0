@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { SourceMonitorIntentFields } from "@/components/source-monitor-intent-fields";
 import { getBootstrapState, getNamespaceCatalog, getWorkbenchSourcePreview, getWorkbenchWorkerStatus, listWorkbenchSources } from "@/lib/operator-workbench";
 
 function formatBytes(value: number): string {
@@ -72,6 +73,7 @@ export default async function BootstrapImportPage({
     typeof bootstrap.metadata.ownerBootstrapSessionId === "string" ? bootstrap.metadata.ownerBootstrapSessionId : undefined;
   const defaultNamespaceId = bootstrap.metadata.defaultNamespaceId ?? namespaces.defaultNamespaceId;
   const defaultSourceIntent = bootstrap.metadata.sourceDefaults?.intent ?? "ongoing_folder_monitor";
+  const defaultMonitorEnabled = bootstrap.metadata.sourceDefaults?.monitorEnabled ?? (defaultSourceIntent === "ongoing_folder_monitor" || defaultSourceIntent === "project_source");
   const sourceMonitorWorker = workerStatus.workers.find((worker) => worker.workerKey === "source_monitor");
 
   return (
@@ -113,6 +115,24 @@ export default async function BootstrapImportPage({
                 {" "}Last run {formatDateTime(sourceMonitorWorker?.latestRun?.finishedAt ?? sourceMonitorWorker?.latestRun?.startedAt)}.
                 {" "}Next due {formatDateTime(sourceMonitorWorker?.nextDueAt)}.
               </p>
+              {sourceMonitorWorker?.recentFailures?.length ? (
+                <div className="rounded-[18px] border border-rose-300/16 bg-rose-300/10 p-3 text-xs leading-6 text-rose-50">
+                  <p className="font-medium text-white">Recent failures</p>
+                  <div className="mt-2 space-y-2">
+                    {sourceMonitorWorker.recentFailures.slice(0, 2).map((failure) => (
+                      <div key={failure.id}>
+                        <p>
+                          {formatDateTime(failure.finishedAt ?? failure.startedAt)}
+                          {" "}·
+                          {" "}
+                          {typeof failure.summary.failure_category === "string" ? failure.summary.failure_category : failure.status}
+                        </p>
+                        {failure.errorMessage ? <p className="text-rose-100/90">{failure.errorMessage}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {typeof sourceMonitorWorker?.latestRun?.summary?.retry_guidance === "string" ? (
                 <p>Retry guidance: <span className="font-medium text-white">{sourceMonitorWorker.latestRun.summary.retry_guidance}</span></p>
               ) : null}
@@ -181,15 +201,7 @@ export default async function BootstrapImportPage({
                     <Input name="namespace_id" list="namespace-options" defaultValue={defaultNamespaceId} />
                   </label>
                 </div>
-                <label className="grid gap-2 md:max-w-sm">
-                  <span className="text-sm font-medium text-slate-100">Source intent</span>
-                  <select name="source_intent" defaultValue={defaultSourceIntent} className="h-11 rounded-[18px] border border-white/12 bg-white/6 px-4 text-sm text-white outline-none ring-0">
-                    <option value="owner_bootstrap">Owner bootstrap</option>
-                    <option value="ongoing_folder_monitor">Ongoing folder monitor</option>
-                    <option value="historical_archive">Historical archive</option>
-                    <option value="project_source">Project source</option>
-                  </select>
-                </label>
+                <SourceMonitorIntentFields defaultIntent={defaultSourceIntent} defaultMonitorEnabled={defaultMonitorEnabled} />
                 <label className="grid gap-2">
                   <span className="text-sm font-medium text-slate-100">Folder path</span>
                   <Input name="root_path" required placeholder="/Users/you/OpenClaw/memory" />
@@ -198,17 +210,7 @@ export default async function BootstrapImportPage({
                   <span className="text-sm font-medium text-slate-100">Notes</span>
                   <Textarea name="notes" placeholder="Optional operator note about this source." />
                 </label>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <label className="flex items-center gap-3 rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-200">
-                    <input type="checkbox" name="include_subfolders" defaultChecked className="size-4" />
-                    Include subfolders
-                  </label>
-                  <label className="flex items-center gap-3 rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-200">
-                    <input type="checkbox" name="monitor_enabled" className="size-4" />
-                    Monitor after import
-                  </label>
-                  <div className="rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-300">v1 file types: <code>.md</code>, <code>.txt</code></div>
-                </div>
+                <div className="rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-300">v1 file types: <code>.md</code>, <code>.txt</code></div>
                 <div className="flex flex-wrap gap-3">
                   <Button type="submit" name="intent" value="save" className="rounded-2xl bg-white text-stone-950 hover:bg-stone-200">
                     Save source
@@ -243,15 +245,7 @@ export default async function BootstrapImportPage({
                     <Input name="namespace_id" list="namespace-options" defaultValue={defaultNamespaceId} />
                   </label>
                 </div>
-                <label className="grid gap-2 md:max-w-sm">
-                  <span className="text-sm font-medium text-slate-100">Source intent</span>
-                  <select name="source_intent" defaultValue={defaultSourceIntent} className="h-11 rounded-[18px] border border-white/12 bg-white/6 px-4 text-sm text-white outline-none ring-0">
-                    <option value="owner_bootstrap">Owner bootstrap</option>
-                    <option value="ongoing_folder_monitor">Ongoing folder monitor</option>
-                    <option value="historical_archive">Historical archive</option>
-                    <option value="project_source">Project source</option>
-                  </select>
-                </label>
+                <SourceMonitorIntentFields defaultIntent={defaultSourceIntent} defaultMonitorEnabled={defaultMonitorEnabled} />
                 <label className="grid gap-2">
                   <span className="text-sm font-medium text-slate-100">Folder path</span>
                   <Input name="root_path" required placeholder="/Users/you/Documents/memory-notes" />
@@ -260,17 +254,7 @@ export default async function BootstrapImportPage({
                   <span className="text-sm font-medium text-slate-100">Notes</span>
                   <Textarea name="notes" placeholder="Optional operator note about this folder." />
                 </label>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <label className="flex items-center gap-3 rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-200">
-                    <input type="checkbox" name="include_subfolders" defaultChecked className="size-4" />
-                    Include subfolders
-                  </label>
-                  <label className="flex items-center gap-3 rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-200">
-                    <input type="checkbox" name="monitor_enabled" className="size-4" />
-                    Monitor after import
-                  </label>
-                  <div className="rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-300">Extensions locked in v1</div>
-                </div>
+                <div className="rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-300">Extensions locked in v1</div>
                 <div className="flex flex-wrap gap-3">
                   <Button type="submit" name="intent" value="save" className="rounded-2xl bg-white text-stone-950 hover:bg-stone-200">
                     Save source
