@@ -3,6 +3,7 @@ import type { ArtifactRecord, FragmentRecord, NamespaceId, SourceType } from "..
 export interface IngestRequest {
   readonly sourceType: SourceType;
   readonly namespaceId: NamespaceId;
+  readonly sessionId?: string;
   readonly capturedAt: string;
   readonly inputUri?: string;
   readonly rawText?: string;

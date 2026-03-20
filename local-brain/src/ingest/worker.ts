@@ -13,12 +13,98 @@ function buildCandidateWrites(content: string, metadata: Record<string, unknown>
   const writes: CandidateMemoryWrite[] = [];
   const tags = Array.isArray(metadata.tags) ? metadata.tags.filter((value): value is string => typeof value === "string") : [];
   const lowered = content.toLowerCase();
+  const firstPersonPreferenceCue =
+    /\bi\b.{0,24}\b(?:prefer|like|love|enjoy|hate|dislike)\b/u.test(lowered) ||
+    /\bmy\b.{0,24}\b(?:preference|preferences|favorite|favourite)\b/u.test(lowered) ||
+    /\bmy\s+(?:personal\s+)?preferences?\b/u.test(lowered);
+  const listPreferenceCue =
+    /\b(?:favorite|favourite)\s+(?:movies?|films?|sports?|books?|foods?)\b/u.test(lowered) ||
+    /\b(?:wants?\s+to\s+(?:watch|see)|watch\s*list)\b/u.test(lowered);
+  const explicitSkillCue =
+    /\b(?:self-taught|full-stack web developer|full-stack web development|photogrammetry specialist|drone \+ photogrammetry specialist|faa part 107|built expertise in|using stable diffusion|using comfyui|using deforum|using animatediff)\b/u.test(lowered) ||
+    /\b(?:stable diffusion|comfyui|deforum|animatediff)\b/u.test(content);
+  const explicitDecisionCue =
+    /\b(?:i|we)\s+(?:decided|choose|chose)\s+to\b/u.test(lowered) ||
+    /\bdecision\s*:/u.test(lowered);
+  const explicitConstraintCue =
+    /\b(?:always|never)\b/u.test(lowered) ||
+    /\b(?:the\s+brain|this\s+brain|the\s+system|our\s+system)\s+should\b/u.test(lowered) ||
+    /\bask\s+for\s+clarification\s+instead\s+of\s+guessing\b/u.test(lowered);
+  const explicitStyleCue =
+    /\bkeep\s+(?:responses?|replies?)\s+concise\b/u.test(lowered) ||
+    /\b(?:prefers?|preferred)\s+concise\s+(?:responses?|replies?)\b/u.test(lowered) ||
+    /\bask\s+notebooklm\s+first\b/u.test(lowered) ||
+    /\bwipe\s+and\s+replay\s+the\s+(?:db|database)\b/u.test(lowered) ||
+    /\bprefer\s+natural-?language\s+queryability\b/u.test(lowered) ||
+    /\bnatural-?language\s+queryability\s+matters\b/u.test(lowered);
+  const explicitGoalCue =
+    /\b(?:that'?s|that is|my|our|current)\s+goal\s*:?\s+/u.test(lowered) ||
+    /\bgoal\s*:/u.test(lowered);
+  const explicitPlanCue =
+    /\bplan\s*:/u.test(lowered) ||
+    (/\b(?:i|we)\s+(?:am|are|'m|'re)\s+going\s+to\b/u.test(lowered) &&
+      /\b(?:conference|trip|launch|meeting|event|visit|move)\b/u.test(lowered)) ||
+    /\b(?:i|we)\s+will\s+(?:go|visit|launch|meet)\b/u.test(lowered);
 
-  if (tags.includes("preference") || /\b(?:prefer|likes?|hates?|always|never)\b/u.test(lowered)) {
+  if (firstPersonPreferenceCue || listPreferenceCue) {
     writes.push({
       candidateType: "semantic_preference",
       content,
       confidence: 0.75,
+      metadata
+    });
+  }
+
+  if (explicitSkillCue) {
+    writes.push({
+      candidateType: "semantic_skill",
+      content,
+      confidence: 0.72,
+      metadata
+    });
+  }
+
+  if (explicitDecisionCue) {
+    writes.push({
+      candidateType: "semantic_decision",
+      content,
+      confidence: 0.72,
+      metadata
+    });
+  }
+
+  if (explicitConstraintCue) {
+    writes.push({
+      candidateType: "semantic_constraint",
+      content,
+      confidence: 0.72,
+      metadata
+    });
+  }
+
+  if (explicitStyleCue) {
+    writes.push({
+      candidateType: "semantic_style_spec",
+      content,
+      confidence: 0.73,
+      metadata
+    });
+  }
+
+  if (explicitGoalCue) {
+    writes.push({
+      candidateType: "semantic_goal",
+      content,
+      confidence: 0.74,
+      metadata
+    });
+  }
+
+  if (explicitPlanCue) {
+    writes.push({
+      candidateType: "semantic_plan",
+      content,
+      confidence: 0.72,
       metadata
     });
   }
@@ -59,6 +145,7 @@ async function insertFragment(
     readonly artifactId: string;
     readonly observationId: string;
     readonly namespaceId: string;
+    readonly sessionId?: string;
     readonly content: string;
     readonly fragmentIndex: number;
     readonly charStart?: number;
@@ -113,6 +200,7 @@ async function insertFragment(
     `
       INSERT INTO episodic_memory (
         namespace_id,
+        session_id,
         role,
         content,
         occurred_at,
@@ -124,13 +212,14 @@ async function insertFragment(
         token_count,
         metadata
       )
-      VALUES ($1, 'import', $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10::jsonb)
+      VALUES ($1, $2, 'import', $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb)
       ON CONFLICT (artifact_observation_id, source_chunk_id, role)
       DO NOTHING
       RETURNING id
     `,
     [
       options.namespaceId,
+      options.sessionId ?? null,
       options.content,
       options.occurredAt,
       options.capturedAt,
@@ -181,10 +270,11 @@ async function insertFragment(
           token_count,
           metadata
         )
-        VALUES ($1, $2, $3, NULL, 'import', $4, $5, $6, $7, $8, $9::jsonb, $10, $11::jsonb)
+        VALUES ($1, $2, $3, $4, 'import', $5, $6, $7, $8, $9, $10::jsonb, $11, $12::jsonb)
         ON CONFLICT (occurred_at, memory_id)
         DO UPDATE SET
           namespace_id = EXCLUDED.namespace_id,
+          session_id = EXCLUDED.session_id,
           content = EXCLUDED.content,
           captured_at = EXCLUDED.captured_at,
           artifact_id = EXCLUDED.artifact_id,
@@ -198,6 +288,7 @@ async function insertFragment(
         options.occurredAt,
         sourceMemoryId,
         options.namespaceId,
+        options.sessionId ?? null,
         options.content,
         options.capturedAt,
         options.artifactId,
@@ -307,6 +398,7 @@ export async function ingestArtifact(request: IngestRequest): Promise<IngestResu
         artifactId: observation.artifactId,
         observationId: observation.observationId,
         namespaceId: request.namespaceId,
+        sessionId: request.sessionId,
         content: fragment.text,
         fragmentIndex: fragment.fragmentIndex,
         charStart: fragment.charStart,

@@ -74,6 +74,7 @@ export interface RecallResult {
     | "semantic_memory"
     | "procedural_memory"
     | "relationship_memory"
+    | "narrative_event"
     | "memory_candidate"
     | "artifact_derivation"
     | "relationship_candidate"

@@ -1,13 +1,41 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import cytoscape, { type Core, type ElementDefinition, type StylesheetCSS } from "cytoscape";
+import cytoscape, { type Core, type ElementDefinition, type LayoutOptions, type StylesheetCSS } from "cytoscape";
+import type { NodeSingular } from "cytoscape";
 import type { OpsRelationshipGraph, OpsRelationshipGraphEdge, OpsRelationshipGraphNode } from "@/lib/brain-runtime";
 
 type GraphDepth = 1 | 2 | "all";
+type DensityMode = "compact" | "balanced" | "spread";
+type DetailMode = "overview" | "detail";
+
+function truncateLabel(label: string, maxLength: number): string {
+  const normalized = label.trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
 
 function normalizeEntityType(entityType: string): string {
   return entityType.trim().toLowerCase();
+}
+
+function isSyntheticClusterId(nodeId: string): boolean {
+  return nodeId.startsWith("cluster:");
+}
+
+function densityMultiplier(mode: DensityMode): number {
+  switch (mode) {
+    case "compact":
+      return 0.88;
+    case "balanced":
+      return 0.96;
+    case "spread":
+      return 1.06;
+    default:
+      return 1;
+  }
 }
 
 function entityPalette(entityType: string): {
@@ -51,6 +79,15 @@ function entityPalette(entityType: string): {
       stroke: "#fda4af",
       glow: "rgba(244, 63, 94, 0.20)",
       chip: "border-rose-400/20 bg-rose-400/10 text-rose-100"
+    };
+  }
+
+  if (normalized === "cluster") {
+    return {
+      fill: "#1e293b",
+      stroke: "#64748b",
+      glow: "rgba(100, 116, 139, 0.16)",
+      chip: "border-slate-500/20 bg-slate-500/10 text-slate-200"
     };
   }
 
@@ -106,57 +143,251 @@ function visibleNodeIds(graph: OpsRelationshipGraph, focusId: string | null, dep
   return visited;
 }
 
-function makeElements(
-  nodes: readonly OpsRelationshipGraphNode[],
-  edges: readonly OpsRelationshipGraphEdge[],
-  focusId: string | null,
-  depth: GraphDepth
-): ElementDefinition[] {
-  const visible = visibleNodeIds({ namespaceId: "", selectedEntity: undefined, nodes, edges }, focusId, depth);
-  const visibleEdges = edges.filter((edge) => visible.has(edge.subjectId) && visible.has(edge.objectId));
-
-  return [
-    ...nodes
-      .filter((node) => visible.has(node.id))
-      .map<ElementDefinition>((node) => ({
-        data: {
-          id: node.id,
-          label: node.name,
-          entityType: node.entityType,
-          degree: node.degree,
-          mentionCount: node.mentionCount,
-          color: entityPalette(node.entityType).fill,
-          stroke: entityPalette(node.entityType).stroke,
-          glow: entityPalette(node.entityType).glow,
-          size: 28 + Math.min(node.degree, 8) * 3 + Math.min(node.mentionCount, 20) * 0.35
-        },
-        classes: node.id === focusId ? "focused" : ""
-      })),
-    ...visibleEdges.map<ElementDefinition>((edge) => ({
-      data: {
-        id: edge.id,
-        source: edge.subjectId,
-        target: edge.objectId,
-        label: edge.predicate,
-        confidence: edge.confidence,
-        width: 1.6 + Math.min(edge.confidence, 1) * 2.4
-      }
-    }))
-  ];
-}
-
 function nodeById(graph: OpsRelationshipGraph, id: string | null): OpsRelationshipGraphNode | null {
-  if (!id) {
+  if (!id || isSyntheticClusterId(id)) {
     return null;
   }
   return graph.nodes.find((node) => node.id === id) ?? null;
 }
 
 function edgeCountForNode(graph: OpsRelationshipGraph, nodeId: string | null): number {
-  if (!nodeId) {
+  if (!nodeId || isSyntheticClusterId(nodeId)) {
     return 0;
   }
   return graph.edges.filter((edge) => edge.subjectId === nodeId || edge.objectId === nodeId).length;
+}
+
+function visibleLeafClusters(
+  nodes: readonly OpsRelationshipGraphNode[],
+  edges: readonly OpsRelationshipGraphEdge[],
+  focusId: string | null,
+  depth: GraphDepth,
+  detailMode: DetailMode
+): Map<string, readonly OpsRelationshipGraphNode[]> {
+  const visible = visibleNodeIds({ namespaceId: "", selectedEntity: undefined, nodes, edges }, focusId, depth);
+  const visibleNodes = nodes.filter((node) => visible.has(node.id));
+
+  if (focusId || depth !== "all" || detailMode === "detail" || visibleNodes.length < 14) {
+    return new Map();
+  }
+
+  const nodesById = new Map(visibleNodes.map((node) => [node.id, node]));
+  const neighbors = buildAdjacency({ namespaceId: "", selectedEntity: undefined, nodes, edges });
+  const clusters = new Map<string, OpsRelationshipGraphNode[]>();
+
+  for (const node of visibleNodes) {
+    if (node.degree !== 1 || node.mentionCount > 1 || node.isSelected) {
+      continue;
+    }
+
+    const [hubId] = [...(neighbors.get(node.id) ?? [])];
+    if (!hubId) {
+      continue;
+    }
+    const hub = nodesById.get(hubId);
+    if (!hub || hub.degree < 3) {
+      continue;
+    }
+
+    const bucket = clusters.get(hubId) ?? [];
+    bucket.push(node);
+    clusters.set(hubId, bucket);
+  }
+
+  for (const [hubId, bucket] of [...clusters.entries()]) {
+    if (bucket.length < 2) {
+      clusters.delete(hubId);
+    }
+  }
+
+  return clusters;
+}
+
+function makeElements(
+  nodes: readonly OpsRelationshipGraphNode[],
+  edges: readonly OpsRelationshipGraphEdge[],
+  focusId: string | null,
+  depth: GraphDepth,
+  detailMode: DetailMode
+): ElementDefinition[] {
+  const visible = visibleNodeIds({ namespaceId: "", selectedEntity: undefined, nodes, edges }, focusId, depth);
+  const visibleEdges = edges.filter((edge) => visible.has(edge.subjectId) && visible.has(edge.objectId));
+  const visibleNodes = nodes.filter((node) => visible.has(node.id));
+  const denseWholeGraph = !focusId && depth === "all" && visibleNodes.length >= 14;
+  const clustersByHub = visibleLeafClusters(nodes, edges, focusId, depth, detailMode);
+  const clusteredLeafIds = new Set<string>();
+
+  for (const bucket of clustersByHub.values()) {
+    for (const node of bucket) {
+      clusteredLeafIds.add(node.id);
+    }
+  }
+
+  const drawableEdges = visibleEdges.filter((edge) => !clusteredLeafIds.has(edge.subjectId) && !clusteredLeafIds.has(edge.objectId));
+
+  return [
+    ...visibleNodes
+      .filter((node) => !clusteredLeafIds.has(node.id))
+      .map<ElementDefinition>((node) => ({
+        data: {
+          id: node.id,
+          label: truncateLabel(node.name, denseWholeGraph ? 18 : 24),
+          fullLabel: node.name,
+          shortLabel: truncateLabel(node.name, denseWholeGraph ? 16 : 20),
+          compactLabel:
+            denseWholeGraph && node.degree <= 1 && node.mentionCount <= 1 && !node.isSelected
+              ? ""
+              : truncateLabel(node.name, denseWholeGraph ? 13 : 16),
+          entityType: node.entityType,
+          degree: node.degree,
+          mentionCount: node.mentionCount,
+          color: entityPalette(node.entityType).fill,
+          stroke: entityPalette(node.entityType).stroke,
+          glow: entityPalette(node.entityType).glow,
+          isCluster: false,
+          size:
+            (denseWholeGraph ? 22 : 28) +
+            Math.min(node.degree, 8) * (denseWholeGraph ? 2.4 : 3) +
+            Math.min(node.mentionCount, 20) * (denseWholeGraph ? 0.2 : 0.35)
+        },
+        classes: node.id === focusId ? "focused" : ""
+      })),
+    ...[...clustersByHub.entries()].map<ElementDefinition>(([hubId, bucket]) => ({
+      data: {
+        id: `cluster:${hubId}`,
+        label: `+${bucket.length}`,
+        fullLabel: `${bucket.length} nearby nodes`,
+        shortLabel: `+${bucket.length}`,
+        compactLabel: `+${bucket.length}`,
+        entityType: "cluster",
+        degree: 1,
+        mentionCount: bucket.length,
+        color: entityPalette("cluster").fill,
+        stroke: entityPalette("cluster").stroke,
+        glow: entityPalette("cluster").glow,
+        isCluster: true,
+        hubId,
+        size: Math.min(36, 18 + bucket.length * 3)
+      },
+      classes: "cluster"
+    })),
+    ...drawableEdges.map<ElementDefinition>((edge) => ({
+      data: {
+        id: edge.id,
+        source: edge.subjectId,
+        target: edge.objectId,
+        label: focusId && (edge.subjectId === focusId || edge.objectId === focusId) ? edge.predicate : "",
+        confidence: edge.confidence,
+        width: 1.6 + Math.min(edge.confidence, 1) * 2.4
+      }
+    })),
+    ...[...clustersByHub.entries()].map<ElementDefinition>(([hubId]) => ({
+      data: {
+        id: `cluster-edge:${hubId}`,
+        source: hubId,
+        target: `cluster:${hubId}`,
+        label: "",
+        confidence: 0.4,
+        width: 1.2
+      },
+      classes: "cluster-edge"
+    }))
+  ];
+}
+
+function applyNodeLabels(cy: Core, detailMode: DetailMode, focusId: string | null): void {
+  const fullLabelMode = detailMode === "detail" || cy.zoom() >= 1.08;
+
+  cy.nodes().forEach((node) => {
+    const nodeId = node.id();
+    const isFocused = nodeId === focusId;
+    const isHovered = node.hasClass("hovered");
+    const isCluster = Boolean(node.data("isCluster"));
+
+    let label = "";
+    if (fullLabelMode || isHovered || isFocused) {
+      label = String(node.data("fullLabel") ?? "");
+    } else {
+      label = String(node.data("compactLabel") ?? node.data("shortLabel") ?? "");
+    }
+
+    if (isCluster && !fullLabelMode && !isHovered) {
+      label = String(node.data("shortLabel") ?? "");
+    }
+
+    node.data("displayLabel", label);
+  });
+}
+
+function layoutForState(
+  focusId: string | null,
+  depth: GraphDepth,
+  visibleNodeCount: number,
+  visibleEdgeCount: number,
+  density: DensityMode,
+  detailMode: DetailMode
+): LayoutOptions {
+  const densityScale = densityMultiplier(density);
+
+  if (focusId && depth !== "all") {
+    const crowdedFocus = visibleNodeCount >= 10;
+    return {
+      name: "breadthfirst",
+      roots: [focusId],
+      directed: false,
+      animate: true,
+      fit: true,
+      padding: (crowdedFocus ? 112 : 96) * densityScale,
+      spacingFactor: (depth === 1 ? (crowdedFocus ? 2.6 : 2.1) : crowdedFocus ? 2.2 : 1.8) * densityScale,
+      avoidOverlap: true,
+      nodeDimensionsIncludeLabels: true
+    };
+  }
+
+  const denseWholeGraph = visibleNodeCount >= 14 || visibleEdgeCount >= 16;
+  if (!focusId && depth === "all" && denseWholeGraph && detailMode === "overview") {
+    return {
+      name: "concentric",
+      animate: true,
+      fit: true,
+      padding: 88 * densityScale,
+      avoidOverlap: true,
+      minNodeSpacing: 38 * densityScale,
+      spacingFactor: 1.02 * densityScale,
+      levelWidth: () => 2.2,
+      concentric: (node: NodeSingular) => {
+        const isCluster = Boolean(node.data("isCluster"));
+        if (isCluster) {
+          return 1;
+        }
+        const degree = Number(node.data("degree") ?? 0);
+        const mentions = Number(node.data("mentionCount") ?? 0);
+        return degree * 5 + Math.min(mentions, 8);
+      }
+    } as unknown as LayoutOptions;
+  }
+
+  const repulsion = (6200 + visibleNodeCount * 300 + visibleEdgeCount * 140) * densityScale;
+  const idealEdgeLength = (118 + Math.min(visibleNodeCount, 28) * (denseWholeGraph ? 3.4 : 2)) * densityScale;
+
+  return {
+    name: "cose",
+    animate: true,
+    randomize: true,
+    padding: (denseWholeGraph ? 118 : 88) * densityScale,
+    nodeRepulsion: repulsion,
+    idealEdgeLength,
+    edgeElasticity: denseWholeGraph ? 0.08 : 0.16,
+    gravity: denseWholeGraph ? 0.05 : 0.14,
+    nestingFactor: 0.8,
+    componentSpacing: (denseWholeGraph ? 220 : 130) * densityScale,
+    nodeOverlap: denseWholeGraph ? 24 : 12,
+    nodeDimensionsIncludeLabels: true,
+    numIter: denseWholeGraph ? 2600 : 1500,
+    initialTemp: denseWholeGraph ? 260 : 180,
+    coolingFactor: denseWholeGraph ? 0.95 : 0.94,
+    minTemp: 1
+  };
 }
 
 export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGraph }) {
@@ -166,8 +397,13 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
     () => graph.nodes.find((node) => node.isSelected)?.id ?? null,
     [graph.nodes]
   );
+  const detailModeRef = useRef<DetailMode>(initialFocusId ? "detail" : "overview");
+  const preserveViewportRef = useRef(false);
+  const viewportRef = useRef<{ readonly zoom: number; readonly pan: { readonly x: number; readonly y: number } } | null>(null);
   const [focusId, setFocusId] = useState<string | null>(initialFocusId);
-  const [depth, setDepth] = useState<GraphDepth>(focusId ? 1 : "all");
+  const [depth, setDepth] = useState<GraphDepth>(focusId ? 2 : "all");
+  const [density, setDensity] = useState<DensityMode>("balanced");
+  const [detailMode, setDetailMode] = useState<DetailMode>(focusId ? "detail" : "overview");
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
 
   const focusNode = nodeById(graph, focusId);
@@ -178,16 +414,20 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
   const rootLabel = focusNode?.name ?? "whole atlas";
 
   useEffect(() => {
+    detailModeRef.current = detailMode;
+  }, [detailMode]);
+
+  useEffect(() => {
     if (!containerRef.current) {
       return undefined;
     }
 
-    const elements = makeElements(graph.nodes, graph.edges, focusId, depth);
+    const elements = makeElements(graph.nodes, graph.edges, focusId, depth, detailMode);
     const graphStyles = [
       {
         selector: "node",
         style: {
-          label: "data(label)",
+          label: "data(displayLabel)",
           "background-color": "data(color)",
           "border-color": "data(stroke)",
           "border-width": 2,
@@ -195,24 +435,29 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
           height: "data(size)",
           color: "#f8fafc",
           "text-wrap": "wrap",
-          "text-max-width": 120,
-          "font-size": 12,
-          "font-family": "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+          "text-max-width": 110,
+          "font-size": 11,
           "text-valign": "center",
           "text-halign": "center",
+          "min-zoomed-font-size": 9,
           "overlay-opacity": 0,
           "text-outline-color": "#020617",
           "text-outline-width": 3
         }
       },
       {
+        selector: "node.cluster",
+        style: {
+          "border-style": "dashed",
+          "font-size": 10,
+          color: "#cbd5e1"
+        }
+      },
+      {
         selector: "node.focused",
         style: {
           "border-width": 4,
-          "border-color": "#fef08a",
-          "shadow-blur": 28,
-          "shadow-color": "#67e8f9",
-          "shadow-opacity": 0.25
+          "border-color": "#fef08a"
         }
       },
       {
@@ -226,13 +471,20 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
           "curve-style": "bezier",
           color: "#cbd5e1",
           "font-size": 10,
-          "font-family": "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
           "text-background-color": "rgba(2, 6, 23, 0.88)",
           "text-background-opacity": 1,
           "text-background-padding": 4,
           "text-border-color": "rgba(255,255,255,0.05)",
           "text-border-opacity": 1,
           "text-border-width": 1
+        }
+      },
+      {
+        selector: "edge.cluster-edge",
+        style: {
+          "line-style": "dashed",
+          "target-arrow-shape": "none",
+          "line-color": "rgba(148, 163, 184, 0.28)"
         }
       },
       {
@@ -243,27 +495,54 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
         }
       }
     ] as unknown as StylesheetCSS[];
+
     const cy = cytoscape({
       container: containerRef.current,
       elements,
-      layout: {
-        name: "cose",
-        animate: true,
-        fit: true,
-        padding: 56,
-        nodeRepulsion: 8200,
-        idealEdgeLength: 130,
-        edgeElasticity: 0.18
-      },
-      style: graphStyles
+      style: graphStyles,
+      minZoom: 0.26,
+      maxZoom: 2.4
     });
+
+    cy.one("layoutstop", () => {
+      const preservedViewport = preserveViewportRef.current ? viewportRef.current : null;
+      if (preservedViewport) {
+        cy.zoom(preservedViewport.zoom);
+        cy.pan(preservedViewport.pan);
+        preserveViewportRef.current = false;
+      } else {
+        const denseWholeGraph = !focusId && visibleNodeCount >= 14;
+        const padding = focusId && depth !== "all" ? 96 : denseWholeGraph ? 118 : 84;
+        cy.fit(cy.elements(), padding);
+        if (!focusId) {
+          cy.zoom(Math.min(cy.zoom(), denseWholeGraph ? 0.96 : 0.98));
+        }
+      }
+      applyNodeLabels(cy, detailMode, focusId);
+    });
+
+    cy.layout({
+      ...layoutForState(focusId, depth, visibleNodeCount, visibleEdgeCount, density, detailMode),
+      fit: false
+    } as LayoutOptions).run();
 
     cy.on("tap", "node", (event) => {
       const node = event.target;
-      const nextId = node.id();
-      setFocusId(nextId);
-      setSelectedEdgeId(null);
+      if (Boolean(node.data("isCluster"))) {
+        const hubId = String(node.data("hubId") ?? "");
+        if (hubId) {
+          setFocusId(hubId);
+          setDepth(1);
+          setDetailMode("detail");
+          setSelectedEdgeId(null);
+        }
+        return;
+      }
+
+      setFocusId(node.id());
       setDepth(1);
+      setDetailMode("detail");
+      setSelectedEdgeId(null);
     });
 
     cy.on("tap", "edge", (event) => {
@@ -276,22 +555,79 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
       }
     });
 
+    cy.on("mouseover", "node", (event) => {
+      event.target.addClass("hovered");
+      applyNodeLabels(cy, detailMode, focusId);
+    });
+
+    cy.on("mouseout", "node", (event) => {
+      event.target.removeClass("hovered");
+      applyNodeLabels(cy, detailMode, focusId);
+    });
+
+    cy.on("zoom", () => {
+      const nextMode = cy.zoom() >= 1.08 ? "detail" : "overview";
+      applyNodeLabels(cy, nextMode, focusId);
+      if (focusId || depth !== "all" || nextMode === detailModeRef.current) {
+        return;
+      }
+      viewportRef.current = {
+        zoom: cy.zoom(),
+        pan: cy.pan()
+      };
+      preserveViewportRef.current = true;
+      detailModeRef.current = nextMode;
+      setDetailMode(nextMode);
+    });
+
     cyRef.current = cy;
 
     return () => {
+      viewportRef.current = {
+        zoom: cy.zoom(),
+        pan: cy.pan()
+      };
       cy.destroy();
       cyRef.current = null;
     };
-  }, [graph, focusId, depth]);
+  }, [graph, focusId, depth, density, detailMode, visibleNodeCount, visibleEdgeCount]);
+
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) {
+      return;
+    }
+
+    cy.batch(() => {
+      cy.edges().unselect();
+      if (selectedEdgeId) {
+        const edge = cy.getElementById(selectedEdgeId);
+        if (edge.nonempty()) {
+          edge.select();
+        }
+      }
+    });
+  }, [selectedEdgeId]);
 
   function resetToRoot(): void {
     setFocusId(initialFocusId);
     setSelectedEdgeId(null);
-    setDepth(initialFocusId ? 1 : "all");
+    setDepth(initialFocusId ? 2 : "all");
+    setDetailMode(initialFocusId ? "detail" : "overview");
+  }
+
+  function untangleGraph(): void {
+    const cy = cyRef.current;
+    if (!cy) {
+      return;
+    }
+    cy.layout(layoutForState(focusId, depth, visibleNodeCount, visibleEdgeCount, density, detailMode)).run();
+    setSelectedEdgeId(null);
   }
 
   function showWholeGraph(): void {
     setDepth("all");
+    setDetailMode("overview");
     setSelectedEdgeId(null);
     window.requestAnimationFrame(() => {
       const cy = cyRef.current;
@@ -299,7 +635,7 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
         return;
       }
       cy.animate({
-        fit: { eles: cy.elements(), padding: 56 },
+        fit: { eles: cy.elements(), padding: 72 },
         duration: 260
       });
     });
@@ -316,6 +652,7 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
       }
       return "all";
     });
+    setDetailMode("detail");
     setSelectedEdgeId(null);
   }
 
@@ -347,10 +684,26 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.34em] text-slate-400">Interactive graph atlas</p>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-300">
-            Start wide, click a node like Steve to re-root around it, expand its neighborhood, then reset back to the primary graph.
+            Start wide, then zoom or click inward for full labels. In the wide atlas, tiny leaf nodes collapse into nearby clusters so the core relationship structure stays readable.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <div className="flex items-center gap-1 rounded-full border border-white/10 bg-white/5 p-1">
+            {(["compact", "balanced", "spread"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setDensity(option)}
+                className={`rounded-full px-3 py-1.5 text-xs uppercase tracking-[0.22em] transition ${
+                  density === option
+                    ? "border border-cyan-400/20 bg-cyan-400/14 text-cyan-100"
+                    : "text-slate-300 hover:bg-white/6"
+                }`}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
           <span className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200">
             root {rootLabel}
           </span>
@@ -377,6 +730,13 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
           </button>
           <button
             type="button"
+            onClick={untangleGraph}
+            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200 transition hover:border-white/14 hover:bg-white/8"
+          >
+            Untangle
+          </button>
+          <button
+            type="button"
             onClick={resetToRoot}
             className="rounded-full border border-lime-300/20 bg-lime-300/8 px-4 py-2 text-sm text-lime-100 transition hover:border-lime-300/28 hover:bg-lime-300/12"
           >
@@ -392,6 +752,10 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
             <span className="rounded-full border border-white/8 bg-white/5 px-3 py-1">visible edges {visibleEdgeCount}</span>
             <span className="rounded-full border border-white/8 bg-white/5 px-3 py-1">
               depth {depth === "all" ? "full" : `${depth}-hop`}
+            </span>
+            <span className="rounded-full border border-white/8 bg-white/5 px-3 py-1">density {density}</span>
+            <span className="rounded-full border border-white/8 bg-white/5 px-3 py-1">
+              {detailMode === "detail" ? "full labels" : "overview labels"}
             </span>
           </div>
           <div ref={containerRef} className="h-[680px] w-full rounded-[24px] bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.05),transparent_28%),linear-gradient(180deg,_rgba(2,6,23,0.94)_0%,_rgba(6,10,18,0.98)_100%)]" />
@@ -422,7 +786,7 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
               )}
             </div>
             <p className="mt-4 text-sm leading-7 text-slate-300">
-              Click a node to tighten the graph around it. Expand steps outward from the current focus, then reset back to the initial root when you want the original view again.
+              Hover a node for its full label, click to re-root, and zoom in to reveal the finer leaf structure hidden in the overview.
             </p>
           </div>
 

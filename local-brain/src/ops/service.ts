@@ -46,6 +46,17 @@ interface RelationshipGraphRow {
   readonly metadata: Record<string, unknown>;
 }
 
+interface FocusEventGraphRow {
+  readonly event_id: string;
+  readonly event_label: string;
+  readonly event_kind: string;
+  readonly occurred_at: string;
+  readonly entity_id: string;
+  readonly entity_name: string;
+  readonly entity_type: string;
+  readonly member_role: string;
+}
+
 interface ClarificationInboxSummaryRow {
   readonly ambiguity_type: string | null;
   readonly total: string;
@@ -175,6 +186,111 @@ export interface OpsClarificationInbox {
   readonly items: readonly OpsClarificationInboxItem[];
 }
 
+export interface OpsIdentityConflictEntity {
+  readonly entityId: string;
+  readonly namespaceId: string;
+  readonly name: string;
+  readonly entityType: string;
+  readonly aliases: readonly string[];
+  readonly mentionCount: number;
+  readonly relationshipCount: number;
+  readonly identityProfileId?: string | null;
+}
+
+export interface OpsIdentityConflict {
+  readonly namespaceId: string;
+  readonly crossLane: boolean;
+  readonly confidence: number;
+  readonly suggestedCanonicalName: string;
+  readonly reasons: readonly string[];
+  readonly sharedNeighborNames: readonly string[];
+  readonly sharedPredicates: readonly string[];
+  readonly left: OpsIdentityConflictEntity;
+  readonly right: OpsIdentityConflictEntity;
+}
+
+export interface OpsAmbiguityWorkbench {
+  readonly namespaceId: string;
+  readonly inbox: OpsClarificationInbox;
+  readonly identityConflicts: readonly OpsIdentityConflict[];
+  readonly identityHistory: readonly OpsIdentityConflictHistoryItem[];
+}
+
+export interface OpsNamespaceChoice {
+  readonly namespaceId: string;
+  readonly activityAt: string;
+  readonly category: "durable" | "system";
+  readonly artifactCount: number;
+  readonly relationshipCount: number;
+  readonly hasSelfProfile: boolean;
+}
+
+export interface OpsNamespaceCatalog {
+  readonly defaultNamespaceId?: string;
+  readonly namespaces: readonly OpsNamespaceChoice[];
+}
+
+interface EntityConflictRow {
+  readonly entity_id: string;
+  readonly namespace_id: string;
+  readonly canonical_name: string;
+  readonly entity_type: string;
+  readonly aliases: readonly string[] | null;
+  readonly mention_count: string;
+  readonly relationship_count: string;
+  readonly identity_profile_id: string | null;
+}
+
+interface EntityNeighborRow {
+  readonly entity_id: string;
+  readonly neighbor_name: string;
+  readonly neighbor_label: string;
+  readonly predicate: string;
+}
+
+interface IdentityConflictDecisionRow {
+  readonly entity_a_id: string;
+  readonly entity_b_id: string;
+}
+
+interface IdentityConflictHistoryRow {
+  readonly decision_id: string;
+  readonly decision: "merge" | "keep_separate";
+  readonly canonical_name: string | null;
+  readonly note: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly left_entity_id: string;
+  readonly left_namespace_id: string;
+  readonly left_name: string;
+  readonly left_entity_type: string;
+  readonly right_entity_id: string;
+  readonly right_namespace_id: string;
+  readonly right_name: string;
+  readonly right_entity_type: string;
+}
+
+export interface OpsIdentityConflictHistoryItem {
+  readonly decisionId: string;
+  readonly decision: "merge" | "keep_separate";
+  readonly canonicalName?: string | null;
+  readonly note?: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly left: {
+    readonly entityId: string;
+    readonly namespaceId: string;
+    readonly name: string;
+    readonly entityType: string;
+  };
+  readonly right: {
+    readonly entityId: string;
+    readonly namespaceId: string;
+    readonly name: string;
+    readonly entityType: string;
+  };
+}
+
 function toCount(rows: readonly CountRow[]): number {
   return Number(rows[0]?.total ?? 0);
 }
@@ -210,6 +326,124 @@ function summarizeQueues(rows: readonly QueueStatusRow[]): QueueSummary {
   }
 
   return summary;
+}
+
+function normalizeEntityLabel(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/gu, " ").trim();
+}
+
+function phoneticKey(value: string): string {
+  const normalized = value.toLowerCase().replace(/[^a-z]/gu, "");
+  if (!normalized) {
+    return "";
+  }
+
+  const first = normalized[0] ?? "";
+  const tail = normalized
+    .slice(1)
+    .replace(/[aeiouyhw]/g, "")
+    .replace(/(.)\1+/g, "$1");
+
+  return `${first}${tail}`;
+}
+
+function bigrams(value: string): string[] {
+  const normalized = ` ${normalizeEntityLabel(value)} `;
+  const grams: string[] = [];
+  for (let index = 0; index < normalized.length - 1; index += 1) {
+    grams.push(normalized.slice(index, index + 2));
+  }
+  return grams;
+}
+
+function diceSimilarity(left: string, right: string): number {
+  const a = bigrams(left);
+  const b = bigrams(right);
+  if (a.length === 0 || b.length === 0) {
+    return 0;
+  }
+
+  const counts = new Map<string, number>();
+  for (const gram of a) {
+    counts.set(gram, (counts.get(gram) ?? 0) + 1);
+  }
+
+  let overlap = 0;
+  for (const gram of b) {
+    const current = counts.get(gram) ?? 0;
+    if (current > 0) {
+      overlap += 1;
+      counts.set(gram, current - 1);
+    }
+  }
+
+  return (2 * overlap) / (a.length + b.length);
+}
+
+function uniqueNormalized(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function canonicalChoice(left: string, right: string): string {
+  if (left.length !== right.length) {
+    return left.length >= right.length ? left : right;
+  }
+  return left.localeCompare(right) <= 0 ? left : right;
+}
+
+function lexicalConflictScore(leftNames: readonly string[], rightNames: readonly string[]): {
+  readonly score: number;
+  readonly reasons: string[];
+} {
+  let bestScore = 0;
+  let matchedPhonetic = false;
+
+  for (const left of leftNames) {
+    for (const right of rightNames) {
+      const dice = diceSimilarity(left, right);
+      const leftKey = phoneticKey(left);
+      const rightKey = phoneticKey(right);
+      const phoneticMatch = Boolean(leftKey) && leftKey === rightKey;
+      const score = Math.max(dice, phoneticMatch ? 0.88 : 0);
+      bestScore = Math.max(bestScore, score);
+      matchedPhonetic = matchedPhonetic || phoneticMatch;
+    }
+  }
+
+  const reasons: string[] = [];
+  if (matchedPhonetic) {
+    reasons.push("phonetic collision");
+  }
+  if (bestScore >= 0.92) {
+    reasons.push("strong lexical overlap");
+  } else if (bestScore >= 0.8) {
+    reasons.push("close lexical overlap");
+  }
+
+  return {
+    score: bestScore,
+    reasons
+  };
+}
+
+function namespaceCategory(namespaceId: string): "durable" | "system" {
+  return /^(eval_|benchmark_|narrative_)/.test(namespaceId) ? "system" : "durable";
+}
+
+function namespaceLanePriority(namespaceId: string): number {
+  if (namespaceId === "personal") {
+    return 0;
+  }
+
+  if (/(^|[_:-])(personal|friends?|home|life|shared)([_:-]|$)/i.test(namespaceId)) {
+    return 1;
+  }
+
+  if (/(^|[_:-])(project|work|client)([_:-]|$)/i.test(namespaceId)) {
+    return 3;
+  }
+
+  return 2;
 }
 
 export async function getOpsOverview(): Promise<OpsOverview> {
@@ -325,6 +559,120 @@ export async function getOpsOverview(): Promise<OpsOverview> {
   };
 }
 
+export async function getOpsNamespaceCatalog(limit = 16): Promise<OpsNamespaceCatalog> {
+  const rows = await queryRows<{
+    readonly namespace_id: string;
+    readonly activity_at: string;
+    readonly artifact_count: string;
+    readonly relationship_count: string;
+    readonly has_self_profile: boolean;
+  }>(
+    `
+      WITH namespace_activity AS (
+        SELECT namespace_id, max(activity_at) AS activity_at
+        FROM (
+          SELECT namespace_id, max(last_seen_at) AS activity_at
+          FROM artifacts
+          GROUP BY namespace_id
+
+          UNION ALL
+
+          SELECT namespace_id, max(created_at) AS activity_at
+          FROM claim_candidates
+          GROUP BY namespace_id
+
+          UNION ALL
+
+          SELECT namespace_id, max(created_at) AS activity_at
+          FROM relationship_candidates
+          GROUP BY namespace_id
+
+          UNION ALL
+
+          SELECT namespace_id, max(valid_from) AS activity_at
+          FROM relationship_memory
+          GROUP BY namespace_id
+
+          UNION ALL
+
+          SELECT namespace_id, max(updated_at) AS activity_at
+          FROM procedural_memory
+          GROUP BY namespace_id
+
+          UNION ALL
+
+          SELECT namespace_id, max(valid_from) AS activity_at
+          FROM semantic_memory
+          GROUP BY namespace_id
+        ) activity_sources
+        GROUP BY namespace_id
+      ),
+      artifact_counts AS (
+        SELECT namespace_id, COUNT(*)::text AS artifact_count
+        FROM artifacts
+        GROUP BY namespace_id
+      ),
+      relationship_counts AS (
+        SELECT namespace_id, COUNT(*)::text AS relationship_count
+        FROM relationship_memory
+        WHERE status = 'active'
+          AND valid_until IS NULL
+        GROUP BY namespace_id
+      )
+      SELECT
+        na.namespace_id,
+        na.activity_at::text,
+        COALESCE(ac.artifact_count, '0') AS artifact_count,
+        COALESCE(rc.relationship_count, '0') AS relationship_count,
+        EXISTS (
+          SELECT 1
+          FROM namespace_self_bindings nsb
+          WHERE nsb.namespace_id = na.namespace_id
+        ) AS has_self_profile
+      FROM namespace_activity na
+      LEFT JOIN artifact_counts ac ON ac.namespace_id = na.namespace_id
+      LEFT JOIN relationship_counts rc ON rc.namespace_id = na.namespace_id
+      ORDER BY
+        CASE WHEN na.namespace_id ~ '^(eval_|benchmark_|narrative_)' THEN 1 ELSE 0 END ASC,
+        CASE
+          WHEN na.namespace_id = 'personal' THEN 0
+          WHEN na.namespace_id ~* '(^|[_:-])(personal|friends?|home|life|shared)([_:-]|$)' THEN 1
+          WHEN na.namespace_id ~* '(^|[_:-])(project|work|client)([_:-]|$)' THEN 3
+          ELSE 2
+        END ASC,
+        EXISTS (
+          SELECT 1
+          FROM namespace_self_bindings nsb
+          WHERE nsb.namespace_id = na.namespace_id
+        ) DESC,
+        na.activity_at DESC,
+        na.namespace_id ASC
+      LIMIT $1
+    `,
+    [limit]
+  );
+
+  const namespaces = rows.map((row) => ({
+    namespaceId: row.namespace_id,
+    activityAt: row.activity_at,
+    category: namespaceCategory(row.namespace_id),
+    artifactCount: Number(row.artifact_count),
+    relationshipCount: Number(row.relationship_count),
+    hasSelfProfile: row.has_self_profile
+  }));
+
+  const defaultNamespaceId =
+    namespaces.find((item) => item.category === "durable" && namespaceLanePriority(item.namespaceId) <= 1)?.namespaceId ??
+    namespaces.find((item) => item.category === "durable" && item.hasSelfProfile)?.namespaceId ??
+    namespaces.find((item) => item.category === "durable")?.namespaceId ??
+    namespaces[0]?.namespaceId;
+
+  return {
+    defaultNamespaceId,
+    namespaces
+  };
+}
+
 function parseSuggestedMatches(metadata: Record<string, unknown>): string[] {
   const raw = metadata.suggested_matches;
   if (!Array.isArray(raw)) {
@@ -427,6 +775,285 @@ export async function getOpsClarificationInbox(namespaceId: string, limit = 40):
         sourceUri: row.source_uri
       };
     })
+  };
+}
+
+export async function getOpsIdentityConflicts(namespaceId: string, limit = 20): Promise<readonly OpsIdentityConflict[]> {
+  const namespaceCatalog = await getOpsNamespaceCatalog(64);
+  const scopedNamespaceIds = namespaceCatalog.namespaces
+    .filter((item) => item.category === "durable")
+    .map((item) => item.namespaceId);
+  if (!scopedNamespaceIds.includes(namespaceId)) {
+    scopedNamespaceIds.unshift(namespaceId);
+  }
+
+  const [entityRows, neighborRows, decisionRows] = await Promise.all([
+    queryRows<EntityConflictRow>(
+      `
+      WITH mention_counts AS (
+        SELECT namespace_id, entity_id, COUNT(*)::text AS mention_count
+        FROM memory_entity_mentions
+        WHERE namespace_id = ANY($1::text[])
+        GROUP BY namespace_id, entity_id
+      ),
+      relationship_counts AS (
+        SELECT namespace_id, entity_id, COUNT(*)::text AS relationship_count
+        FROM (
+          SELECT namespace_id, subject_entity_id AS entity_id
+          FROM relationship_memory
+          WHERE namespace_id = ANY($1::text[])
+            AND status = 'active'
+            AND valid_until IS NULL
+          UNION ALL
+          SELECT namespace_id, object_entity_id AS entity_id
+          FROM relationship_memory
+          WHERE namespace_id = ANY($1::text[])
+            AND status = 'active'
+            AND valid_until IS NULL
+        ) edges
+        GROUP BY namespace_id, entity_id
+      )
+      SELECT
+        e.id::text AS entity_id,
+        e.namespace_id,
+        e.canonical_name,
+        e.entity_type,
+        COALESCE(array_agg(DISTINCT ea.alias) FILTER (WHERE ea.alias IS NOT NULL), ARRAY[]::text[]) AS aliases,
+        COALESCE(mc.mention_count, '0') AS mention_count,
+        COALESCE(rc.relationship_count, '0') AS relationship_count,
+        e.identity_profile_id::text
+      FROM entities e
+      LEFT JOIN entity_aliases ea ON ea.entity_id = e.id
+      LEFT JOIN mention_counts mc ON mc.entity_id = e.id AND mc.namespace_id = e.namespace_id
+      LEFT JOIN relationship_counts rc ON rc.entity_id = e.id AND rc.namespace_id = e.namespace_id
+      WHERE e.namespace_id = ANY($1::text[])
+        AND e.merged_into_entity_id IS NULL
+        AND e.entity_type IN ('person', 'place', 'org', 'project')
+      GROUP BY e.id, e.canonical_name, e.entity_type, mc.mention_count, rc.relationship_count
+      ORDER BY e.namespace_id, e.entity_type, e.canonical_name
+      `
+      ,
+      [scopedNamespaceIds]
+    ),
+    queryRows<EntityNeighborRow>(
+      `
+      SELECT
+        rel.entity_id::text AS entity_id,
+        rel.neighbor_name,
+        rel.neighbor_label,
+        rel.predicate
+      FROM (
+        SELECT
+          rm.subject_entity_id AS entity_id,
+          object_entity.canonical_name AS neighbor_name,
+          object_entity.normalized_name AS neighbor_label,
+          rm.predicate
+        FROM relationship_memory rm
+        JOIN entities object_entity ON object_entity.id = rm.object_entity_id
+        WHERE rm.namespace_id = ANY($1::text[])
+          AND rm.status = 'active'
+          AND rm.valid_until IS NULL
+        UNION ALL
+        SELECT
+          rm.object_entity_id AS entity_id,
+          subject.canonical_name AS neighbor_name,
+          subject.normalized_name AS neighbor_label,
+          rm.predicate
+        FROM relationship_memory rm
+        JOIN entities subject ON subject.id = rm.subject_entity_id
+        WHERE rm.namespace_id = ANY($1::text[])
+          AND rm.status = 'active'
+          AND rm.valid_until IS NULL
+      ) rel
+      `
+      ,
+      [scopedNamespaceIds]
+    ),
+    queryRows<IdentityConflictDecisionRow>(
+      `
+      SELECT entity_a_id::text, entity_b_id::text
+      FROM identity_conflict_decisions
+      `
+    )
+  ]);
+
+  const ignoredPairs = new Set(decisionRows.map((row) => `${row.entity_a_id}:${row.entity_b_id}`));
+
+  const entityMap = new Map(
+    entityRows.map((row) => [
+      row.entity_id,
+      {
+        entityId: row.entity_id,
+        namespaceId: row.namespace_id,
+        name: row.canonical_name,
+        entityType: row.entity_type,
+        aliases: uniqueNormalized([row.canonical_name, ...(row.aliases ?? [])]),
+        mentionCount: Number(row.mention_count),
+        relationshipCount: Number(row.relationship_count),
+        identityProfileId: row.identity_profile_id
+      } satisfies OpsIdentityConflictEntity
+    ] as const)
+  );
+
+  const focusEntities = [...entityMap.values()].filter((entity) => entity.namespaceId === namespaceId);
+  const otherEntities = [...entityMap.values()];
+
+  const neighborMap = new Map<string, Map<string, string>>();
+  const predicateMap = new Map<string, Set<string>>();
+
+  for (const row of neighborRows) {
+    if (!neighborMap.has(row.entity_id)) {
+      neighborMap.set(row.entity_id, new Map<string, string>());
+    }
+    if (!predicateMap.has(row.entity_id)) {
+      predicateMap.set(row.entity_id, new Set<string>());
+    }
+
+    neighborMap.get(row.entity_id)?.set(normalizeEntityLabel(row.neighbor_name), row.neighbor_name);
+    predicateMap.get(row.entity_id)?.add(row.predicate);
+  }
+
+  const results: OpsIdentityConflict[] = [];
+  const seenPairs = new Set<string>();
+
+  for (const left of focusEntities) {
+    for (const right of otherEntities) {
+      if (!left || !right || left.entityId === right.entityId || left.entityType !== right.entityType) {
+        continue;
+      }
+
+      const orderedPair = left.entityId.localeCompare(right.entityId) <= 0 ? `${left.entityId}:${right.entityId}` : `${right.entityId}:${left.entityId}`;
+      if (seenPairs.has(orderedPair) || ignoredPairs.has(orderedPair)) {
+        continue;
+      }
+      seenPairs.add(orderedPair);
+
+      if (left.identityProfileId && right.identityProfileId && left.identityProfileId === right.identityProfileId) {
+        continue;
+      }
+
+      const lexical = lexicalConflictScore(left.aliases, right.aliases);
+      const leftNeighbors = neighborMap.get(left.entityId) ?? new Map<string, string>();
+      const rightNeighbors = neighborMap.get(right.entityId) ?? new Map<string, string>();
+      const leftPredicates = predicateMap.get(left.entityId) ?? new Set<string>();
+      const rightPredicates = predicateMap.get(right.entityId) ?? new Set<string>();
+      const sharedNeighborLabels = [...leftNeighbors.keys()].filter((label) => rightNeighbors.has(label)).sort();
+      const sharedNeighborNames = sharedNeighborLabels
+        .map((label) => leftNeighbors.get(label) ?? rightNeighbors.get(label) ?? label)
+        .sort();
+      const sharedPredicates = [...leftPredicates].filter((predicate) => rightPredicates.has(predicate)).sort();
+
+      const neighborScore =
+        sharedNeighborNames.length === 0
+          ? 0
+          : Math.min(0.4, sharedNeighborNames.length * 0.16 + (sharedPredicates.length > 0 ? 0.08 : 0));
+
+      const profileHintScore = left.identityProfileId || right.identityProfileId ? 0.1 : 0;
+      const confidence = Math.min(0.99, lexical.score * 0.68 + neighborScore + profileHintScore);
+      const enoughSignal =
+        lexical.score >= 0.84 ||
+        (lexical.score >= 0.72 && sharedNeighborNames.length > 0) ||
+        (lexical.score >= 0.6 && sharedNeighborNames.length >= 2);
+
+      if (!enoughSignal || confidence < 0.72) {
+        continue;
+      }
+
+      const reasons = [
+        ...lexical.reasons,
+        ...(sharedNeighborNames.length > 0 ? [`shared neighbors: ${sharedNeighborNames.slice(0, 3).join(", ")}`] : []),
+        ...(sharedPredicates.length > 0 ? [`shared predicates: ${sharedPredicates.slice(0, 3).join(", ")}`] : []),
+        ...(left.namespaceId !== right.namespaceId ? ["cross-lane match candidate"] : [])
+      ];
+
+      results.push({
+        namespaceId,
+        crossLane: left.namespaceId !== right.namespaceId,
+        confidence,
+        suggestedCanonicalName: canonicalChoice(left.name, right.name),
+        reasons,
+        sharedNeighborNames,
+        sharedPredicates,
+        left,
+        right
+      });
+    }
+  }
+
+  return results
+    .sort((left, right) => {
+      const crossLaneDelta = Number(right.crossLane) - Number(left.crossLane);
+      if (crossLaneDelta !== 0) {
+        return crossLaneDelta;
+      }
+      return right.confidence - left.confidence || left.suggestedCanonicalName.localeCompare(right.suggestedCanonicalName);
+    })
+    .slice(0, limit);
+}
+
+export async function getOpsIdentityConflictHistory(namespaceId: string, limit = 20): Promise<readonly OpsIdentityConflictHistoryItem[]> {
+  const rows = await queryRows<IdentityConflictHistoryRow>(
+    `
+      SELECT
+        icd.id::text AS decision_id,
+        icd.decision,
+        icd.canonical_name,
+        icd.note,
+        icd.created_at::text,
+        icd.updated_at::text,
+        left_entity.id::text AS left_entity_id,
+        left_entity.namespace_id AS left_namespace_id,
+        left_entity.canonical_name AS left_name,
+        left_entity.entity_type AS left_entity_type,
+        right_entity.id::text AS right_entity_id,
+        right_entity.namespace_id AS right_namespace_id,
+        right_entity.canonical_name AS right_name,
+        right_entity.entity_type AS right_entity_type
+      FROM identity_conflict_decisions icd
+      JOIN entities left_entity ON left_entity.id = icd.entity_a_id
+      JOIN entities right_entity ON right_entity.id = icd.entity_b_id
+      WHERE left_entity.namespace_id = $1
+         OR right_entity.namespace_id = $1
+      ORDER BY icd.updated_at DESC, icd.created_at DESC
+      LIMIT $2
+    `,
+    [namespaceId, limit]
+  );
+
+  return rows.map((row) => ({
+    decisionId: row.decision_id,
+    decision: row.decision,
+    canonicalName: row.canonical_name,
+    note: row.note,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    left: {
+      entityId: row.left_entity_id,
+      namespaceId: row.left_namespace_id,
+      name: row.left_name,
+      entityType: row.left_entity_type
+    },
+    right: {
+      entityId: row.right_entity_id,
+      namespaceId: row.right_namespace_id,
+      name: row.right_name,
+      entityType: row.right_entity_type
+    }
+  }));
+}
+
+export async function getOpsAmbiguityWorkbench(namespaceId: string, limit = 40): Promise<OpsAmbiguityWorkbench> {
+  const [inbox, identityConflicts, identityHistory] = await Promise.all([
+    getOpsClarificationInbox(namespaceId, limit),
+    getOpsIdentityConflicts(namespaceId, Math.max(10, Math.ceil(limit / 2))),
+    getOpsIdentityConflictHistory(namespaceId, Math.max(10, Math.ceil(limit / 2)))
+  ]);
+
+  return {
+    namespaceId,
+    inbox,
+    identityConflicts,
+    identityHistory
   };
 }
 
@@ -588,6 +1215,8 @@ export async function getOpsRelationshipGraph(
   const mentionCountByEntity = new Map(mentionRows.map((row) => [row.entity_id, Number(row.mention_count)] as const));
   const degreeByEntity = new Map<string, number>();
   const nodes = new Map<string, OpsRelationshipGraphNode>();
+  const edges: OpsRelationshipGraphEdge[] = [];
+  const edgeKeys = new Set<string>();
 
   for (const row of rows) {
     degreeByEntity.set(row.subject_entity_id, (degreeByEntity.get(row.subject_entity_id) ?? 0) + 1);
@@ -618,6 +1247,222 @@ export async function getOpsRelationshipGraph(
     }
   }
 
+  for (const row of rows) {
+    const edgeId = row.relationship_id;
+    if (edgeKeys.has(edgeId)) {
+      continue;
+    }
+    edgeKeys.add(edgeId);
+    edges.push({
+      id: edgeId,
+      subjectId: row.subject_entity_id,
+      objectId: row.object_entity_id,
+      subjectName: row.subject_name,
+      objectName: row.object_name,
+      predicate: row.predicate,
+      confidence: Number(row.confidence ?? 0),
+      validFrom: row.valid_from,
+      sourceCandidateId: row.source_candidate_id,
+      metadata: row.metadata
+    });
+  }
+
+  if (entityName) {
+    const entityLabelToken = entityName.trim().split(/\s+/u)[0] ?? entityName.trim();
+    const selectedEntityId =
+      graphNodeIdByName(nodes, entityName) ??
+      (
+        await queryRows<{ readonly entity_id: string }>(
+          `
+            SELECT id::text AS entity_id
+            FROM entities
+            WHERE namespace_id = $1
+              AND merged_into_entity_id IS NULL
+              AND lower(canonical_name) = lower($2)
+            LIMIT 1
+          `,
+          [namespaceId, entityName]
+        )
+      )[0]?.entity_id ??
+      null;
+
+    if (selectedEntityId) {
+      const focusEventRows = await queryRows<FocusEventGraphRow>(
+        `
+          WITH chosen_events AS (
+            SELECT
+              ne.id::text AS event_id,
+              ne.event_label,
+              ne.event_kind,
+              COALESCE(ne.time_start, ns.occurred_at, ne.created_at)::text AS occurred_at
+            FROM narrative_events ne
+            LEFT JOIN narrative_scenes ns ON ns.id = ne.source_scene_id
+            WHERE ne.namespace_id = $1
+              AND (
+                ne.primary_subject_entity_id = $2::uuid
+                OR EXISTS (
+                  SELECT 1
+                  FROM narrative_event_members selected_member
+                  WHERE selected_member.event_id = ne.id
+                    AND selected_member.entity_id = $2::uuid
+                )
+                OR (
+                  lower(coalesce(ns.scene_text, '')) LIKE '%' || lower($5) || '%'
+                  OR lower(coalesce(ne.event_label, '')) LIKE '%' || lower($5) || '%'
+                  OR lower(coalesce(ns.scene_text, '')) LIKE '%' || lower($6) || '%'
+                  OR lower(coalesce(ne.event_label, '')) LIKE '%' || lower($6) || '%'
+                )
+              )
+              AND ($3::timestamptz IS NULL OR COALESCE(ne.time_start, ns.occurred_at, ne.created_at) >= $3::timestamptz)
+              AND ($4::timestamptz IS NULL OR COALESCE(ne.time_start, ns.occurred_at, ne.created_at) <= $4::timestamptz)
+            ORDER BY COALESCE(ne.time_start, ns.occurred_at, ne.created_at) DESC
+            LIMIT 8
+          )
+          SELECT *
+          FROM (
+            SELECT
+              ce.event_id,
+              ce.event_label,
+              ce.event_kind,
+              ce.occurred_at,
+              ent.id::text AS entity_id,
+              ent.canonical_name AS entity_name,
+              ent.entity_type AS entity_type,
+              member.member_role
+            FROM chosen_events ce
+            JOIN narrative_event_members member ON member.event_id::text = ce.event_id
+            JOIN entities ent ON ent.id = member.entity_id
+            UNION ALL
+            SELECT
+              ce.event_id,
+              ce.event_label,
+              ce.event_kind,
+              ce.occurred_at,
+              concat('eventmeta:participant:', ce.event_id, ':', participant_name) AS entity_id,
+              participant_name AS entity_name,
+              'person' AS entity_type,
+              'participant' AS member_role
+            FROM chosen_events ce
+            JOIN narrative_events ne ON ne.id::text = ce.event_id
+            JOIN LATERAL jsonb_array_elements_text(
+              CASE
+                WHEN jsonb_typeof(ne.metadata->'participant_names') = 'array' THEN ne.metadata->'participant_names'
+                ELSE '[]'::jsonb
+              END
+            ) AS participant_name ON TRUE
+            WHERE lower(participant_name) <> lower($5)
+              AND lower(participant_name) <> lower($6)
+            UNION ALL
+            SELECT
+              ce.event_id,
+              ce.event_label,
+              ce.event_kind,
+              ce.occurred_at,
+              concat('eventmeta:location:', ce.event_id) AS entity_id,
+              ne.metadata->>'location_text' AS entity_name,
+              'place' AS entity_type,
+              'location' AS member_role
+            FROM chosen_events ce
+            JOIN narrative_events ne ON ne.id::text = ce.event_id
+            WHERE coalesce(ne.metadata->>'location_text', '') <> ''
+          ) AS focus_rows
+          ORDER BY occurred_at DESC, member_role, entity_name
+        `,
+        [namespaceId, selectedEntityId, options?.timeStart ?? null, options?.timeEnd ?? null, entityName, entityLabelToken]
+      );
+
+      const eventDegree = new Map<string, number>();
+      for (const row of focusEventRows) {
+        eventDegree.set(row.event_id, (eventDegree.get(row.event_id) ?? 1) + 1);
+      }
+
+      for (const row of focusEventRows) {
+        const eventNodeId = `event:${row.event_id}`;
+        if (!nodes.has(eventNodeId)) {
+          nodes.set(eventNodeId, {
+            id: eventNodeId,
+            name: row.event_label,
+            entityType: "event",
+            degree: eventDegree.get(row.event_id) ?? 1,
+            mentionCount: 1,
+            isSelected: false
+          });
+        }
+
+        const selectedNode = nodes.get(selectedEntityId);
+        if (selectedNode && !selectedNode.isSelected) {
+          nodes.set(selectedEntityId, {
+            ...selectedNode,
+            isSelected: true
+          });
+        }
+
+        const anchorEdgeId = `focus-event:${selectedEntityId}:${row.event_id}`;
+        if (!edgeKeys.has(anchorEdgeId)) {
+          edgeKeys.add(anchorEdgeId);
+          edges.push({
+            id: anchorEdgeId,
+            subjectId: selectedEntityId,
+            objectId: eventNodeId,
+            subjectName: nodes.get(selectedEntityId)?.name ?? entityName,
+            objectName: row.event_label,
+            predicate: "participated_in",
+            confidence: 0.76,
+            validFrom: row.occurred_at,
+            sourceCandidateId: null,
+            metadata: {
+              event_kind: row.event_kind,
+              source_event_id: row.event_id
+            }
+          });
+        }
+
+        if (row.entity_id === selectedEntityId) {
+          continue;
+        }
+
+        if (!nodes.has(row.entity_id)) {
+          nodes.set(row.entity_id, {
+            id: row.entity_id,
+            name: row.entity_name,
+            entityType: row.entity_type,
+            degree: degreeByEntity.get(row.entity_id) ?? 0,
+            mentionCount: mentionCountByEntity.get(row.entity_id) ?? 0,
+            isSelected: false
+          });
+        }
+
+        const predicate =
+          row.member_role === "location"
+            ? "occurred_at"
+            : row.member_role === "organization" || row.member_role === "project"
+              ? "related_to"
+              : "includes";
+        const memberEdgeId = `focus-event-member:${row.event_id}:${row.entity_id}:${row.member_role}`;
+        if (edgeKeys.has(memberEdgeId)) {
+          continue;
+        }
+        edgeKeys.add(memberEdgeId);
+        edges.push({
+          id: memberEdgeId,
+          subjectId: eventNodeId,
+          objectId: row.entity_id,
+          subjectName: row.event_label,
+          objectName: row.entity_name,
+          predicate,
+          confidence: 0.72,
+          validFrom: row.occurred_at,
+          sourceCandidateId: null,
+          metadata: {
+            member_role: row.member_role,
+            event_kind: row.event_kind,
+            source_event_id: row.event_id
+          }
+        });
+      }
+    }
+  }
+
   const graphNodes = [...nodes.values()].sort((left, right) => {
     const selectedDelta = Number(right.isSelected) - Number(left.isSelected);
     if (selectedDelta !== 0) {
@@ -636,17 +1481,16 @@ export async function getOpsRelationshipGraph(
     namespaceId,
     selectedEntity: entityName || undefined,
     nodes: graphNodes,
-    edges: rows.map((row) => ({
-      id: row.relationship_id,
-      subjectId: row.subject_entity_id,
-      objectId: row.object_entity_id,
-      subjectName: row.subject_name,
-      objectName: row.object_name,
-      predicate: row.predicate,
-      confidence: Number(row.confidence ?? 0),
-      validFrom: row.valid_from,
-      sourceCandidateId: row.source_candidate_id,
-      metadata: row.metadata
-    }))
+    edges
   };
+}
+
+function graphNodeIdByName(nodes: ReadonlyMap<string, OpsRelationshipGraphNode>, entityName: string): string | null {
+  const normalized = entityName.trim().toLowerCase();
+  for (const [nodeId, node] of nodes.entries()) {
+    if (node.name.toLowerCase() === normalized) {
+      return nodeId;
+    }
+  }
+  return null;
 }

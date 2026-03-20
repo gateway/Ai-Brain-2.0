@@ -31,10 +31,27 @@ This package currently provides:
 1. Start PostgreSQL 18.
 2. Create the local database:
    - `/opt/homebrew/opt/postgresql@18/bin/createdb ai_brain_local`
-3. Install Node dependencies:
+3. Make sure the required extension binaries are available to PostgreSQL before running migrations:
+   - required baseline: `pgcrypto`, `vector`, `btree_gin`
+   - current local path: `vectorscale`, `pg_search`
+   - recommended: `timescaledb`
+   - optional sidecar tooling: `ai` / `pgai`
+4. Verify or enable the extensions inside the database:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS btree_gin;
+CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE;
+CREATE EXTENSION IF NOT EXISTS pg_search;
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+-- Optional:
+-- CREATE EXTENSION IF NOT EXISTS ai;
+```
+5. Install Node dependencies:
    - `cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain`
    - `npm install`
-4. Apply migrations:
+6. Apply migrations:
    - `npm run migrate`
 
 BM25 prerequisite:
@@ -107,6 +124,7 @@ Useful endpoints:
 - `POST /derive/queue`
 - `POST /classify/text`
 - `POST /classify/derivation`
+- `POST /ops/sources/process`
 
 ## Start The MCP Server
 
@@ -125,19 +143,32 @@ first tools are:
 - `memory.save_candidate`
 - `memory.upsert_state`
 
-## Start The Operator Console
+Important boundary:
+
+- MCP is the assistant/tool interface
+- it is not the right place to run always-on folder monitoring
+- monitored source scanning/import should run as a runtime worker or scheduled process against `local-brain`
+- MCP can expose controls or inspection later, but it should not be the daemon
+
+## Start The Operator Workbench
 
 ```bash
-cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/brain-console
-npm install
-BRAIN_RUNTIME_BASE_URL=http://127.0.0.1:8787 npm run dev
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run dev
 ```
 
 Open:
 
-- `http://127.0.0.1:3000/console`
+- `http://127.0.0.1:3005`
 
-Current first-slice pages:
+Recommended first-run order:
+
+1. `/setup`
+2. `/bootstrap`
+3. `/settings`
+4. `/sessions`
+
+Use the Legacy Console only after setup is complete:
 
 - `/console`
 - `/console/query`
@@ -146,7 +177,69 @@ Current first-slice pages:
 - `/console/jobs`
 - `/console/artifacts/[id]`
 
-The console is intentionally read-first. It calls the live local-brain runtime for health/search/artifact data and reads the latest eval/benchmark artifacts from disk.
+For a clearer first-run path, see:
+
+- [docs/FIRST_RUN_SETUP.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/FIRST_RUN_SETUP.md)
+- [docs/OPERATOR_WORKBENCH_GUIDE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATOR_WORKBENCH_GUIDE.md)
+
+## Run Monitored Folder Imports
+
+The monitored-source feature now has three parts:
+
+- source records in the app
+- scan/import HTTP endpoints
+- a runtime worker for scheduled processing
+
+One-shot scheduled-run simulation:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run sources:work
+```
+
+Continuous loop from repo root:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+BRAIN_SOURCE_MONITOR_ENABLED=true npm run dev
+```
+
+Or:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run sources:monitor
+```
+
+Current scheduling behavior:
+
+- the worker checks `ops.monitored_sources`
+- it looks for `monitor_enabled = true`
+- it respects `scan_schedule`
+- due sources are scanned and then imported with trigger type `scheduled`
+- imported files still go through the normal ingestion/runtime path
+
+## Run The Combined Operations Worker
+
+If you want monitored folders, inbox propagation, and temporal summaries running together:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run ops:work
+```
+
+Or when starting the full stack:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+BRAIN_RUNTIME_OPS_ENABLED=true npm run dev
+```
+
+This worker reads saved operations settings from bootstrap metadata and currently handles:
+
+- source monitor runs
+- outbox propagation
+- deterministic temporal summary rebuilds
 
 ## Smoke Test Provider Wiring
 
@@ -179,6 +272,8 @@ OPENROUTER_API_KEY=... npm run search -- "Kyoto shrine companion notes" --namesp
 ```
 
 ## Ingest OpenClaw-Style Files
+
+This is still the recommended historical bootstrap path when you already have OpenClaw-style markdown notes or session logs.
 
 Single file:
 

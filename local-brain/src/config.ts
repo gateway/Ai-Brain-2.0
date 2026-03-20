@@ -25,6 +25,8 @@ export interface BrainConfig {
   readonly externalAiDeriveModel: string;
   readonly externalAiClassifyModel: string;
   readonly externalAiClassifyPresetId?: string;
+  readonly modelRuntimeBaseUrl: string;
+  readonly modelRuntimeApiKey?: string;
   readonly slackSigningSecret?: string;
   readonly slackBotToken?: string;
   readonly slackAllowedTeams: readonly string[];
@@ -79,6 +81,18 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     typeof env.BRAIN_EMBEDDING_DIMENSIONS === "string" && env.BRAIN_EMBEDDING_DIMENSIONS.trim()
       ? Number(env.BRAIN_EMBEDDING_DIMENSIONS)
       : undefined;
+  const modelRuntimeBaseUrl =
+    env.BRAIN_MODEL_RUNTIME_BASE_URL ??
+    env.MODEL_RUNTIME_BASE_URL ??
+    env.BRAIN_EXTERNAL_AI_BASE_URL ??
+    env.EXTERNAL_AI_BASE_URL ??
+    "http://100.99.84.124:8000";
+  const externalAiBaseUrl =
+    env.BRAIN_EXTERNAL_AI_BASE_URL ??
+    env.EXTERNAL_AI_BASE_URL ??
+    env.BRAIN_MODEL_RUNTIME_BASE_URL ??
+    env.MODEL_RUNTIME_BASE_URL ??
+    "http://127.0.0.1:8080";
 
   return {
     databaseUrl: env.BRAIN_DATABASE_URL ?? "postgresql:///ai_brain_local",
@@ -99,7 +113,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     geminiEmbeddingModel: env.BRAIN_GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001",
     geminiMultimodalModel: env.BRAIN_GEMINI_MULTIMODAL_MODEL ?? "gemini-2.5-flash",
     externalAiApiKey: env.BRAIN_EXTERNAL_AI_API_KEY ?? env.EXTERNAL_AI_API_KEY ?? undefined,
-    externalAiBaseUrl: env.BRAIN_EXTERNAL_AI_BASE_URL ?? "http://127.0.0.1:8080",
+    externalAiBaseUrl,
     externalAiEmbeddingPath: env.BRAIN_EXTERNAL_AI_EMBEDDING_PATH ?? "/v1/embeddings",
     externalAiDerivePath: env.BRAIN_EXTERNAL_AI_DERIVE_PATH ?? "/v1/artifacts/derive",
     externalAiClassifyPath: env.BRAIN_EXTERNAL_AI_CLASSIFY_PATH ?? "/v1/chat/completions",
@@ -108,6 +122,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     externalAiClassifyModel:
       env.BRAIN_EXTERNAL_AI_CLASSIFY_MODEL ?? "unsloth/Qwen3.5-35B-A3B-GGUF",
     externalAiClassifyPresetId: env.BRAIN_EXTERNAL_AI_CLASSIFY_PRESET_ID ?? "research-analyst",
+    modelRuntimeBaseUrl,
+    modelRuntimeApiKey: env.BRAIN_MODEL_RUNTIME_API_KEY ?? env.MODEL_RUNTIME_API_KEY ?? env.BRAIN_EXTERNAL_AI_API_KEY ?? env.EXTERNAL_AI_API_KEY ?? undefined,
     slackSigningSecret: env.SLACK_SIGNING_SECRET ?? undefined,
     slackBotToken: env.SLACK_BOT_TOKEN ?? undefined,
     slackAllowedTeams: parseList(env.BRAIN_SLACK_ALLOWED_TEAMS),

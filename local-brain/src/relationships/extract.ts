@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 
-type EntityType = "self" | "person" | "place" | "project" | "concept" | "unknown";
+type EntityType = "self" | "person" | "place" | "project" | "decision" | "constraint" | "routine" | "style_spec" | "goal" | "plan" | "concept" | "unknown";
 type MentionRole = "subject" | "participant" | "location" | "project" | "mentioned";
 
 interface EntityMentionCandidate {

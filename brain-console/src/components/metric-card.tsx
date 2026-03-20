@@ -11,21 +11,21 @@ interface MetricCardProps {
 }
 
 const toneClasses: Record<NonNullable<MetricCardProps["tone"]>, string> = {
-  default: "border-white/8 bg-[linear-gradient(180deg,_rgba(20,24,33,0.92)_0%,_rgba(10,13,19,0.98)_100%)] text-white",
-  success: "border-emerald-400/20 bg-[linear-gradient(180deg,_rgba(10,34,26,0.94)_0%,_rgba(7,18,15,0.98)_100%)] text-white",
-  warning: "border-amber-300/20 bg-[linear-gradient(180deg,_rgba(40,24,10,0.94)_0%,_rgba(19,13,7,0.98)_100%)] text-white",
-  danger: "border-rose-400/20 bg-[linear-gradient(180deg,_rgba(41,14,18,0.94)_0%,_rgba(20,8,10,0.98)_100%)] text-white"
+  default: "rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(20,24,33,0.92)_0%,_rgba(10,13,19,0.98)_100%)] text-white shadow-[0_18px_50px_rgba(0,0,0,0.2)]",
+  success: "rounded-[28px] border-emerald-400/20 bg-[linear-gradient(180deg,_rgba(10,34,26,0.94)_0%,_rgba(7,18,15,0.98)_100%)] text-white shadow-[0_18px_50px_rgba(0,0,0,0.2)]",
+  warning: "rounded-[28px] border-amber-300/20 bg-[linear-gradient(180deg,_rgba(40,24,10,0.94)_0%,_rgba(19,13,7,0.98)_100%)] text-white shadow-[0_18px_50px_rgba(0,0,0,0.2)]",
+  danger: "rounded-[28px] border-rose-400/20 bg-[linear-gradient(180deg,_rgba(41,14,18,0.94)_0%,_rgba(20,8,10,0.98)_100%)] text-white shadow-[0_18px_50px_rgba(0,0,0,0.2)]"
 };
 
 export function MetricCard({ title, value, detail, tone = "default", footer }: MetricCardProps) {
   return (
     <Card className={toneClasses[tone]}>
       <CardHeader>
-        <CardDescription className="font-mono text-[10px] uppercase tracking-[0.38em] text-slate-500">{title}</CardDescription>
-        <CardTitle className="text-[2rem] font-semibold tracking-tight text-white">{value}</CardTitle>
+        <CardDescription className="premium-eyebrow text-slate-200">{title}</CardDescription>
+        <CardTitle className="text-[2rem] font-semibold tracking-[-0.04em] text-white">{value}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        {detail ? <p className="text-sm leading-6 text-slate-300">{detail}</p> : null}
+        {detail ? <p className="text-sm leading-7 text-slate-300">{detail}</p> : null}
         {footer ? footer : null}
       </CardContent>
     </Card>

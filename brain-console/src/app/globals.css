@@ -7,8 +7,8 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --font-sans: var(--font-ui), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-code), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -83,23 +83,23 @@
 }
 
 .dark {
-  --background: oklch(0.18 0.03 248.06);
-  --foreground: oklch(0.95 0.01 95.1);
-  --card: oklch(0.22 0.03 248.5);
-  --card-foreground: oklch(0.95 0.01 95.1);
-  --popover: oklch(0.22 0.03 248.5);
-  --popover-foreground: oklch(0.95 0.01 95.1);
-  --primary: oklch(0.84 0.03 88.12);
+  --background: oklch(0.16 0.025 248.06);
+  --foreground: oklch(0.985 0.004 95.1);
+  --card: oklch(0.205 0.028 248.5);
+  --card-foreground: oklch(0.985 0.004 95.1);
+  --popover: oklch(0.205 0.028 248.5);
+  --popover-foreground: oklch(0.985 0.004 95.1);
+  --primary: oklch(0.9 0.02 88.12);
   --primary-foreground: oklch(0.18 0.03 248.06);
-  --secondary: oklch(0.27 0.03 249.92);
-  --secondary-foreground: oklch(0.95 0.01 95.1);
-  --muted: oklch(0.27 0.03 249.92);
-  --muted-foreground: oklch(0.72 0.02 90.67);
-  --accent: oklch(0.33 0.05 142.12);
-  --accent-foreground: oklch(0.95 0.01 95.1);
+  --secondary: oklch(0.29 0.028 249.92);
+  --secondary-foreground: oklch(0.98 0.004 95.1);
+  --muted: oklch(0.25 0.028 249.92);
+  --muted-foreground: oklch(0.84 0.015 90.67);
+  --accent: oklch(0.35 0.05 142.12);
+  --accent-foreground: oklch(0.98 0.004 95.1);
   --destructive: oklch(0.69 0.18 26.38);
-  --border: oklch(1 0 0 / 12%);
-  --input: oklch(1 0 0 / 15%);
+  --border: oklch(1 0 0 / 18%);
+  --input: oklch(1 0 0 / 18%);
   --ring: oklch(0.68 0.11 210.8);
   --chart-1: oklch(0.72 0.13 48.62);
   --chart-2: oklch(0.68 0.12 146.04);
@@ -130,10 +130,71 @@
     min-height: 100vh;
     background-attachment: fixed;
     text-rendering: optimizeLegibility;
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.6;
+    font-weight: 460;
+    letter-spacing: -0.012em;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  input,
+  button,
+  textarea,
+  select {
+    font-family: var(--font-sans);
   }
 
   ::selection {
     background: color-mix(in oklab, var(--chart-1) 55%, white);
     color: var(--foreground);
+  }
+}
+
+@layer utilities {
+  .premium-panel {
+    background:
+      radial-gradient(circle at top right, rgba(103, 232, 249, 0.09), transparent 24%),
+      linear-gradient(180deg, rgba(19, 24, 34, 0.96) 0%, rgba(8, 11, 20, 0.99) 100%);
+    box-shadow:
+      0 26px 90px rgba(0, 0, 0, 0.28),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .premium-soft-panel {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.065) 0%, rgba(255, 255, 255, 0.035) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 18px 45px rgba(0, 0, 0, 0.16);
+  }
+
+  .premium-eyebrow {
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    font-size: 0.66rem;
+    font-weight: 700;
+  }
+
+  .dark .text-slate-700 {
+    color: rgb(241 245 249);
+  }
+
+  .dark .text-slate-600,
+  .dark .text-slate-500 {
+    color: rgb(203 213 225);
+  }
+
+  .dark .text-slate-400 {
+    color: rgb(226 232 240);
+  }
+
+  .dark .text-slate-300 {
+    color: rgb(248 250 252);
   }
 }

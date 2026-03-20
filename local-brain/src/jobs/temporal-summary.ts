@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { withTransaction } from "../db/client.js";
+import { getProviderAdapter } from "../providers/registry.js";
+import type { ProviderId } from "../providers/types.js";
 import type { JobRunContext } from "./types.js";
 
 export type TemporalLayer = "day" | "week" | "month" | "year";
@@ -22,6 +24,29 @@ interface TopEntityRow {
   readonly mention_count: string;
 }
 
+interface TopEventRow {
+  readonly event_label: string;
+  readonly event_count: string;
+}
+
+interface TemporalNodeSemanticRow {
+  readonly id: string;
+  readonly layer: TemporalLayer;
+  readonly period_start: string;
+  readonly period_end: string;
+  readonly summary_text: string;
+  readonly metadata: Record<string, unknown>;
+}
+
+interface PriorSummaryRow {
+  readonly summary_text: string;
+}
+
+interface SampleEvidenceRow {
+  readonly content: string;
+  readonly occurred_at: string;
+}
+
 export interface TemporalSummaryRunSummary {
   readonly context: JobRunContext;
   readonly namespaceId: string;
@@ -30,6 +55,21 @@ export interface TemporalSummaryRunSummary {
   readonly upsertedNodes: number;
   readonly linkedMembers: number;
 }
+
+export const DEFAULT_TEMPORAL_SUMMARY_SYSTEM_PROMPT = `You are the AI Brain 2.0 Semantic Consolidator.
+
+Write semantic day, week, month, and year summaries on top of deterministic temporal rollups for a local-first memory system.
+
+Rules:
+1. Ground every statement only in the supplied evidence and deterministic rollup.
+2. Do not invent facts. If something is ambiguous or weakly supported, say so explicitly.
+3. Preserve exact names, places, project titles, versions, and technical terms.
+4. Compress repetition into stable themes without losing important exceptions or changes.
+5. Treat provenance as mandatory. The final summary must remain compatible with explicit supporting memory IDs.
+6. Normalize first-person phrasing into stable third-person memory language when helpful.
+7. Prefer durable patterns, shifts, and active truth over noisy one-off details.
+
+Return structured summary material only.`;
 
 function intervalForLayer(layer: TemporalLayer): string {
   if (layer === "day") {
@@ -173,20 +213,103 @@ async function loadTopEntities(
   return topEntities.rows.map((row) => `${row.canonical_name}:${row.mention_count}`).join(", ");
 }
 
+async function loadTopEvents(
+  client: PoolClient,
+  namespaceId: string,
+  periodStart: string,
+  periodEnd: string
+): Promise<string> {
+  const topEvents = await client.query<TopEventRow>(
+    `
+      SELECT ne.event_label, count(*)::text AS event_count
+      FROM narrative_events ne
+      LEFT JOIN LATERAL (
+        SELECT em.occurred_at
+        FROM episodic_memory em
+        WHERE em.namespace_id = ne.namespace_id
+          AND em.artifact_observation_id = ne.artifact_observation_id
+        ORDER BY em.occurred_at ASC, em.id ASC
+        LIMIT 1
+      ) AS source_memory ON TRUE
+      WHERE ne.namespace_id = $1
+        AND COALESCE(ne.time_start, source_memory.occurred_at, ne.created_at) >= $2::timestamptz
+        AND COALESCE(ne.time_start, source_memory.occurred_at, ne.created_at) < $3::timestamptz
+      GROUP BY ne.event_label
+      ORDER BY count(*) DESC, ne.event_label ASC
+      LIMIT 6
+    `,
+    [namespaceId, periodStart, periodEnd]
+  );
+
+  if ((topEvents.rowCount ?? 0) === 0) {
+    return "none";
+  }
+
+  return topEvents.rows.map((row) => `${row.event_label}:${row.event_count}`).join(", ");
+}
+
 function summarizeBucket(
   layer: TemporalLayer,
   periodStart: string,
   periodEnd: string,
   eventCount: number,
   roleSummary: string,
-  topEntitySummary: string
+  topEntitySummary: string,
+  topEventSummary: string
 ): string {
   return [
     `${layer.toUpperCase()} rollup ${periodStart} -> ${periodEnd}.`,
     `events=${eventCount}.`,
+    `activities=${topEventSummary}.`,
     `roles=${roleSummary}.`,
     `top_entities=${topEntitySummary}.`
   ].join(" ");
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
+
+function semanticSummaryInstruction(options: {
+  readonly layer: TemporalLayer;
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  readonly deterministicSummary: string;
+  readonly priorSummaries: readonly string[];
+  readonly sampleEvidence: readonly string[];
+  readonly sourceMemoryIds: readonly string[];
+}): string {
+  return [
+    "Return strict JSON with keys summary, recurring_themes, uncertainties.",
+    "summary must be 2-4 sentences and grounded only in the provided evidence.",
+    "recurring_themes must be an array of short grounded phrases.",
+    "uncertainties must be an array of explicit unknowns or ambiguities.",
+    "Do not invent facts. Preserve exact names, places, versions, and project names.",
+    "",
+    `LAYER: ${options.layer}`,
+    `INTERVAL: ${options.periodStart} -> ${options.periodEnd}`,
+    `DETERMINISTIC_ROLLUP: ${options.deterministicSummary}`,
+    `SUPPORTING_MEMORY_IDS: ${options.sourceMemoryIds.join(", ") || "none"}`,
+    `PRIOR_SAME_LEVEL_SUMMARIES:\n${options.priorSummaries.map((item, index) => `${index + 1}. ${item}`).join("\n") || "none"}`,
+    `SAMPLE_EVIDENCE:\n${options.sampleEvidence.map((item, index) => `${index + 1}. ${item}`).join("\n") || "none"}`
+  ].join("\n");
+}
+
+function buildSemanticSummaryText(options: {
+  readonly layer: TemporalLayer;
+  readonly summary: string;
+  readonly recurringThemes: readonly string[];
+  readonly uncertainties: readonly string[];
+  readonly sourceMemoryIds: readonly string[];
+}): string {
+  const lines = [
+    `${options.layer.toUpperCase()} semantic summary.`,
+    options.summary.trim(),
+    options.recurringThemes.length > 0 ? `Recurring themes: ${options.recurringThemes.join("; ")}.` : "",
+    options.uncertainties.length > 0 ? `Uncertainty: ${options.uncertainties.join("; ")}.` : "",
+    options.sourceMemoryIds.length > 0 ? `Support IDs: ${options.sourceMemoryIds.join(", ")}.` : ""
+  ].filter(Boolean);
+  return lines.join(" ");
 }
 
 export async function runTemporalSummaryScaffold(
@@ -232,7 +355,8 @@ export async function runTemporalSummaryScaffold(
       const eventCount = Number(bucket.event_count);
       const roleSummary = await loadRoleCounts(client, namespaceId, periodStart, periodEnd);
       const topEntitySummary = await loadTopEntities(client, namespaceId, periodStart, periodEnd);
-      const summaryText = summarizeBucket(options.layer, periodStart, periodEnd, eventCount, roleSummary, topEntitySummary);
+      const topEventSummary = await loadTopEvents(client, namespaceId, periodStart, periodEnd);
+      const summaryText = summarizeBucket(options.layer, periodStart, periodEnd, eventCount, roleSummary, topEntitySummary, topEventSummary);
 
       const nodeResult = await client.query<{ id: string }>(
         `
@@ -270,7 +394,8 @@ export async function runTemporalSummaryScaffold(
           eventCount,
           JSON.stringify({
             role_summary: roleSummary,
-            top_entities: topEntitySummary
+            top_entities: topEntitySummary,
+            top_events: topEventSummary
           })
         ]
       );
@@ -351,5 +476,140 @@ export async function runTemporalSummaryScaffold(
       upsertedNodes,
       linkedMembers
     };
+  });
+}
+
+export async function runSemanticTemporalSummaryOverlay(
+  namespaceId: string,
+  options: {
+    readonly layer: TemporalLayer;
+    readonly lookbackDays?: number;
+    readonly provider: ProviderId;
+    readonly model?: string;
+    readonly presetId?: string;
+    readonly systemPrompt?: string;
+  }
+): Promise<{ readonly updatedNodes: number }> {
+  const lookbackDays = Math.max(1, options.lookbackDays ?? 30);
+  const adapter = getProviderAdapter(options.provider);
+
+  return withTransaction(async (client) => {
+    const nodes = await client.query<TemporalNodeSemanticRow>(
+      `
+        SELECT
+          tn.id::text,
+          tn.layer,
+          tn.period_start,
+          tn.period_end,
+          tn.summary_text,
+          tn.metadata
+        FROM temporal_nodes tn
+        WHERE tn.namespace_id = $1
+          AND tn.layer = $2
+          AND tn.period_start >= (now() - ($3::int * interval '1 day'))
+        ORDER BY tn.period_start ASC
+      `,
+      [namespaceId, options.layer, lookbackDays]
+    );
+
+    let updatedNodes = 0;
+
+    for (const node of nodes.rows) {
+      const priorSummaries = await client.query<PriorSummaryRow>(
+        `
+          SELECT summary_text
+          FROM temporal_nodes
+          WHERE namespace_id = $1
+            AND layer = $2
+            AND period_end <= $3::timestamptz
+          ORDER BY period_end DESC
+          LIMIT 3
+        `,
+        [namespaceId, options.layer, node.period_start]
+      );
+
+      const evidenceRows = await client.query<SampleEvidenceRow & { readonly memory_id: string }>(
+        `
+          SELECT
+            et.memory_id::text,
+            et.content,
+            et.occurred_at::text
+          FROM temporal_node_members tnm
+          JOIN episodic_timeline et ON et.memory_id = tnm.source_memory_id
+          WHERE tnm.temporal_node_id = $1::uuid
+            AND tnm.member_role = 'summary_input'
+          ORDER BY et.occurred_at ASC
+          LIMIT 8
+        `,
+        [node.id]
+      );
+
+      const sourceMemoryIds = evidenceRows.rows.map((row) => row.memory_id);
+      const sampleEvidence = evidenceRows.rows.map((row) => `${row.occurred_at}: ${row.content}`);
+      const response = await adapter.classifyText({
+        text: JSON.stringify({
+          namespaceId,
+          layer: node.layer,
+          periodStart: node.period_start,
+          periodEnd: node.period_end
+        }),
+        model: options.model,
+        systemPrompt: options.systemPrompt ?? DEFAULT_TEMPORAL_SUMMARY_SYSTEM_PROMPT,
+        instruction: semanticSummaryInstruction({
+          layer: node.layer,
+          periodStart: node.period_start,
+          periodEnd: node.period_end,
+          deterministicSummary: node.summary_text,
+          priorSummaries: priorSummaries.rows.map((row) => row.summary_text),
+          sampleEvidence,
+          sourceMemoryIds
+        }),
+        maxOutputTokens: 900,
+        metadata: options.presetId ? { preset_id: options.presetId } : {}
+      });
+
+      const semanticOutput = response.output;
+      const semanticSummary = typeof semanticOutput.summary === "string" ? semanticOutput.summary : node.summary_text;
+      const recurringThemes = asStringArray(semanticOutput.recurring_themes);
+      const uncertainties = asStringArray(semanticOutput.uncertainties);
+      const semanticText = buildSemanticSummaryText({
+        layer: node.layer,
+        summary: semanticSummary,
+        recurringThemes,
+        uncertainties,
+        sourceMemoryIds: sourceMemoryIds.slice(0, 12)
+      });
+
+      await client.query(
+        `
+          UPDATE temporal_nodes
+          SET
+            summary_text = $2,
+            generated_by = 'semantic_consolidator',
+            metadata = $3::jsonb,
+            updated_at = now()
+          WHERE id = $1::uuid
+        `,
+        [
+          node.id,
+          semanticText,
+          JSON.stringify({
+            ...(node.metadata ?? {}),
+            deterministic_summary_text: node.summary_text,
+            semantic_summary_text: semanticText,
+            semantic_summary_provider: response.provider,
+            semantic_summary_model: response.model,
+            semantic_summary_preset: options.presetId ?? null,
+            semantic_summary_updated_at: new Date().toISOString(),
+            semantic_summary_recurring_themes: recurringThemes,
+            semantic_summary_uncertainties: uncertainties
+          })
+        ]
+      );
+
+      updatedNodes += 1;
+    }
+
+    return { updatedNodes };
   });
 }

@@ -90,6 +90,7 @@ export interface SearchResultItem {
 }
 
 export interface SearchResult {
+  readonly retrievalMode?: "lexical" | "hybrid";
   readonly planner?: {
     readonly intent?: string;
     readonly timeStart?: string;
@@ -99,8 +100,17 @@ export interface SearchResult {
     readonly temporalGateTriggered?: boolean;
   };
   readonly provider?: string;
+  readonly model?: string;
+  readonly queryEmbeddingSource?: "provided" | "provider" | "none";
   readonly lexicalProvider?: string;
   readonly lexicalFallbackUsed?: boolean;
+  readonly lexicalFallbackReason?: string;
+  readonly vectorFallbackReason?: string;
+  readonly requestedNamespaceId?: string | null;
+  readonly resolvedNamespaceId?: string;
+  readonly namespaceDefaulted?: boolean;
+  readonly namespaceEscalated?: boolean;
+  readonly searchedNamespaceIds?: readonly string[];
   readonly results: readonly SearchResultItem[];
 }
 
@@ -116,9 +126,19 @@ interface RuntimeRecallResult {
 interface RuntimeSearchResponse {
   readonly results: readonly RuntimeRecallResult[];
   readonly meta: {
+    readonly retrievalMode: "lexical" | "hybrid";
     readonly lexicalProvider: "fts" | "bm25";
     readonly lexicalFallbackUsed: boolean;
+    readonly lexicalFallbackReason?: string;
+    readonly requestedNamespaceId?: string | null;
+    readonly resolvedNamespaceId?: string;
+    readonly namespaceDefaulted?: boolean;
+    readonly namespaceEscalated?: boolean;
+    readonly searchedNamespaceIds?: readonly string[];
     readonly queryEmbeddingProvider?: string;
+    readonly queryEmbeddingModel?: string;
+    readonly queryEmbeddingSource?: "provided" | "provider" | "none";
+    readonly vectorFallbackReason?: string;
     readonly planner?: {
       readonly intent?: string;
       readonly inferredTimeStart?: string;
@@ -128,6 +148,20 @@ interface RuntimeSearchResponse {
     };
     readonly temporalGateTriggered?: boolean;
   };
+}
+
+export interface NamespaceChoice {
+  readonly namespaceId: string;
+  readonly activityAt: string;
+  readonly category: "durable" | "system";
+  readonly artifactCount: number;
+  readonly relationshipCount: number;
+  readonly hasSelfProfile: boolean;
+}
+
+interface RuntimeNamespaceCatalog {
+  readonly defaultNamespaceId?: string;
+  readonly namespaces: readonly NamespaceChoice[];
 }
 
 export interface OpsOverview {
@@ -242,6 +276,57 @@ export interface OpsClarificationInbox {
   readonly items: readonly OpsClarificationInboxItem[];
 }
 
+export interface OpsIdentityConflictEntity {
+  readonly entityId: string;
+  readonly namespaceId: string;
+  readonly name: string;
+  readonly entityType: string;
+  readonly aliases: readonly string[];
+  readonly mentionCount: number;
+  readonly relationshipCount: number;
+  readonly identityProfileId?: string | null;
+}
+
+export interface OpsIdentityConflict {
+  readonly namespaceId: string;
+  readonly crossLane: boolean;
+  readonly confidence: number;
+  readonly suggestedCanonicalName: string;
+  readonly reasons: readonly string[];
+  readonly sharedNeighborNames: readonly string[];
+  readonly sharedPredicates: readonly string[];
+  readonly left: OpsIdentityConflictEntity;
+  readonly right: OpsIdentityConflictEntity;
+}
+
+export interface OpsAmbiguityWorkbench {
+  readonly namespaceId: string;
+  readonly inbox: OpsClarificationInbox;
+  readonly identityConflicts: readonly OpsIdentityConflict[];
+  readonly identityHistory: readonly OpsIdentityConflictHistoryItem[];
+}
+
+export interface OpsIdentityConflictHistoryItem {
+  readonly decisionId: string;
+  readonly decision: "merge" | "keep_separate";
+  readonly canonicalName?: string | null;
+  readonly note?: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly left: {
+    readonly entityId: string;
+    readonly namespaceId: string;
+    readonly name: string;
+    readonly entityType: string;
+  };
+  readonly right: {
+    readonly entityId: string;
+    readonly namespaceId: string;
+    readonly name: string;
+    readonly entityType: string;
+  };
+}
+
 async function readJsonFile<T>(segments: readonly string[]): Promise<T> {
   const filePath = path.join(repoRoot, ...segments);
   return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
@@ -300,25 +385,28 @@ export async function getConsoleDefaults(): Promise<{
   readonly namespaceId: string;
   readonly timeStart: string;
   readonly timeEnd: string;
+  readonly namespaces: readonly NamespaceChoice[];
 }> {
   try {
-    const { json } = await getLatestEval();
+    const namespaceCatalog = await fetchJson<RuntimeNamespaceCatalog>("/ops/namespaces");
     return {
-      namespaceId: json.namespaceId,
+      namespaceId: namespaceCatalog.defaultNamespaceId ?? "personal",
       timeStart: "2026-01-01T00:00:00Z",
-      timeEnd: "2026-12-31T23:59:59Z"
+      timeEnd: "2026-12-31T23:59:59Z",
+      namespaces: namespaceCatalog.namespaces
     };
   } catch {
     return {
       namespaceId: "personal",
       timeStart: "2026-01-01T00:00:00Z",
-      timeEnd: "2026-12-31T23:59:59Z"
+      timeEnd: "2026-12-31T23:59:59Z",
+      namespaces: []
     };
   }
 }
 
 export async function searchBrain(input: {
-  readonly namespaceId: string;
+  readonly namespaceId?: string;
   readonly query: string;
   readonly timeStart?: string;
   readonly timeEnd?: string;
@@ -328,9 +416,12 @@ export async function searchBrain(input: {
   readonly limit?: string;
 }): Promise<SearchResult> {
   const params = new URLSearchParams({
-    namespace_id: input.namespaceId,
     query: input.query
   });
+
+  if (input.namespaceId?.trim()) {
+    params.set("namespace_id", input.namespaceId);
+  }
 
   if (input.timeStart) {
     params.set("time_start", input.timeStart);
@@ -354,9 +445,19 @@ export async function searchBrain(input: {
   const response = await fetchJson<RuntimeSearchResponse>("/search", params);
 
   return {
+    retrievalMode: response.meta.retrievalMode,
     provider: response.meta.queryEmbeddingProvider,
+    model: response.meta.queryEmbeddingModel,
+    queryEmbeddingSource: response.meta.queryEmbeddingSource,
     lexicalProvider: response.meta.lexicalProvider,
     lexicalFallbackUsed: response.meta.lexicalFallbackUsed,
+    lexicalFallbackReason: response.meta.lexicalFallbackReason,
+    vectorFallbackReason: response.meta.vectorFallbackReason,
+    requestedNamespaceId: response.meta.requestedNamespaceId,
+    resolvedNamespaceId: response.meta.resolvedNamespaceId,
+    namespaceDefaulted: response.meta.namespaceDefaulted,
+    namespaceEscalated: response.meta.namespaceEscalated,
+    searchedNamespaceIds: response.meta.searchedNamespaceIds,
     planner: {
       intent: response.meta.planner?.intent,
       timeStart: response.meta.planner?.inferredTimeStart,
@@ -441,6 +542,21 @@ export async function getClarificationInbox(input: {
   }
 
   return fetchJson<OpsClarificationInbox>("/ops/inbox", params);
+}
+
+export async function getAmbiguityWorkbench(input: {
+  readonly namespaceId: string;
+  readonly limit?: string;
+}): Promise<OpsAmbiguityWorkbench> {
+  const params = new URLSearchParams({
+    namespace_id: input.namespaceId
+  });
+
+  if (input.limit) {
+    params.set("limit", input.limit);
+  }
+
+  return fetchJson<OpsAmbiguityWorkbench>("/ops/ambiguities", params);
 }
 
 export function getRuntimeBaseUrl(): string {

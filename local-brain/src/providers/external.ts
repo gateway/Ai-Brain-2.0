@@ -15,8 +15,16 @@ import { parseJsonObjectText } from "./json.js";
 interface ExternalEmbeddingResponse {
   readonly model?: string;
   readonly embedding?: number[];
+  readonly data?: ReadonlyArray<{
+    readonly embedding?: number[];
+  }>;
   readonly dimensions?: number;
   readonly normalized?: boolean;
+  readonly usage?: {
+    readonly prompt_tokens?: number;
+    readonly total_tokens?: number;
+  };
+  readonly metrics?: Record<string, unknown>;
   readonly tokenUsage?: {
     readonly inputTokens?: number;
     readonly totalTokens?: number;
@@ -80,14 +88,17 @@ export function createExternalAdapter(): ProviderAdapter {
           headers: buildHeaders(config.externalAiApiKey),
           body: {
             model,
+            input: request.text,
             text: request.text,
+            dimensions: request.outputDimensionality ?? config.embeddingDimensions,
             output_dimensionality: request.outputDimensionality ?? config.embeddingDimensions,
+            encoding_format: "float",
             metadata: request.metadata ?? {}
           }
         }
       );
 
-      const embedding = result.data.embedding;
+      const embedding = result.data.embedding ?? result.data.data?.[0]?.embedding;
       if (!Array.isArray(embedding) || embedding.length === 0) {
         throw new ProviderError({
           provider: "external",
@@ -102,9 +113,15 @@ export function createExternalAdapter(): ProviderAdapter {
         embedding,
         dimensions: result.data.dimensions ?? embedding.length,
         normalized: result.data.normalized ?? false,
-        tokenUsage: result.data.tokenUsage,
+        tokenUsage: result.data.tokenUsage ?? {
+          inputTokens: result.data.usage?.prompt_tokens,
+          totalTokens: result.data.usage?.total_tokens
+        },
         latencyMs: Date.now() - started,
-        providerMetadata: result.data.providerMetadata
+        providerMetadata: {
+          ...(result.data.providerMetadata ?? {}),
+          metrics: result.data.metrics ?? {}
+        }
       };
     },
     async deriveFromArtifact(request: DeriveFromArtifactRequest): Promise<DeriveFromArtifactResponse> {
@@ -165,6 +182,8 @@ export function createExternalAdapter(): ProviderAdapter {
           body: {
             model,
             preset_id: presetId,
+            stream: false,
+            response_format: "json",
             system_prompt: request.systemPrompt,
             enable_thinking: enableThinking,
             max_tokens: request.maxOutputTokens,

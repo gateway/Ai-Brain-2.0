@@ -1,9 +1,83 @@
 # AI Brain 2.0
 
-This workspace is building a local-first Brain 2.0 for Apple Silicon Macs.
+AI Brain 2.0 is a local-first memory system for people who want durable recall, structured relationships, and operator-visible provenance instead of disposable chat history.
 
-The target is not a thin RAG demo. It is a PostgreSQL-centered cognitive
-substrate with:
+It combines:
+
+- a guided Next.js operator workbench
+- a Node.js brain runtime
+- PostgreSQL-backed memory, retrieval, graph, and temporal layers
+
+This is not a thin RAG demo. It is a reviewable cognitive substrate with evidence, staged extraction, clarifications, graph memory, hybrid retrieval, and time-aware summaries.
+
+## What You Get
+
+AI Brain 2.0 is built to help you:
+
+- ingest notes, transcripts, markdown folders, audio, PDFs, and images as evidence
+- classify entities, relationships, claims, ambiguities, and staged memory candidates
+- review and correct uncertain facts instead of silently accepting bad extraction
+- inspect relationship graphs and temporal memory state
+- ask natural questions like `Where was I living in 2025?`
+- trace answers back to supporting evidence and source files
+- monitor watch folders and keep imports in sync over time
+- generate deterministic time summaries with an optional LLM semantic overlay
+
+For a fuller product tour with examples, see [docs/BRAIN_FEATURES_AND_EXAMPLES.md](docs/BRAIN_FEATURES_AND_EXAMPLES.md).
+
+## Quick Start
+
+On a new Mac, the shortest supported path is:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+bash scripts/bootstrap_mac.sh
+bash scripts/doctor_mac.sh
+npm run dev
+```
+
+Then open [http://127.0.0.1:3005](http://127.0.0.1:3005) and go through:
+
+1. `Start Here`
+2. `Guided Setup`
+3. `Settings`
+4. `Sessions`
+
+The bootstrap script prepares the repo, local Python helper venv, database, and Node dependencies. The doctor script verifies that the machine is actually ready before you trust the result.
+
+## Prerequisites
+
+The bootstrap script assumes:
+
+- macOS
+- Homebrew installed
+- network access to install packages
+
+It will then try to set up:
+
+- `node`
+- `postgresql@18`
+- `pgvector`
+- repo-local Python helper environments
+- repo-local Node dependencies
+
+Some PostgreSQL extension paths still require explicit local handling, especially newer PostgreSQL 18 setups involving `vectorscale`, `pg_search`, or `timescaledb`. The script fails clearly instead of pretending that part is complete.
+
+## Product Surfaces
+
+The product has two main runtime surfaces:
+
+- `Operator Workbench`
+  - guided first-run setup
+  - owner bootstrap
+  - source import
+  - session-based intake and review
+  - provider and embeddings controls
+- `Local Brain`
+  - runtime, ingestion, retrieval, graph, clarification, and memory services
+  - PostgreSQL-backed storage and query layer
+
+The target architecture is:
 
 - episodic, semantic, and procedural memory
 - relationship memory and entity linking
@@ -12,6 +86,95 @@ substrate with:
 - provenance back to durable artifacts on disk
 - conflict-aware updates and slow forgetting
 - producer bridges for chat, webhook, markdown, transcript, and artifact inputs
+
+## Example Capabilities
+
+Examples of what the system already supports:
+
+- create a first-run owner profile and bootstrap the self anchor
+- ingest text, markdown, audio, PDFs, and images as evidence
+- classify evidence into entities, relationships, claims, and ambiguities
+- surface clarifications like unresolved people, places, aliases, and kinship labels
+- inspect a relationship graph and timeline views
+- run hybrid retrieval with lexical fallback
+- test local-runtime or OpenRouter provider paths for embeddings
+- run deterministic temporal rollups with an optional small-LLM semantic summary layer
+- import OpenClaw-style markdown folders as trusted historical bootstrap sources
+
+If you already use OpenClaw-style markdown exports or personal knowledge folders, AI Brain can use them as a high-signal bootstrap source instead of forcing you to start from scratch.
+
+## Current Runtime Stack
+
+The live app path is currently:
+
+- `brain-console`: Next.js / Node.js operator UI
+- `local-brain`: Node.js runtime service
+- PostgreSQL 18
+- Postgres extensions such as `pgvector`, `pg_search`, `vectorscale`, and `timescaledb`
+
+Python is currently used as an isolated helper/sidecar environment, not as the main app runtime:
+
+- [/.venv-brain](/Users/evilone/Documents/Development/AI-Brain/ai-brain/.venv-brain)
+  - repo-local helper Python environment
+  - intended for optional helper tooling like `pgai`, OCR/document processing, and related sidecar experiments
+- [/.venv-notebooklm](/Users/evilone/Documents/Development/AI-Brain/ai-brain/.venv-notebooklm)
+  - separate repo-local NotebookLM environment
+  - not part of the shipping app runtime
+
+Release policy:
+
+- no dependency on system Python packages
+- all Python packages installed into repo-local venvs
+- Postgres and its extensions managed separately from Python
+- NotebookLM artifacts, local auth state, and research-only environments excluded from GitHub
+
+## Summary And Worker Controls
+
+The operator-facing settings surface now includes system operations controls for:
+
+- watch-folder monitoring
+- inbox/outbox propagation cadence
+- temporal summary cadence
+- temporal summary strategy
+- summarizer provider, model, preset, and system prompt
+
+The intended summary strategy is:
+
+- deterministic temporal buckets remain authoritative
+- an optional small-LLM semantic overlay can rewrite the readable summary text
+- provider choice can be local runtime, OpenRouter, or Gemini depending on what the operator has configured
+
+## Local Runtime Vs OpenRouter
+
+AI Brain supports both local and hosted model paths.
+
+- `external`
+  - your own runtime endpoint
+  - best when you want local control over ASR, LLM, and embeddings
+- `openrouter`
+  - easiest hosted path for chat and embeddings
+  - useful when you do not want to run local models
+- `gemini`
+  - available as an additional provider path where configured
+
+The intended operator flow is:
+
+- choose the provider in `Settings`
+- test the provider path
+- rebuild vectors if the embedding provider or model changed
+- use the same routing for temporal semantic summaries if desired
+
+## OpenClaw And Trusted Folders
+
+If you already have OpenClaw-style markdown notes or a structured local knowledge folder, that is one of the best ways to bootstrap the brain.
+
+Recommended pattern:
+
+1. complete `Start Here`
+2. define the owner/self anchor
+3. import trusted markdown folders
+4. enable watch-folder monitoring for sources that continue to change
+5. verify the graph, clarifications, and retrieval results before broadening scope
 
 ## What Exists Today
 
@@ -58,7 +221,7 @@ Latest verified run log:
 - [Place/time/prior research plan](brain-spec/local/47-place-time-priors-and-graph-plan.md)
 - [Top-nav console and live graph slice](brain-spec/local/48-console-topnav-and-live-graph.md)
 
-## Main Folders
+## Repository Layout
 
 - [local-brain](local-brain)
   Runtime code, migrations, CLI tools, eval harness, and local README/changelog.
@@ -71,9 +234,18 @@ Latest verified run log:
 - [notes](notes)
   Research notes and earlier synthesis passes.
 
+For repo organization and what intentionally stays local-only, see [docs/GITHUB_REPOSITORY_GUIDE.md](docs/GITHUB_REPOSITORY_GUIDE.md).
+For a docs index, see [docs/README.md](docs/README.md).
+
 ## Best Entry Points
 
+- [docs/GITHUB_REPOSITORY_GUIDE.md](docs/GITHUB_REPOSITORY_GUIDE.md)
+- [docs/README.md](docs/README.md)
+- [docs/BRAIN_FEATURES_AND_EXAMPLES.md](docs/BRAIN_FEATURES_AND_EXAMPLES.md)
+- [docs/FIRST_RUN_SETUP.md](docs/FIRST_RUN_SETUP.md)
+- [docs/OPERATIONS_RUNTIME.md](docs/OPERATIONS_RUNTIME.md)
 - [local-brain/QUICKSTART.md](local-brain/QUICKSTART.md)
+- [docs/OPERATOR_WORKBENCH_GUIDE.md](docs/OPERATOR_WORKBENCH_GUIDE.md)
 - [brain-spec/local/17-full-local-brain-build-spec.md](brain-spec/local/17-full-local-brain-build-spec.md)
 - [brain-spec/local/28-hybrid-retrieval-and-runtime-proof.md](brain-spec/local/28-hybrid-retrieval-and-runtime-proof.md)
 - [brain-spec/local/29-runtime-proof-and-next-data-collection.md](brain-spec/local/29-runtime-proof-and-next-data-collection.md)
@@ -85,6 +257,170 @@ Latest verified run log:
 - [brain-spec/local/39-operator-console-run-log.md](brain-spec/local/39-operator-console-run-log.md)
 - [brain-spec/local/48-console-topnav-and-live-graph.md](brain-spec/local/48-console-topnav-and-live-graph.md)
 - [local-brain/CHANGELOG.md](local-brain/CHANGELOG.md)
+
+## Run As One App
+
+The repository now runs as one root app surface even though it preserves a clean boundary between:
+
+- [brain-console](brain-console): Next.js operator UI
+- [local-brain](local-brain): controlled runtime/memory service
+
+### Install
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm install
+npm install --workspace local-brain
+npm install --workspace brain-console
+cp .env.example .env
+```
+
+### macOS bootstrap
+
+For a new Mac, the intended bootstrap path is:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+bash scripts/bootstrap_mac.sh
+```
+
+What it currently does:
+
+- verifies Homebrew is present
+- installs `node`, `postgresql@18`, and `pgvector`
+- starts PostgreSQL 18
+- creates `ai_brain_local` if needed
+- creates the repo-local Python helper venv
+- installs JavaScript dependencies
+- creates `/.env` if missing
+- runs migrations only if the required PostgreSQL extensions are actually available
+
+Important current limitation:
+
+- `vectorscale`, `pg_search`, and some PostgreSQL-18-specific extension paths still need explicit local setup and are not fully automated by the script yet
+- the script fails clearly when those are missing instead of pretending setup is complete
+
+### macOS doctor
+
+After bootstrap, run:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run doctor:mac
+```
+
+This checks:
+
+- Homebrew, Node, npm, and Python 3
+- local `.env`
+- repo-local Python helper venv
+- PostgreSQL 18 readiness
+- `ai_brain_local` database presence
+- extension availability
+- whether the runtime and console are already responding
+
+### Run locally
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run dev
+```
+
+If you want monitored folders to run on a schedule as part of the local stack:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+BRAIN_SOURCE_MONITOR_ENABLED=true npm run dev
+```
+
+Or run the folder monitor worker by itself:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run sources:monitor
+```
+
+### First-time setup checklist
+
+1. Install dependencies and create `/.env` from [/.env.example](/Users/evilone/Documents/Development/AI-Brain/ai-brain/.env.example).
+2. Make sure PostgreSQL 18 is running and `ai_brain_local` exists.
+3. Make sure the required PostgreSQL extension binaries are available before migrations:
+   - core: `pgcrypto`, `vector`, `btree_gin`
+   - current local path: `vectorscale`, `pg_search`
+   - recommended: `timescaledb`
+   - optional sidecar: `ai` / `pgai`
+4. Run the database migrations:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run migrate
+```
+
+5. Decide which provider path you want to use first:
+   - local runtime: point `BRAIN_MODEL_RUNTIME_BASE_URL` and `BRAIN_EXTERNAL_AI_BASE_URL` at your own endpoint
+   - OpenRouter: set `OPENROUTER_API_KEY`
+6. Start the app with `npm run dev`.
+7. Open `http://127.0.0.1:3005`.
+8. Complete the first-run flow in this order:
+   - `Start Here`
+   - `Guided Setup`
+   - `Settings`
+   - `Sessions`
+9. Inside the setup flow, do:
+   - brain purpose
+   - owner setup
+   - trusted source import
+   - verification
+10. Open `/settings` and set embeddings:
+   - `external` if you want your own local runtime
+   - `openrouter` if you want hosted embeddings
+   - `none` if you want lexical-only retrieval
+11. Run `Test embeddings`.
+12. Run `Rebuild namespace vectors` after changing provider or model.
+
+If you already have OpenClaw-style markdown memory files, use Guided Setup import as the recommended historical bootstrap path.
+
+For the full install, provider, and in-app setup guide, see [docs/FIRST_RUN_SETUP.md](docs/FIRST_RUN_SETUP.md).
+
+For the section-by-section operator guide, see [docs/OPERATOR_WORKBENCH_GUIDE.md](docs/OPERATOR_WORKBENCH_GUIDE.md).
+
+Important current note:
+
+- `Qwen/Qwen3-Embedding-4B` works on the local provider test path, but full namespace re-embed currently requires a pgvector schema upgrade because the current vector columns are still `1536`-dimension.
+
+Default local URLs:
+
+- UI: `http://127.0.0.1:3005`
+- Runtime: `http://127.0.0.1:8787`
+
+### Serve as one routed app
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run serve:one
+```
+
+This starts:
+
+- `local-brain` on an internal runtime port
+- `brain-console` on an internal Next.js port
+- a root Node.js reverse proxy on `http://127.0.0.1:3005`
+
+So later deployment can expose one entry URL while still preserving the runtime boundary inside the app.
+
+### Run shared quality gates
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run quality:gates
+```
+
+### Relationship graph smoke
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run smoke:graph
+```
 
 ## Honest Current Limits
 

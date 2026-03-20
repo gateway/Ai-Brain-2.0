@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { queryRows, withTransaction } from "../db/client.js";
 import { getProviderAdapter } from "../providers/registry.js";
 
-type BrainEntityType = "self" | "person" | "place" | "org" | "project" | "concept" | "unknown";
+type BrainEntityType = "self" | "person" | "place" | "org" | "project" | "activity" | "media" | "skill" | "decision" | "constraint" | "routine" | "style_spec" | "goal" | "plan" | "concept" | "unknown";
 type MentionRole = "subject" | "participant" | "location" | "organization" | "project" | "mentioned";
 type BrainAmbiguityType =
   | "possible_misspelling"
@@ -117,6 +117,8 @@ export interface ClassificationStagingResult {
     readonly outputTokens?: number;
     readonly totalTokens?: number;
   };
+  readonly latencyMs: number;
+  readonly providerMetadata?: Record<string, unknown>;
 }
 
 function normalizeWhitespace(value: string): string {
@@ -162,6 +164,33 @@ function coerceEntityType(value: unknown): BrainEntityType {
       return "org";
     case "project":
       return "project";
+    case "activity":
+    case "sport":
+      return "activity";
+    case "media":
+    case "movie":
+    case "film":
+      return "media";
+    case "skill":
+      return "skill";
+    case "decision":
+      return "decision";
+    case "constraint":
+    case "rule":
+    case "policy":
+      return "constraint";
+    case "routine":
+    case "habit":
+      return "routine";
+    case "style_spec":
+    case "style":
+    case "work_style":
+    case "work-style":
+      return "style_spec";
+    case "goal":
+      return "goal";
+    case "plan":
+      return "plan";
     case "concept":
     case "thing":
       return "concept";
@@ -258,7 +287,7 @@ function buildInstruction(): string {
     "- episodic_hints: what happened or was directly observed",
     "- semantic_hints: general facts or durable learned abstractions",
     "- procedural_hints: active current-truth state candidates like roles or project state",
-    "Classify people, places, organizations, projects, concepts, relationships, claims, and ambiguities.",
+    "Classify people, places, organizations, projects, activities, media, skills, concepts, relationships, claims, and ambiguities.",
     "Use low confidence and ambiguities instead of inventing certainty.",
     "JSON shape:",
     JSON.stringify(
@@ -489,6 +518,13 @@ export async function classifyTextToCandidates(
     let insertedClaims = 0;
     let insertedAmbiguities = 0;
     let insertedMemoryCandidates = 0;
+    const runMetadata = {
+      artifact_id: request.artifactId ?? null,
+      artifact_observation_id: request.artifactObservationId ?? null,
+      source_chunk_id: request.sourceChunkId ?? null,
+      preset_id: request.presetId ?? null,
+      ...(request.metadata ?? {})
+    };
 
     for (const packet of entities) {
       const name = normalizeWhitespace(packet.name ?? "");
@@ -499,19 +535,22 @@ export async function classifyTextToCandidates(
       const entityId = await upsertEntity(client, request.namespaceId, entityType, name, {
         source: "provider_classification",
         provider: classification.provider,
-        model: classification.model
+        model: classification.model,
+        ...runMetadata
       });
       entityMap.set(normalizeName(name), { id: entityId, type: entityType });
       insertedEntities += 1;
 
       await upsertAlias(client, entityId, name, "derived", {
-        source: "provider_classification"
+        source: "provider_classification",
+        ...runMetadata
       });
 
       for (const alias of asArray<string>(packet.aliases)) {
         if (asString(alias)) {
           await upsertAlias(client, entityId, alias, "derived", {
-            source: "provider_classification"
+            source: "provider_classification",
+            ...runMetadata
           });
         }
       }
@@ -525,7 +564,8 @@ export async function classifyTextToCandidates(
           mentionRole: coerceMentionRole(packet.role, entityType),
           confidence: clampConfidence(packet.confidence, 0.7),
           metadata: {
-            source: "provider_classification"
+            source: "provider_classification",
+            ...runMetadata
           }
         });
       }
@@ -541,10 +581,12 @@ export async function classifyTextToCandidates(
       const entityId = await upsertEntity(client, request.namespaceId, coercedType, name, {
         source: "provider_classification",
         provider: classification.provider,
-        model: classification.model
+        model: classification.model,
+        ...runMetadata
       });
       await upsertAlias(client, entityId, name, "derived", {
-        source: "provider_classification"
+        source: "provider_classification",
+        ...runMetadata
       });
       const resolved = { id: entityId, type: coercedType };
       entityMap.set(normalized, resolved);
@@ -603,6 +645,7 @@ export async function classifyTextToCandidates(
             source: "provider_classification",
             provider: classification.provider,
             model: classification.model,
+            ...runMetadata,
             time_expression_text: relation.time_expression_text ?? null,
             ambiguity_type: relation.ambiguity_type ?? null,
             ambiguity_reason: relation.ambiguity_reason ?? null
@@ -695,6 +738,7 @@ export async function classifyTextToCandidates(
             source: "provider_classification",
             provider: classification.provider,
             model: classification.model,
+            ...runMetadata,
             content
           })
         ]
@@ -756,6 +800,7 @@ export async function classifyTextToCandidates(
             source: "provider_classification",
             provider: classification.provider,
             model: classification.model,
+            ...runMetadata,
             suggestions: asArray<string>(ambiguity.suggestions)
           })
         ]
@@ -798,7 +843,8 @@ export async function classifyTextToCandidates(
           JSON.stringify({
             source: "provider_classification",
             provider: classification.provider,
-            model: classification.model
+            model: classification.model,
+            ...runMetadata
           })
         ]
       );
@@ -836,7 +882,8 @@ export async function classifyTextToCandidates(
           JSON.stringify({
             source: "provider_classification",
             provider: classification.provider,
-            model: classification.model
+            model: classification.model,
+            ...runMetadata
           })
         ]
       );
@@ -879,6 +926,7 @@ export async function classifyTextToCandidates(
             source: "provider_classification",
             provider: classification.provider,
             model: classification.model,
+            ...runMetadata,
             ...(asRecord(hint.metadata) ?? {})
           })
         ]
@@ -897,7 +945,9 @@ export async function classifyTextToCandidates(
         memoryCandidates: insertedMemoryCandidates
       },
       rawText: classification.rawText,
-      tokenUsage: classification.tokenUsage
+      tokenUsage: classification.tokenUsage,
+      latencyMs: classification.latencyMs,
+      providerMetadata: classification.providerMetadata
     };
   });
 }

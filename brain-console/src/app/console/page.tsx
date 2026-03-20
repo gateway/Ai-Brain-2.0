@@ -28,7 +28,44 @@ export default async function ConsoleOverviewPage() {
       title="Overview"
       subtitle="Live runtime status, benchmark posture, and the current health of temporal, relationship, and queue layers."
     >
-      <ConsoleSection
+      <div className="space-y-6 pt-6">
+        <section className="overflow-hidden rounded-[34px] border border-white/8 bg-[radial-gradient(circle_at_top_right,_rgba(34,211,238,0.12),_transparent_26%),linear-gradient(180deg,_rgba(16,20,29,0.96)_0%,_rgba(8,11,20,0.98)_100%)] px-5 py-6 shadow-[0_28px_90px_rgba(0,0,0,0.26)] sm:px-6 lg:px-8">
+          <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_360px] lg:items-start">
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className="border-cyan-400/20 bg-cyan-400/10 text-cyan-100">
+                  Advanced console
+                </Badge>
+                <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-200">
+                  Atlas and retrieval
+                </Badge>
+              </div>
+              <div className="space-y-3">
+                <h3 className="max-w-3xl text-[1.9rem] font-semibold tracking-[-0.04em] text-white sm:text-[2.35rem]">
+                  Use the console when you need to inspect how the brain is actually behaving.
+                </h3>
+                <p className="max-w-2xl text-[15px] leading-8 text-slate-200">
+                  This surface is for live retrieval, graph exploration, timeline inspection, inbox decisions, and benchmark posture. It is intentionally more technical than the guided workbench.
+                </p>
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+              {[
+                { label: "Retrieval", value: "live", detail: "query and fallback inspection" },
+                { label: "Graph", value: "active", detail: "relationship atlas and focus views" },
+                { label: "Benchmark", value: benchmarkJson?.summary.recommendation ?? "unknown", detail: "lexical posture" }
+              ].map((item) => (
+                <div key={item.label} className="premium-soft-panel rounded-[24px] border border-white/10 p-4">
+                  <p className="premium-eyebrow text-slate-300">{item.label}</p>
+                  <p className="mt-3 text-[1.4rem] font-semibold tracking-[-0.03em] text-white">{item.value}</p>
+                  <p className="mt-2 text-sm leading-7 text-slate-400">{item.detail}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <ConsoleSection
         eyebrow="Operator entry points"
         title="Where to start in the brain"
         description="The console keeps the highest-signal surfaces visible first: query, timeline, relationships, and benchmark posture. The rest of the runtime lives behind those doors."
@@ -45,7 +82,7 @@ export default async function ConsoleOverviewPage() {
             </Badge>
           </>
         }
-      >
+        >
         <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
           <div className="grid gap-4 md:grid-cols-2">
             <ConsoleEntryCard
@@ -122,14 +159,14 @@ export default async function ConsoleOverviewPage() {
             />
           </div>
         </div>
-      </ConsoleSection>
+        </ConsoleSection>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
-        <Card className="relative border-white/8 bg-[linear-gradient(180deg,_rgba(13,18,31,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+        <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+          <Card className="relative overflow-hidden rounded-[30px] border-white/8 bg-[linear-gradient(180deg,_rgba(13,18,31,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_22px_70px_rgba(0,0,0,0.22)]">
           <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/12 to-transparent" />
           <div className="px-5 pt-5">
-            <p className="font-mono text-[11px] uppercase tracking-[0.34em] text-slate-400">Current posture</p>
-            <h3 className="mt-2 text-2xl font-semibold tracking-tight text-white">What the console is showing now</h3>
+            <p className="premium-eyebrow font-mono text-slate-400">Current posture</p>
+            <h3 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white">What the console is showing now</h3>
           </div>
           <CardContent className="space-y-4 pt-5 text-sm leading-7 text-slate-300">
             <div className="flex flex-wrap gap-2">
@@ -186,11 +223,11 @@ export default async function ConsoleOverviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="relative border-white/8 bg-[linear-gradient(180deg,_rgba(13,18,31,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+          <Card className="relative overflow-hidden rounded-[30px] border-white/8 bg-[linear-gradient(180deg,_rgba(13,18,31,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_22px_70px_rgba(0,0,0,0.22)]">
           <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/12 to-transparent" />
           <div className="px-5 pt-5">
-            <p className="font-mono text-[11px] uppercase tracking-[0.34em] text-slate-400">Queue and memory health</p>
-            <h3 className="mt-2 text-2xl font-semibold tracking-tight text-white">Current operator snapshot</h3>
+            <p className="premium-eyebrow font-mono text-slate-400">Queue and memory health</p>
+            <h3 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white">Current operator snapshot</h3>
           </div>
           <CardContent className="space-y-4 pt-5 text-sm leading-7 text-slate-300">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -237,7 +274,8 @@ export default async function ConsoleOverviewPage() {
               </div>
             </div>
           </CardContent>
-        </Card>
+          </Card>
+        </div>
       </div>
     </ConsoleShell>
   );

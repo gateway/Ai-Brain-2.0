@@ -4,6 +4,7 @@ import { StatusBadge } from "@/components/metric-card";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { getConsoleDefaults, getRuntimeBaseUrl, searchBrain, type SearchResult } from "@/lib/brain-runtime";
+import { getBootstrapState, resolveBootstrapEmbeddingSettings } from "@/lib/operator-workbench";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -13,14 +14,18 @@ function readParam(value: string | string[] | undefined, fallback = ""): string 
 
 export default async function QueryPage({ searchParams }: { readonly searchParams: SearchParams }) {
   const params = await searchParams;
-  const defaults = await getConsoleDefaults();
-  const namespaceId = readParam(params.namespace, defaults.namespaceId);
+  const [defaults, bootstrap] = await Promise.all([getConsoleDefaults(), getBootstrapState().catch(() => null)]);
+  const embeddingDefaults = bootstrap ? resolveBootstrapEmbeddingSettings(bootstrap.metadata) : undefined;
+  const namespaceId = readParam(params.namespace);
   const query = readParam(params.q);
   const timeStart = readParam(params.time_start);
   const timeEnd = readParam(params.time_end);
-  const provider = readParam(params.provider);
-  const model = readParam(params.model);
-  const dimensions = readParam(params.dimensions);
+  const provider = readParam(params.provider, embeddingDefaults?.provider ?? "");
+  const model = readParam(params.model, embeddingDefaults?.model ?? "");
+  const dimensions = readParam(
+    params.dimensions,
+    embeddingDefaults?.dimensions ? String(embeddingDefaults.dimensions) : ""
+  );
   const limit = readParam(params.limit, "5");
 
   let result: SearchResult | undefined;
@@ -58,7 +63,19 @@ export default async function QueryPage({ searchParams }: { readonly searchParam
           <form method="GET" className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <label className="space-y-2 text-sm">
               <span>Namespace</span>
-              <Input name="namespace" defaultValue={namespaceId} />
+              <Input
+                name="namespace"
+                defaultValue={namespaceId}
+                list="namespace-options"
+                placeholder={defaults.namespaceId ? `auto: ${defaults.namespaceId}` : "leave blank to use active scope"}
+              />
+              <datalist id="namespace-options">
+                {defaults.namespaces.map((item) => (
+                  <option key={item.namespaceId} value={item.namespaceId}>
+                    {item.namespaceId}
+                  </option>
+                ))}
+              </datalist>
             </label>
             <label className="space-y-2 text-sm xl:col-span-2">
               <span>Query</span>
@@ -123,16 +140,21 @@ export default async function QueryPage({ searchParams }: { readonly searchParam
               </CardHeader>
               <CardContent className="space-y-2 text-sm leading-6 text-slate-700">
                 <div className="flex flex-wrap gap-2">
+                  <StatusBadge value={result.retrievalMode ?? "unknown"} />
                   <StatusBadge value={result.lexicalProvider ?? "unknown"} />
                   <StatusBadge value={result.lexicalFallbackUsed ? "fallback used" : "no fallback"} />
                   {result.planner?.intent ? <StatusBadge value={result.planner.intent} /> : null}
                   {result.planner?.temporalGateTriggered ? <StatusBadge value="temporal support used" /> : null}
                 </div>
                 <p>Branch preference: {result.planner?.branchPreference ?? "not reported"}</p>
+                <p>Active retrieval mode: {result.retrievalMode ?? "unknown"}</p>
+                <p>Embedding source: {result.queryEmbeddingSource ?? "none"}</p>
                 <p>
                   Temporal window: {result.planner?.timeStart ?? "unset"} → {result.planner?.timeEnd ?? "unset"}
                 </p>
                 <p>Lexical terms: {result.planner?.lexicalTerms?.join(", ") || "none"}</p>
+                <p>Vector fallback: {result.vectorFallbackReason ?? "not used"}</p>
+                <p>Lexical fallback reason: {result.lexicalFallbackReason ?? "not used"}</p>
               </CardContent>
             </Card>
 
@@ -142,7 +164,16 @@ export default async function QueryPage({ searchParams }: { readonly searchParam
                 <CardTitle>{result.results.length} hits</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm leading-6 text-slate-700">
+                <p>
+                  Namespace scope: {result.resolvedNamespaceId ?? "unknown"}
+                  {result.namespaceDefaulted ? " (auto-resolved)" : ""}
+                  {result.namespaceEscalated ? " (expanded from default lane)" : ""}
+                </p>
+                {result.searchedNamespaceIds?.length ? (
+                  <p>Searched lanes: {result.searchedNamespaceIds.join(", ")}</p>
+                ) : null}
                 <p>Provider: {result.provider ?? "lexical-only"}</p>
+                <p>Model: {result.model ?? "n/a"}</p>
                 <p>Result mix should make token burn visible before the prompt window gets bloated.</p>
               </CardContent>
             </Card>

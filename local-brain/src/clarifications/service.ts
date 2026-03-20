@@ -4,6 +4,7 @@ import { queryRows, withTransaction } from "../db/client.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
 import { refreshRelationshipPriors } from "../jobs/relationship-priors.js";
 import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
+import { runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
 
 type ClarificationAction = "resolve" | "ignore";
 type ClarificationTargetRole = "subject" | "object";
@@ -98,6 +99,23 @@ interface MergeEntityAliasInput {
   readonly entityType: string;
   readonly targetEntityId?: string;
   readonly aliases?: readonly string[];
+  readonly preserveAliases?: boolean;
+  readonly note?: string;
+}
+
+interface ResolveIdentityConflictInput {
+  readonly sourceEntityId: string;
+  readonly targetEntityId: string;
+  readonly canonicalName: string;
+  readonly entityType: string;
+  readonly aliases?: readonly string[];
+  readonly preserveAliases?: boolean;
+  readonly note?: string;
+}
+
+interface KeepIdentityConflictSeparateInput {
+  readonly leftEntityId: string;
+  readonly rightEntityId: string;
   readonly note?: string;
 }
 
@@ -151,6 +169,37 @@ export interface EntityMergeResult {
   readonly outboxEventId: string;
 }
 
+export interface IdentityConflictDecisionResult {
+  readonly leftEntityId: string;
+  readonly rightEntityId: string;
+  readonly decision: "merge" | "keep_separate";
+  readonly canonicalName?: string;
+  readonly identityProfileId?: string;
+  readonly touchedNamespaces: readonly string[];
+  readonly outboxEventIds: readonly string[];
+}
+
+export interface IdentityConflictHistoryItem {
+  readonly decisionId: string;
+  readonly decision: "merge" | "keep_separate";
+  readonly canonicalName?: string;
+  readonly note?: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly left: {
+    readonly entityId: string;
+    readonly namespaceId: string;
+    readonly name: string;
+    readonly entityType: string;
+  };
+  readonly right: {
+    readonly entityId: string;
+    readonly namespaceId: string;
+    readonly name: string;
+    readonly entityType: string;
+  };
+}
+
 const KINSHIP_TERMS = new Set([
   "uncle",
   "aunt",
@@ -181,6 +230,10 @@ function normalizeName(value: string): string {
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => normalizeWhitespace(value)).filter(Boolean))];
+}
+
+function orderEntityPair(leftEntityId: string, rightEntityId: string): readonly [string, string] {
+  return leftEntityId.localeCompare(rightEntityId) <= 0 ? [leftEntityId, rightEntityId] : [rightEntityId, leftEntityId];
 }
 
 function inferTargetRole(row: ClarificationInboxRow | ClaimCandidateRow): ClarificationTargetRole {
@@ -290,7 +343,7 @@ function inferFollowUpAmbiguity(candidate: ClaimCandidateRow): {
 }
 
 function isRelationshipPredicate(predicate: string): boolean {
-  return ["friend_of", "with", "from", "lives_in", "lived_in", "currently_in", "runs", "works_at", "works_on", "works_with", "hikes_with", "member_of", "created_by"].includes(
+  return ["friend_of", "was_with", "met_through", "from", "lives_in", "lived_in", "currently_in", "runs", "works_at", "worked_at", "works_on", "works_with", "member_of", "created_by"].includes(
     predicate
   );
 }
@@ -404,6 +457,205 @@ async function resolveEntityForUpdate(
   }
 
   return row;
+}
+
+async function resolveEntityByIdForUpdate(
+  client: PoolClient,
+  entityId: string
+): Promise<{
+  id: string;
+  namespace_id: string;
+  canonical_name: string;
+  normalized_name: string;
+  entity_type: string;
+  identity_profile_id: string | null;
+}> {
+  const result = await client.query<{
+    id: string;
+    namespace_id: string;
+    canonical_name: string;
+    normalized_name: string;
+    entity_type: string;
+    identity_profile_id: string | null;
+  }>(
+    `
+      SELECT
+        id::text,
+        namespace_id,
+        canonical_name,
+        normalized_name,
+        entity_type,
+        identity_profile_id::text
+      FROM entities
+      WHERE id = $1::uuid
+      FOR UPDATE
+    `,
+    [entityId]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error(`Entity ${entityId} was not found.`);
+  }
+
+  return row;
+}
+
+async function upsertIdentityProfile(
+  client: PoolClient,
+  profileType: string,
+  canonicalName: string,
+  metadata: Record<string, unknown>
+): Promise<string> {
+  const result = await client.query<{ id: string }>(
+    `
+      INSERT INTO identity_profiles (
+        profile_type,
+        canonical_name,
+        normalized_name,
+        metadata
+      )
+      VALUES ($1, $2, $3, $4::jsonb)
+      ON CONFLICT (profile_type, normalized_name)
+      DO UPDATE SET
+        canonical_name = EXCLUDED.canonical_name,
+        metadata = identity_profiles.metadata || EXCLUDED.metadata,
+        updated_at = now()
+      RETURNING id
+    `,
+    [profileType, canonicalName, normalizeName(canonicalName), JSON.stringify(metadata)]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("Failed to upsert identity profile.");
+  }
+
+  return row.id;
+}
+
+async function recordIdentityConflictDecision(
+  client: PoolClient,
+  input: {
+    readonly leftEntityId: string;
+    readonly rightEntityId: string;
+    readonly decision: "merge" | "keep_separate";
+    readonly canonicalName?: string;
+    readonly identityProfileId?: string;
+    readonly note?: string;
+    readonly metadata?: Record<string, unknown>;
+  }
+): Promise<void> {
+  const [entityAId, entityBId] = orderEntityPair(input.leftEntityId, input.rightEntityId);
+  await client.query(
+    `
+      INSERT INTO identity_conflict_decisions (
+        entity_a_id,
+        entity_b_id,
+        decision,
+        canonical_name,
+        identity_profile_id,
+        note,
+        metadata
+      )
+      VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, $6, $7::jsonb)
+      ON CONFLICT (entity_a_id, entity_b_id)
+      DO UPDATE SET
+        decision = EXCLUDED.decision,
+        canonical_name = EXCLUDED.canonical_name,
+        identity_profile_id = EXCLUDED.identity_profile_id,
+        note = EXCLUDED.note,
+        metadata = identity_conflict_decisions.metadata || EXCLUDED.metadata,
+        updated_at = now()
+    `,
+    [
+      entityAId,
+      entityBId,
+      input.decision,
+      input.canonicalName ?? null,
+      input.identityProfileId ?? null,
+      input.note ?? null,
+      JSON.stringify(input.metadata ?? {})
+    ]
+  );
+}
+
+async function loadAliasesForEntity(client: PoolClient, entityId: string): Promise<string[]> {
+  const aliasRows = await client.query<{ alias: string }>(
+    `
+      SELECT alias
+      FROM entity_aliases
+      WHERE entity_id = $1::uuid
+      ORDER BY alias
+    `,
+    [entityId]
+  );
+
+  return aliasRows.rows.map((row) => row.alias);
+}
+
+async function syncIdentityProfileAcrossEntities(
+  client: PoolClient,
+  identityProfileId: string,
+  canonicalName: string,
+  aliases: readonly string[],
+  preserveAliases: boolean,
+  note: string | undefined
+): Promise<string[]> {
+  const entities = await client.query<{ id: string; namespace_id: string }>(
+    `
+      SELECT id::text, namespace_id
+      FROM entities
+      WHERE identity_profile_id = $1::uuid
+        AND merged_into_entity_id IS NULL
+      FOR UPDATE
+    `,
+    [identityProfileId]
+  );
+
+  const touchedNamespaces = new Set<string>();
+  for (const row of entities.rows) {
+    touchedNamespaces.add(row.namespace_id);
+    await client.query(
+      `
+        UPDATE entities
+        SET
+          canonical_name = $2,
+          normalized_name = $3,
+          metadata = entities.metadata || $4::jsonb,
+          last_seen_at = now()
+        WHERE id = $1::uuid
+      `,
+      [
+        row.id,
+        canonicalName,
+        normalizeName(canonicalName),
+        JSON.stringify({
+          cross_lane_identity_sync: true,
+          identity_profile_id: identityProfileId,
+          note: note ?? null
+        })
+      ]
+    );
+
+    if (preserveAliases) {
+      for (const alias of aliases) {
+        await upsertAlias(client, row.id, alias, "manual", {
+          clarification_source: "identity_profile_sync",
+          identity_profile_id: identityProfileId,
+          note: note ?? null
+        });
+      }
+    } else {
+      await replaceEntityAliases(client, row.id, aliases, {
+        clarification_source: "identity_profile_sync_strict",
+        identity_profile_id: identityProfileId,
+        note: note ?? null
+      });
+    }
+  }
+
+  return [...touchedNamespaces];
 }
 
 async function upsertOutboxEvent(
@@ -904,6 +1156,25 @@ async function transferEntityAliases(
   );
 }
 
+async function replaceEntityAliases(
+  client: PoolClient,
+  entityId: string,
+  aliases: readonly string[],
+  metadata: Record<string, unknown>
+): Promise<void> {
+  await client.query(
+    `
+      DELETE FROM entity_aliases
+      WHERE entity_id = $1::uuid
+    `,
+    [entityId]
+  );
+
+  for (const alias of unique(aliases)) {
+    await upsertAlias(client, entityId, alias, "manual", metadata);
+  }
+}
+
 async function mergeEntityReferences(client: PoolClient, namespaceId: string, sourceEntityId: string, targetEntityId: string): Promise<void> {
   await client.query(
     `
@@ -1147,7 +1418,8 @@ async function mergeEntityReferences(client: PoolClient, namespaceId: string, so
 }
 
 export async function mergeEntityAlias(input: MergeEntityAliasInput): Promise<EntityMergeResult> {
-  const aliases = unique([input.canonicalName, ...(input.aliases ?? [])]);
+  const preserveAliases = input.preserveAliases ?? true;
+  const aliases = unique([...(input.aliases ?? [])]);
 
   return withTransaction(async (client) => {
     const source = await resolveEntityForUpdate(client, input.namespaceId, input.entityType, {
@@ -1206,9 +1478,16 @@ export async function mergeEntityAlias(input: MergeEntityAliasInput): Promise<En
         ]
       );
       targetEntityId = source.id;
-      for (const alias of unique([source.canonical_name, ...aliases])) {
-        await upsertAlias(client, source.id, alias, "manual", {
-          clarification_source: "entity_merge",
+      if (preserveAliases) {
+        for (const alias of unique([source.canonical_name, ...aliases])) {
+          await upsertAlias(client, source.id, alias, "manual", {
+            clarification_source: "entity_merge",
+            note: input.note ?? null
+          });
+        }
+      } else {
+        await replaceEntityAliases(client, source.id, aliases, {
+          clarification_source: "entity_merge_strict",
           note: input.note ?? null
         });
       }
@@ -1219,9 +1498,16 @@ export async function mergeEntityAlias(input: MergeEntityAliasInput): Promise<En
       }
       targetEntityId = resolvedTarget.id;
       await transferEntityAliases(client, source.id, targetEntityId, input.note);
-      for (const alias of unique([source.canonical_name, ...aliases])) {
-        await upsertAlias(client, targetEntityId, alias, "manual", {
-          clarification_source: "entity_merge",
+      if (preserveAliases) {
+        for (const alias of unique([source.canonical_name, ...aliases])) {
+          await upsertAlias(client, targetEntityId, alias, "manual", {
+            clarification_source: "entity_merge",
+            note: input.note ?? null
+          });
+        }
+      } else {
+        await replaceEntityAliases(client, targetEntityId, aliases, {
+          clarification_source: "entity_merge_strict",
           note: input.note ?? null
         });
       }
@@ -1259,8 +1545,9 @@ export async function mergeEntityAlias(input: MergeEntityAliasInput): Promise<En
         target_entity_id: targetEntityId,
         canonical_name: canonicalName,
         entity_type: input.entityType,
-        aliases: unique([source.canonical_name, ...aliases]),
+        aliases: preserveAliases ? unique([source.canonical_name, ...aliases]) : unique(aliases),
         merge_mode: mergeMode,
+        preserve_aliases: preserveAliases,
         note: input.note ?? null
       },
       idempotencyKey: `entity:merge:${input.namespaceId}:${source.id}:${targetEntityId}:${normalizeName(canonicalName)}`
@@ -1272,6 +1559,255 @@ export async function mergeEntityAlias(input: MergeEntityAliasInput): Promise<En
       targetEntityId,
       mergeMode,
       outboxEventId
+    };
+  });
+}
+
+export async function resolveIdentityConflict(input: ResolveIdentityConflictInput): Promise<IdentityConflictDecisionResult> {
+  const canonicalName = normalizeWhitespace(input.canonicalName);
+  if (!canonicalName) {
+    throw new Error("canonicalName is required.");
+  }
+
+  const preserveAliases = input.preserveAliases ?? true;
+  const aliases = unique([...(input.aliases ?? [])]);
+
+  return withTransaction(async (client) => {
+    const left = await resolveEntityByIdForUpdate(client, input.sourceEntityId);
+    const right = await resolveEntityByIdForUpdate(client, input.targetEntityId);
+
+    if (left.entity_type !== right.entity_type || left.entity_type !== input.entityType) {
+      throw new Error("Identity conflict resolution requires matching entity types.");
+    }
+
+    if (left.namespace_id === right.namespace_id) {
+      const combinedAliases = unique([
+        left.canonical_name,
+        right.canonical_name,
+        ...(await loadAliasesForEntity(client, left.id)),
+        ...(await loadAliasesForEntity(client, right.id)),
+        ...aliases
+      ]);
+
+      await transferEntityAliases(client, left.id, right.id, input.note);
+      if (preserveAliases) {
+        for (const alias of combinedAliases) {
+          await upsertAlias(client, right.id, alias, "manual", {
+            clarification_source: "identity_conflict_resolution",
+            note: input.note ?? null
+          });
+        }
+      } else {
+        await replaceEntityAliases(client, right.id, aliases, {
+          clarification_source: "identity_conflict_resolution_strict",
+          note: input.note ?? null
+        });
+      }
+      await mergeEntityReferences(client, left.namespace_id, left.id, right.id);
+      await client.query(
+        `
+          UPDATE entities
+          SET
+            canonical_name = $2,
+            normalized_name = $3,
+            merged_into_entity_id = NULL,
+            metadata = entities.metadata || $4::jsonb,
+            last_seen_at = now()
+          WHERE id = $1::uuid
+        `,
+        [
+          right.id,
+          canonicalName,
+          normalizeName(canonicalName),
+          JSON.stringify({
+            alias_merge_mode: "redirect_merge",
+            cross_lane_identity_resolution: false,
+            note: input.note ?? null
+          })
+        ]
+      );
+      await client.query(
+        `
+          UPDATE entities
+          SET
+            merged_into_entity_id = $2::uuid,
+            metadata = entities.metadata || $3::jsonb,
+            last_seen_at = now()
+          WHERE id = $1::uuid
+        `,
+        [
+          left.id,
+          right.id,
+          JSON.stringify({
+            alias_merge_mode: "redirect_merge",
+            merged_into_entity_id: right.id,
+            note: input.note ?? null
+          })
+        ]
+      );
+      const outboxEventId = await upsertOutboxEvent(client, {
+        namespaceId: left.namespace_id,
+        aggregateType: "entity",
+        aggregateId: left.id,
+        eventType: "entity.alias_merged",
+        payload: {
+          namespace_id: left.namespace_id,
+          source_entity_id: left.id,
+          source_name: left.canonical_name,
+          target_entity_id: right.id,
+          canonical_name: canonicalName,
+          entity_type: input.entityType,
+          aliases: combinedAliases,
+          merge_mode: "redirect_merge",
+          note: input.note ?? null
+        },
+        idempotencyKey: `entity:merge:${left.namespace_id}:${left.id}:${right.id}:${normalizeName(canonicalName)}`
+      });
+
+      await recordIdentityConflictDecision(client, {
+        leftEntityId: left.id,
+        rightEntityId: right.id,
+        decision: "merge",
+        canonicalName,
+        note: input.note,
+        metadata: {
+          resolution_mode: "same_namespace_merge",
+          namespace_id: left.namespace_id,
+          preserve_aliases: preserveAliases
+        }
+      });
+
+        return {
+          leftEntityId: left.id,
+          rightEntityId: right.id,
+          decision: "merge",
+          canonicalName,
+          touchedNamespaces: [left.namespace_id],
+          outboxEventIds: [outboxEventId]
+        };
+      }
+
+    const identityProfileId =
+      left.identity_profile_id ||
+      right.identity_profile_id ||
+      (await upsertIdentityProfile(client, input.entityType, canonicalName, {
+        source: "identity_conflict_resolution",
+        note: input.note ?? null
+      }));
+
+    const combinedAliases = unique([
+      left.canonical_name,
+      right.canonical_name,
+      ...(await loadAliasesForEntity(client, left.id)),
+      ...(await loadAliasesForEntity(client, right.id)),
+      ...aliases
+    ]);
+
+    for (const entity of [left, right]) {
+      await client.query(
+        `
+          UPDATE entities
+          SET
+            identity_profile_id = $2::uuid,
+            canonical_name = $3,
+            normalized_name = $4,
+            metadata = entities.metadata || $5::jsonb,
+            last_seen_at = now()
+          WHERE id = $1::uuid
+        `,
+        [
+          entity.id,
+          identityProfileId,
+          canonicalName,
+          normalizeName(canonicalName),
+          JSON.stringify({
+            cross_lane_identity_resolved: true,
+            identity_profile_id: identityProfileId,
+            note: input.note ?? null
+          })
+        ]
+      );
+    }
+
+    const touchedNamespaces = await syncIdentityProfileAcrossEntities(
+      client,
+      identityProfileId,
+      canonicalName,
+      preserveAliases ? combinedAliases : aliases,
+      preserveAliases,
+      input.note
+    );
+
+    await recordIdentityConflictDecision(client, {
+      leftEntityId: left.id,
+      rightEntityId: right.id,
+      decision: "merge",
+      canonicalName,
+      identityProfileId,
+      note: input.note,
+        metadata: {
+          resolution_mode: "cross_lane_profile_link",
+          touched_namespaces: touchedNamespaces,
+          preserve_aliases: preserveAliases
+        }
+      });
+
+    const outboxEventIds: string[] = [];
+    for (const namespaceId of touchedNamespaces) {
+      outboxEventIds.push(
+        await upsertOutboxEvent(client, {
+          namespaceId,
+          aggregateType: "identity_profile",
+          aggregateId: null,
+          eventType: "identity.profile_linked",
+          payload: {
+            namespace_id: namespaceId,
+            identity_profile_id: identityProfileId,
+            canonical_name: canonicalName,
+            aliases: preserveAliases ? combinedAliases : aliases,
+            preserve_aliases: preserveAliases,
+            note: input.note ?? null,
+            source_entity_ids: [left.id, right.id]
+          },
+          idempotencyKey: `identity:profile_linked:${identityProfileId}:${namespaceId}:${normalizeName(canonicalName)}`
+        })
+      );
+    }
+
+    return {
+      leftEntityId: left.id,
+      rightEntityId: right.id,
+      decision: "merge",
+      canonicalName,
+      identityProfileId,
+      touchedNamespaces,
+      outboxEventIds
+    };
+  });
+}
+
+export async function keepIdentityConflictSeparate(input: KeepIdentityConflictSeparateInput): Promise<IdentityConflictDecisionResult> {
+  return withTransaction(async (client) => {
+    const left = await resolveEntityByIdForUpdate(client, input.leftEntityId);
+    const right = await resolveEntityByIdForUpdate(client, input.rightEntityId);
+
+    await recordIdentityConflictDecision(client, {
+      leftEntityId: left.id,
+      rightEntityId: right.id,
+      decision: "keep_separate",
+      note: input.note,
+      metadata: {
+        left_namespace_id: left.namespace_id,
+        right_namespace_id: right.namespace_id
+      }
+    });
+
+    return {
+      leftEntityId: left.id,
+      rightEntityId: right.id,
+      decision: "keep_separate",
+      touchedNamespaces: [...new Set([left.namespace_id, right.namespace_id])],
+      outboxEventIds: []
     };
   });
 }
@@ -1566,6 +2102,55 @@ async function processAliasMergedEvent(event: OutboxEventRow): Promise<void> {
   });
 }
 
+async function rebuildNamespaceAfterClarification(namespaceId: string): Promise<void> {
+  await refreshRelationshipPriors(namespaceId);
+  await runCandidateConsolidation(namespaceId, 150);
+  await runRelationshipAdjudication(namespaceId, {
+    limit: 300,
+    acceptThreshold: 0.6,
+    rejectThreshold: 0.4
+  });
+  const timelineSpanRows = await queryRows<{ min_occurred_at: string | null; max_occurred_at: string | null }>(
+    `
+      SELECT
+        min(occurred_at)::text AS min_occurred_at,
+        max(occurred_at)::text AS max_occurred_at
+      FROM episodic_timeline
+      WHERE namespace_id = $1
+    `,
+    [namespaceId]
+  );
+  const minOccurredAt = timelineSpanRows[0]?.min_occurred_at ? new Date(timelineSpanRows[0].min_occurred_at) : null;
+  const maxOccurredAt = timelineSpanRows[0]?.max_occurred_at ? new Date(timelineSpanRows[0].max_occurred_at) : null;
+  if (!minOccurredAt || !maxOccurredAt) {
+    return;
+  }
+
+  const nowMs = Date.now();
+  const lookbackDays = Math.max(
+    30,
+    Math.ceil((nowMs - Math.min(minOccurredAt.getTime(), nowMs)) / 86_400_000) + 7
+  );
+
+  await withTransaction(async (client) => {
+    await client.query(
+      `
+        DELETE FROM temporal_nodes
+        WHERE namespace_id = $1
+      `,
+      [namespaceId]
+    );
+  });
+
+  for (const layer of ["day", "week", "month", "year"] as const) {
+    await runTemporalSummaryScaffold(namespaceId, {
+      layer,
+      lookbackDays,
+      maxMembersPerNode: 64
+    });
+  }
+}
+
 export async function processBrainOutboxEvents(options?: {
   readonly namespaceId?: string;
   readonly limit?: number;
@@ -1585,6 +2170,10 @@ export async function processBrainOutboxEvents(options?: {
         processed += 1;
       } else if (event.event_type === "entity.alias_merged") {
         await processAliasMergedEvent(event);
+        touchedNamespaces.add(event.namespace_id);
+        processed += 1;
+      } else if (event.event_type === "identity.profile_linked") {
+        await markOutboxProcessed(event.id);
         touchedNamespaces.add(event.namespace_id);
         processed += 1;
       } else if (event.event_type === "clarification.ignored") {
@@ -1612,13 +2201,7 @@ export async function processBrainOutboxEvents(options?: {
   }
 
   for (const namespaceId of touchedNamespaces) {
-    await refreshRelationshipPriors(namespaceId);
-    await runCandidateConsolidation(namespaceId, 100);
-    await runRelationshipAdjudication(namespaceId, {
-      limit: 200,
-      acceptThreshold: 0.6,
-      rejectThreshold: 0.4
-    });
+    await rebuildNamespaceAfterClarification(namespaceId);
   }
 
   return {

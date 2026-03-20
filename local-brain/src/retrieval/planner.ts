@@ -85,6 +85,47 @@ function uniqueSorted(values: readonly string[]): readonly string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
+function expandLexicalVariants(term: string): readonly string[] {
+  const normalized = term.toLowerCase();
+  if (normalized === "activities" || normalized === "activity") {
+    return ["activity", "sport"];
+  }
+
+  if (normalized === "movies" || normalized === "movie") {
+    return ["movie", "film"];
+  }
+
+  if (normalized === "skills" || normalized === "skill") {
+    return ["skill", "capability", "proficiency"];
+  }
+
+  if (normalized === "routine" || normalized === "routines" || normalized === "habit" || normalized === "habits") {
+    return ["routine", "routines", "habit", "habits", "cadence", "weekly"];
+  }
+
+  if (normalized === "decision" || normalized === "decisions") {
+    return ["decision", "decided", "choice"];
+  }
+
+  if (normalized === "constraint" || normalized === "constraints" || normalized === "rule" || normalized === "rules") {
+    return ["constraint", "rule", "policy"];
+  }
+
+  if (normalized === "style" || normalized === "styles" || normalized === "style_spec" || normalized === "style_specs") {
+    return ["style", "style spec", "work style", "response style", "format", "concise"];
+  }
+
+  if (normalized === "goal" || normalized === "goals") {
+    return ["goal", "goals", "aim", "intent"];
+  }
+
+  if (normalized === "plan" || normalized === "plans") {
+    return ["plan", "plans", "planning", "going to", "will"];
+  }
+
+  return [term];
+}
+
 function tokenizeQuery(queryText: string): readonly string[] {
   return queryText.match(/[A-Za-z0-9][A-Za-z0-9._:-]*/g) ?? [];
 }
@@ -116,6 +157,21 @@ function expandDayHint(year: string, monthIndex: number, day: number): { readonl
   };
 }
 
+function expandRelativeLocalDay(offsetDays: number): { readonly start: string; readonly end: string } {
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() + offsetDays);
+
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString()
+  };
+}
+
 function parseMonthName(monthName: string): number | undefined {
   return MONTH_LOOKUP.get(monthName.toLowerCase());
 }
@@ -125,6 +181,20 @@ function inferTemporalWindow(queryText: string, yearHints: readonly string[]): {
   readonly end?: string;
   readonly granularity: "none" | "day" | "month" | "year" | "broad";
 } {
+  if (/\byesterday\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalDay(-1),
+      granularity: "day"
+    };
+  }
+
+  if (/\b(?:today|tonight)\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalDay(0),
+      granularity: "day"
+    };
+  }
+
   const dayMonthYearMatch = queryText.match(
     /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+(19\d{2}|20\d{2})\b/i
   );
@@ -165,7 +235,12 @@ function inferTemporalWindow(queryText: string, yearHints: readonly string[]): {
 }
 
 function containsTemporalQuestion(queryText: string): boolean {
-  return /\b(what was i doing|who was i with|where was i|when was i|back in|at that time)\b/i.test(queryText) || /\b(during|around)\b/i.test(queryText);
+  return (
+    /\b(what was i doing|who was i with|where was i|when was i|back in|at that time)\b/i.test(queryText) ||
+    /\bwhat\s+did\s+.+\s+do\s+(?:today|yesterday|tonight)\b/i.test(queryText) ||
+    /\bwhat\s+happened\s+(?:today|yesterday|that\s+day)\b/i.test(queryText) ||
+    /\b(during|around)\b/i.test(queryText)
+  );
 }
 
 function containsHistoricalCue(queryText: string): boolean {
@@ -276,6 +351,10 @@ function extractLexicalTerms(queryText: string, temporalFocus: boolean): readonl
       return;
     }
 
+    if (temporalFocus && /^\d{1,2}$/.test(token)) {
+      return;
+    }
+
     if (!isCodeOrVersion && !isAcronym && normalized.length < 3) {
       return;
     }
@@ -309,10 +388,12 @@ function extractLexicalTerms(queryText: string, temporalFocus: boolean): readonl
 
   const budget = temporalFocus ? 4 : 4;
 
-  return [...scored.values()]
+  const baseTerms = [...scored.values()]
     .sort((left, right) => (right.score - left.score) || (left.position - right.position))
     .slice(0, budget)
     .map((item) => item.term);
+
+  return [...new Set(baseTerms.flatMap((term) => expandLexicalVariants(term)))].slice(0, 6);
 }
 
 function targetLayersForGranularity(

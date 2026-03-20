@@ -1,0 +1,23 @@
+{
+  "name": "ai-brain",
+  "private": true,
+  "workspaces": [
+    "brain-console",
+    "local-brain"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace local-brain && npm run build --workspace brain-console",
+    "typecheck": "cd local-brain && npm run check && cd ../brain-console && ./node_modules/.bin/tsc --noEmit",
+    "lint": "npm run lint --workspace brain-console",
+    "test": "npm run test:planner --workspace local-brain",
+    "quality:gates": "bash scripts/run_quality_gates.sh",
+    "bootstrap:mac": "bash scripts/bootstrap_mac.sh",
+    "doctor:mac": "bash scripts/doctor_mac.sh",
+    "dev": "bash scripts/dev.sh",
+    "serve": "bash scripts/serve.sh",
+    "serve:one": "bash scripts/serve_one_app.sh",
+    "smoke:graph": "bash scripts/smoke_relationship_graph.sh",
+    "sources:monitor": "bash scripts/run_source_monitor.sh",
+    "ops:work": "bash scripts/run_runtime_ops.sh"
+  }
+}

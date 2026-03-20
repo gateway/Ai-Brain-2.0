@@ -17,16 +17,16 @@ export function ConsoleSection({ eyebrow, title, description, action, children, 
   return (
     <Card
       className={cn(
-        "overflow-hidden border-border/70 bg-[linear-gradient(180deg,_rgba(13,18,31,0.94)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_60px_rgba(0,0,0,0.2)] backdrop-blur",
+        "premium-panel overflow-hidden rounded-[32px] border-border/70 shadow-[0_24px_80px_rgba(0,0,0,0.24)] backdrop-blur-xl",
         className
       )}
     >
       <CardHeader className="border-b border-white/6 pb-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-2">
-            <CardDescription className="font-mono text-[10px] uppercase tracking-[0.38em] text-slate-400">{eyebrow}</CardDescription>
-            <CardTitle className="text-[1.65rem] font-semibold tracking-tight text-white">{title}</CardTitle>
-            {description ? <p className="max-w-4xl text-[0.95rem] leading-7 text-slate-300">{description}</p> : null}
+            <CardDescription className="premium-eyebrow text-slate-200">{eyebrow}</CardDescription>
+            <CardTitle className="text-[1.75rem] font-semibold tracking-[-0.035em] text-white">{title}</CardTitle>
+            {description ? <p className="max-w-4xl text-[15px] leading-8 text-slate-100">{description}</p> : null}
           </div>
           {action ? <div className="flex flex-wrap justify-end gap-2">{action}</div> : null}
         </div>
@@ -43,22 +43,24 @@ interface ConsoleEntryCardProps {
   readonly description: string;
   readonly meta?: string;
   readonly badge?: string;
+  readonly className?: string;
 }
 
-export function ConsoleEntryCard({ href, eyebrow, title, description, meta, badge }: ConsoleEntryCardProps) {
+export function ConsoleEntryCard({ href, eyebrow, title, description, meta, badge, className }: ConsoleEntryCardProps) {
   return (
     <Link
       href={href}
       className={cn(
-        "group relative overflow-hidden rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(15,23,42,0.94)_0%,_rgba(8,12,22,0.98)_100%)] p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-cyan-400/30 hover:shadow-[0_18px_45px_rgba(0,0,0,0.22)]"
+        "group relative overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,_rgba(17,24,39,0.94)_0%,_rgba(8,12,22,0.98)_100%)] p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-cyan-400/30 hover:shadow-[0_22px_50px_rgba(0,0,0,0.24)] sm:p-6",
+        className
       )}
     >
       <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/12 to-transparent" />
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-2">
-          <p className="font-mono text-[10px] uppercase tracking-[0.38em] text-slate-500">{eyebrow}</p>
-          <h3 className="text-[1.15rem] font-semibold tracking-tight text-white">{title}</h3>
-          <p className="max-w-md text-sm leading-6 text-slate-300">{description}</p>
+          <p className="premium-eyebrow text-slate-200">{eyebrow}</p>
+          <h3 className="text-[1.2rem] font-semibold tracking-[-0.03em] text-white">{title}</h3>
+          <p className="max-w-md text-[15px] leading-7 text-slate-100">{description}</p>
         </div>
         {badge ? (
           <Badge variant="outline" className="border-cyan-400/20 bg-cyan-400/10 text-cyan-100">
@@ -66,9 +68,9 @@ export function ConsoleEntryCard({ href, eyebrow, title, description, meta, badg
           </Badge>
         ) : null}
       </div>
-      <div className="mt-6 flex items-center justify-between text-xs uppercase tracking-[0.28em] text-slate-500">
+      <div className="mt-6 flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-300">
         <span>{meta ?? "open panel"}</span>
-        <span className="font-mono text-slate-300 transition group-hover:text-white">↗</span>
+        <span className="text-slate-100 transition group-hover:text-white">↗</span>
       </div>
     </Link>
   );

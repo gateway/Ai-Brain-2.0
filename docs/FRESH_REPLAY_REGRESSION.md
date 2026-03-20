@@ -1,0 +1,82 @@
+# Fresh Replay Regression
+
+The replay suite proves that wiping the database and re-ingesting the same
+source corpus reconstructs the same life graph and active truth.
+
+## What Each Run Must Do
+
+1. Truncate all public tables except `schema_migrations`.
+2. Re-ingest the saved source corpus.
+3. Run relationship adjudication.
+4. Run candidate consolidation.
+5. Regenerate temporal summaries.
+6. Execute natural-language query assertions.
+7. Execute graph/current-truth assertions.
+8. Grade every natural-language query as `confident`, `weak`, or `missing`.
+9. Verify every query returns evidence with source provenance.
+
+## Confidence Contract
+
+- `confident`
+  - the answer is semantically right
+  - the top claim is directly grounded in replayed source evidence
+  - provenance resolves back to a real artifact or memory row
+  - reconsolidated semantic summaries are allowed if they retain direct evidence pointers and the response includes the supporting evidence bundle
+- `weak`
+  - the answer is grounded, but only through summary-level or indirect support
+  - or the query is an expected abstention with no active result
+- `missing`
+  - the answer is absent, contradictory, hallucinated, or lacks provenance support
+
+## Core Query Checks
+
+- `where was Steve born?`
+- `where does Steve live?`
+- `where has Steve lived?`
+- `where has Steve worked?`
+- `what did Steve do at Factor 5?`
+- `who are Steve's friends?`
+- `where did Lauren live?`
+- `what is Steve working on?`
+- `what movies does Steve like?`
+- `what does Steve want to watch?`
+- `what does Steve prefer now for coffee?`
+- `what did Steve use to prefer for coffee?`
+- `what did Steve prefer in 2024 for coffee?`
+- `what happened at Yellow co-working space?`
+- `what happened during dinner with Dan?`
+- `what did Steve do on March 20 2026?`
+- `how much did coworking cost on March 20 2026?`
+- `why does the brain believe Steve works at Two-Way?`
+- `why does the brain believe Steve lives in Chiang Mai?`
+- `what style specs does Steve have?`
+- `what is Steve's preferred response style?`
+- `what is the mandatory protocol for changing the brain's ontology?`
+- `what should be done with the database after each ontology slice?`
+- `who is Steve dating now?`
+
+## Core State Checks
+
+- active home is the most specific current residence
+- old employers are `worked_at`, not `works_at`
+- exactly one active `works_at` edge exists for the current employer
+- historical `worked_at` rows survive replay
+- temporal nodes regenerate after clarification rebuilds
+- identity merges survive replay
+- evidence bundle is present on query responses
+- claim-plus-evidence duality object is present on evidence-backed query responses
+- event-bounded answers preserve source-evidence bundles
+- focused graph expansion for the self anchor includes connected event nodes and related people/projects/places
+
+## Output
+
+Each run should write:
+
+- JSON report with pass/fail details
+- confidence grade and reason for each natural-language query
+- Markdown report for quick operator review
+- latest symlink-style copies for the most recent run
+
+Current green reference run:
+
+- `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T04-21-09-332Z.json`

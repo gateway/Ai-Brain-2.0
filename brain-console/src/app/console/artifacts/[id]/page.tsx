@@ -22,7 +22,7 @@ export default async function ArtifactDetailPage({
             <CardDescription>Artifact</CardDescription>
             <CardTitle className="font-mono text-base">{artifact.artifactId}</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm text-slate-700">
+          <CardContent className="space-y-2 text-[15px] text-slate-100">
             <p>Namespace: {artifact.namespaceId}</p>
             <p>Source type: {artifact.sourceType}</p>
             <p className="break-all">Source URI: {artifact.sourceUri}</p>
@@ -35,13 +35,13 @@ export default async function ArtifactDetailPage({
             <CardDescription>Linked memory</CardDescription>
             <CardTitle>Episodic evidence</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3 text-sm text-slate-700">
+          <CardContent className="space-y-3 text-[15px] text-slate-100">
             {artifact.episodicHits.length === 0 ? (
               <p>No episodic hits recorded yet.</p>
             ) : (
               artifact.episodicHits.map((hit) => (
-                <div key={hit.id} className="rounded-2xl border border-slate-900/10 bg-slate-50 p-3">
-                  <p className="font-mono text-xs text-slate-500">{hit.id}</p>
+                <div key={hit.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                  <p className="text-xs text-slate-300">{hit.id}</p>
                   <p className="mt-2">{hit.content}</p>
                 </div>
               ))
@@ -88,19 +88,19 @@ export default async function ArtifactDetailPage({
         </CardHeader>
         <CardContent className="space-y-4">
           {artifact.derivations.length === 0 ? (
-            <p className="text-sm text-slate-600">No derivations recorded for this artifact yet.</p>
+            <p className="text-sm text-slate-300">No derivations recorded for this artifact yet.</p>
           ) : (
             artifact.derivations.map((derivation) => (
-              <div key={derivation.artifactDerivationId} className="rounded-2xl border border-slate-900/10 bg-slate-50 p-4">
+              <div key={derivation.artifactDerivationId} className="rounded-2xl border border-white/10 bg-white/5 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="font-mono text-xs text-slate-500">{derivation.artifactDerivationId}</p>
-                  <p className="text-sm text-slate-500">
+                  <p className="text-xs text-slate-300">{derivation.artifactDerivationId}</p>
+                  <p className="text-sm text-slate-200">
                     {derivation.derivationType}
                     {derivation.provider ? ` · ${derivation.provider}` : ""}
                     {derivation.model ? `/${derivation.model}` : ""}
                   </p>
                 </div>
-                <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{derivation.contentText}</p>
+                <p className="mt-3 whitespace-pre-wrap text-[15px] leading-7 text-slate-100">{derivation.contentText}</p>
               </div>
             ))
           )}

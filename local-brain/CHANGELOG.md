@@ -2,6 +2,16 @@
 
 ## 2026-03-18
 
+- Added `GET /ops/ambiguities`, which returns the typed clarification inbox together with deterministic duplicate-entity conflict candidates for a namespace.
+- Added a first deterministic identity-conflict detector for people, places, orgs, and projects based on lexical similarity, phonetic similarity, shared neighbors, and shared predicates, without requiring an LLM pass.
+- Extended the operator inbox so it now shows merge-ready identity conflicts and can resolve them through the existing `POST /ops/entities/merge` plus outbox reprocessing flow.
+- Added a server-side inbox merge route in the console so canonical rename/redirect-merge decisions can be made from the dashboard instead of only through direct API calls.
+- Verified the new ambiguity workbench against live data:
+  - `personal` now surfaces a real duplicate-place conflict (`Koh Samui` vs `Koh Samui Island`)
+  - read queries still answer correctly after the rebuild (`where is Dan from?`)
+- Changed query scoping so blank read-queries no longer depend on the latest eval namespace; the runtime now resolves an active durable lane via `/ops/namespaces`, preferring `personal` / personal-style namespaces before project/test lanes.
+- Added a namespace catalog endpoint, datalist-backed namespace picker hints in the Query page, and visible query metadata for `resolvedNamespaceId`, `namespaceDefaulted`, and searched lanes.
+- Added controlled blank-scope escalation for read queries: if the default durable lane returns no results, the runtime can probe adjacent durable lanes and still return explicit namespace provenance instead of silently failing.
 - Added `relationship_memory` as a first-class searchable branch in the main `/search` retrieval path, so active graph facts like `Steve lives_in Chiang Mai` now surface in normal queries instead of only the graph/relationships endpoints.
 - Fixed the Query page namespace default to use the shared console defaults instead of hard-coding `personal`, eliminating a misleading mismatch where the graph and query runner were often inspecting different namespaces by default.
 - Added an explicit lexical benchmark case for `where does Steve live?` and verified it passes for both FTS and BM25 with `relationship_memory` as the top result.
@@ -115,3 +125,12 @@
   - weekly temporal summaries
   - semantic decay
   - provenance and token-budget behavior
+- Added cross-lane identity conflict detection across durable namespaces so likely duplicate people, places, orgs, and projects can now surface together in the inbox instead of only inside one namespace.
+- Added durable identity conflict decisions with explicit `merge` and `keep_separate` outcomes, preventing resolved or intentionally distinct pairs from endlessly resurfacing.
+- Added cross-lane identity profile linking so one canonical identity can span multiple namespaces while raw episodic evidence stays untouched in each lane.
+- Added `/ops/identity-conflicts/resolve` and `/ops/identity-conflicts/keep-separate` for operator and agent-driven identity review.
+- Extended the clarification inbox UI with lane-aware conflict cards, cross-lane badges, shared-identity resolution forms, and a persistent `These are different` action.
+- Verified end-to-end cross-lane resolution by linking `Gumi` and `Gumee` into canonical `Gummi`, preserving aliases and propagating the update through the outbox loop.
+- Added resolved identity decision history to the operator surface and API so prior merge / keep-separate outcomes remain visible after they leave the live inbox queue.
+- Added strict canonical identity mode through the existing identity resolution APIs via `preserve_aliases=false`, allowing brands like `2Way` to retire prior variants instead of keeping them searchable as aliases.
+- Added lane-aware inbox controls and history so identity review can now be managed through API routes or the dashboard with the same underlying behavior.

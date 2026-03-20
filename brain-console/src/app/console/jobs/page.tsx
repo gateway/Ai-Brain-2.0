@@ -18,7 +18,7 @@ export default async function JobsPage() {
             <CardDescription>Derivation queue</CardDescription>
             <CardTitle>OCR, caption, transcript, summary</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm text-slate-700">
+          <CardContent className="space-y-3 text-[15px] text-slate-100">
             <div className="flex items-center justify-between">
               <span>Pending</span>
               <span className="font-mono">{overview.queueSummary.derivation.pending}</span>
@@ -37,7 +37,7 @@ export default async function JobsPage() {
             </div>
             <div className="flex items-center justify-between">
               <span>Next attempt</span>
-              <span className="font-mono text-xs">{overview.queueSummary.derivation.nextAttemptAt ?? "n/a"}</span>
+              <span className="text-xs text-slate-200">{overview.queueSummary.derivation.nextAttemptAt ?? "n/a"}</span>
             </div>
           </CardContent>
         </Card>
@@ -47,7 +47,7 @@ export default async function JobsPage() {
             <CardDescription>Vector sync queue</CardDescription>
             <CardTitle>Embedding sync and backfill</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm text-slate-700">
+          <CardContent className="space-y-3 text-[15px] text-slate-100">
             <div className="flex items-center justify-between">
               <span>Pending</span>
               <span className="font-mono">{overview.queueSummary.vectorSync.pending}</span>
@@ -66,7 +66,7 @@ export default async function JobsPage() {
             </div>
             <div className="flex items-center justify-between">
               <span>Next attempt</span>
-              <span className="font-mono text-xs">{overview.queueSummary.vectorSync.nextAttemptAt ?? "n/a"}</span>
+              <span className="text-xs text-slate-200">{overview.queueSummary.vectorSync.nextAttemptAt ?? "n/a"}</span>
             </div>
           </CardContent>
         </Card>
@@ -78,24 +78,24 @@ export default async function JobsPage() {
           <CardTitle>Temporal and relationship state</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-2xl border border-slate-900/10 bg-slate-50 p-4">
-            <p className="font-mono text-xs uppercase tracking-[0.28em] text-slate-500">Lexical mode</p>
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-white">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-200">Lexical mode</p>
             <div className="mt-2 flex flex-wrap gap-2">
               <StatusBadge value={overview.lexicalProvider} />
               <StatusBadge value={overview.lexicalFallbackEnabled ? "fallback enabled" : "fallback disabled"} />
             </div>
           </div>
-          <div className="rounded-2xl border border-slate-900/10 bg-slate-50 p-4">
-            <p className="font-mono text-xs uppercase tracking-[0.28em] text-slate-500">Temporal nodes</p>
-            <p className="mt-2 text-3xl font-semibold">{overview.memorySummary.temporalNodes}</p>
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-white">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-200">Temporal nodes</p>
+            <p className="mt-2 text-3xl font-semibold text-white">{overview.memorySummary.temporalNodes}</p>
           </div>
-          <div className="rounded-2xl border border-slate-900/10 bg-slate-50 p-4">
-            <p className="font-mono text-xs uppercase tracking-[0.28em] text-slate-500">Relationship candidates pending</p>
-            <p className="mt-2 text-3xl font-semibold">{overview.memorySummary.relationshipCandidatesPending}</p>
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-white">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-200">Relationship candidates pending</p>
+            <p className="mt-2 text-3xl font-semibold text-white">{overview.memorySummary.relationshipCandidatesPending}</p>
           </div>
-          <div className="rounded-2xl border border-slate-900/10 bg-slate-50 p-4">
-            <p className="font-mono text-xs uppercase tracking-[0.28em] text-slate-500">Active relationships</p>
-            <p className="mt-2 text-3xl font-semibold">{overview.memorySummary.relationshipMemoryActive}</p>
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-white">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-200">Active relationships</p>
+            <p className="mt-2 text-3xl font-semibold text-white">{overview.memorySummary.relationshipMemoryActive}</p>
           </div>
         </CardContent>
       </Card>

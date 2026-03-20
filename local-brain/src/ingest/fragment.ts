@@ -210,6 +210,32 @@ function inferTimeAnchor(
   const priorAnchorIso = priorScene?.timeStart ?? priorScene?.occurredAt ?? null;
   const priorAnchorDate = priorAnchorIso ? anchorDateFromIso(priorAnchorIso) : null;
   const capturedAnchorDate = anchorDateFromIso(capturedAt);
+  const monthDayYearMatch = text.match(
+    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+(\d{4})\b/i
+  );
+
+  if (monthDayYearMatch) {
+    const month = MONTH_INDEX.get(monthDayYearMatch[1].toLowerCase());
+    const day = Number(monthDayYearMatch[2]);
+    const year = Number(monthDayYearMatch[3]);
+
+    if (month !== undefined && Number.isFinite(day) && day >= 1 && day <= 31 && Number.isFinite(year)) {
+      const timeStart = new Date(Date.UTC(year, month, day)).toISOString();
+      const timeEnd = new Date(Date.UTC(year, month, day + 1)).toISOString();
+      return {
+        occurredAt: timeStart,
+        timeExpressionText: monthDayYearMatch[0],
+        timeStart,
+        timeEnd,
+        timeGranularity: "day",
+        timeConfidence: 0.98,
+        isRelativeTime: false,
+        anchorBasis: "explicit",
+        anchorConfidence: 0.98
+      };
+    }
+  }
+
   const monthYearMatch = text.match(
     /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/i
   );
@@ -415,7 +441,7 @@ function isMetadataParagraph(paragraph: string): boolean {
   }
 
   if (/^#\s+/u.test(trimmed)) {
-    return true;
+    return !/^#\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\s+[—-]\s+/u.test(trimmed);
   }
 
   const lines = trimmed

@@ -11,16 +11,119 @@ interface RelationshipCandidateRow {
   readonly predicate: string;
   readonly object_entity_id: string;
   readonly confidence: number;
+  readonly status: "pending" | "accepted" | "rejected" | "superseded";
   readonly prior_score: number;
   readonly prior_reason: string | null;
   readonly valid_from: string | null;
   readonly created_at: string;
   readonly source_memory_id: string | null;
+  readonly metadata: Record<string, unknown> | null;
 }
 
 interface ActiveRelationshipRow {
   readonly id: string;
   readonly object_entity_id: string;
+}
+
+function relationshipKind(metadata: Record<string, unknown> | null | undefined): string | null {
+  const value = metadata?.relationship_kind;
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null;
+}
+
+function canonicalRelationshipPredicate(candidate: RelationshipCandidateRow): string {
+  const kind = relationshipKind(candidate.metadata);
+  if (candidate.predicate === "was_with" && kind === "romantic") {
+    return "significant_other_of";
+  }
+  if (candidate.predicate === "lives_in" || candidate.predicate === "currently_in") {
+    return "resides_at";
+  }
+
+  return candidate.predicate;
+}
+
+function relationshipProcessingRank(candidate: RelationshipCandidateRow): number {
+  const kind = relationshipKind(candidate.metadata);
+  if (candidate.predicate === "was_with" && kind === "romantic") {
+    return 10;
+  }
+  if (candidate.predicate === "relationship_ended") {
+    return 20;
+  }
+  if (candidate.predicate === "relationship_contact_paused") {
+    return 30;
+  }
+  if (candidate.predicate === "relationship_reconnected") {
+    return 40;
+  }
+  return 50;
+}
+
+function residencePredicateFamily(predicate: string): readonly string[] | null {
+  if (predicate === "lived_in") {
+    return ["lived_in"];
+  }
+
+  if (predicate === "lives_in" || predicate === "currently_in" || predicate === "resides_at") {
+    return ["lives_in", "currently_in", "resides_at"];
+  }
+
+  return null;
+}
+
+async function hasMoreSpecificResidenceCandidate(
+  client: PoolClient,
+  candidate: RelationshipCandidateRow
+): Promise<boolean> {
+  const predicateFamily = residencePredicateFamily(candidate.predicate);
+  if (!predicateFamily) {
+    return false;
+  }
+
+  const result = await client.query<{ matches: boolean }>(
+    `
+      WITH RECURSIVE peers AS (
+        SELECT rc.object_entity_id
+        FROM relationship_candidates rc
+        WHERE rc.namespace_id = $1
+          AND rc.subject_entity_id = $2::uuid
+          AND rc.object_entity_id IS NOT NULL
+          AND rc.object_entity_id <> $3::uuid
+          AND rc.predicate = ANY($4::text[])
+          AND rc.status IN ('pending', 'accepted')
+          AND rc.source_memory_id IS NOT DISTINCT FROM $5::uuid
+      ),
+      ancestors(entity_id, hops, path) AS (
+        SELECT peers.object_entity_id, 0, ARRAY[peers.object_entity_id]::uuid[]
+        FROM peers
+
+        UNION ALL
+
+        SELECT e.parent_entity_id, ancestors.hops + 1, ancestors.path || e.parent_entity_id
+        FROM ancestors
+        JOIN entities e
+          ON e.id = ancestors.entity_id
+         AND e.namespace_id = $1
+         AND e.parent_entity_id IS NOT NULL
+        WHERE ancestors.hops < 6
+          AND NOT (e.parent_entity_id = ANY(ancestors.path))
+      )
+      SELECT EXISTS(
+        SELECT 1
+        FROM ancestors
+        WHERE entity_id = $3::uuid
+      ) AS matches
+    `,
+    [
+      candidate.namespace_id,
+      candidate.subject_entity_id,
+      candidate.object_entity_id,
+      predicateFamily,
+      candidate.source_memory_id
+    ]
+  );
+
+  return Boolean(result.rows[0]?.matches);
 }
 
 export interface RelationshipAdjudicationRunSummary {
@@ -35,8 +138,32 @@ export interface RelationshipAdjudicationRunSummary {
 
 function isExclusivePredicate(predicate: string): boolean {
   const normalized = predicate.toLowerCase();
-  const exclusivePredicates = new Set<string>(["primary_contact", "married_to", "ceo_of"]);
+  const exclusivePredicates = new Set<string>(["primary_contact", "married_to", "ceo_of", "significant_other_of", "works_at", "resides_at"]);
   return exclusivePredicates.has(normalized);
+}
+
+async function countParticipationMembershipSignals(
+  client: PoolClient,
+  candidate: RelationshipCandidateRow,
+  occurredAt: string
+): Promise<number> {
+  const result = await client.query<{ signal_count: string }>(
+    `
+      SELECT COUNT(DISTINCT COALESCE(source_memory_id::text, id::text))::text AS signal_count
+      FROM relationship_candidates
+      WHERE namespace_id = $1
+        AND subject_entity_id = $2
+        AND object_entity_id = $3
+        AND predicate = 'member_of'
+        AND coalesce(metadata->>'membership_signal', '') = 'participation'
+        AND status IN ('pending', 'accepted')
+        AND COALESCE(valid_from, created_at) >= ($4::timestamptz - interval '180 days')
+        AND COALESCE(valid_from, created_at) <= $4::timestamptz
+    `,
+    [candidate.namespace_id, candidate.subject_entity_id, candidate.object_entity_id, occurredAt]
+  );
+
+  return Number(result.rows[0]?.signal_count ?? 0);
 }
 
 async function markRelationshipCandidate(
@@ -118,14 +245,17 @@ export async function runRelationshipAdjudication(
           rc.predicate,
           rc.object_entity_id,
           rc.confidence,
+          rc.status,
           rc.prior_score,
           rc.prior_reason,
           rc.valid_from,
           rc.created_at,
-          rc.source_memory_id
+          rc.source_memory_id,
+          rc.metadata
         FROM relationship_candidates rc
         WHERE rc.namespace_id = $1
-          AND rc.status = 'pending'
+          AND rc.processed_at IS NULL
+          AND rc.status IN ('pending', 'accepted')
         ORDER BY ((rc.confidence * 0.72) + (rc.prior_score * 0.28)) DESC, COALESCE(rc.valid_from, rc.created_at) ASC
         LIMIT $2
       `,
@@ -137,13 +267,137 @@ export async function runRelationshipAdjudication(
     let superseded = 0;
     let rejected = 0;
 
-    for (const candidate of candidates.rows) {
+    const orderedCandidates = candidates.rows.slice().sort((left, right) => {
+      const leftOccurred = Date.parse(left.valid_from ?? left.created_at) || 0;
+      const rightOccurred = Date.parse(right.valid_from ?? right.created_at) || 0;
+      if (leftOccurred !== rightOccurred) {
+        return leftOccurred - rightOccurred;
+      }
+
+      const leftRank = relationshipProcessingRank(left);
+      const rightRank = relationshipProcessingRank(right);
+      if (leftRank !== rightRank) {
+        return leftRank - rightRank;
+      }
+
+      const leftScore = (left.confidence * 0.72) + (left.prior_score * 0.28);
+      const rightScore = (right.confidence * 0.72) + (right.prior_score * 0.28);
+      return rightScore - leftScore;
+    });
+
+    for (const candidate of orderedCandidates) {
+      const providerAccepted = candidate.status === "accepted";
       const effectiveConfidence = Math.max(
         candidate.confidence,
         Math.round(((candidate.confidence * 0.72) + (candidate.prior_score * 0.28)) * 1000) / 1000
       );
+      const historicalRelationship = candidate.metadata?.historical_relationship === true;
+      const canonicalPredicate = canonicalRelationshipPredicate(candidate);
+      const relationshipTransition =
+        typeof candidate.metadata?.relationship_transition === "string" ? candidate.metadata.relationship_transition : null;
 
-      if (effectiveConfidence < rejectThreshold) {
+      if (historicalRelationship && candidate.predicate === "relationship_ended" && relationshipKind(candidate.metadata) === "romantic") {
+        const occurredAt = candidate.valid_from ?? candidate.created_at;
+        const activeRomantic = await client.query<ActiveRelationshipRow>(
+          `
+            SELECT id, object_entity_id
+            FROM relationship_memory
+            WHERE namespace_id = $1
+              AND subject_entity_id = $2
+              AND predicate = 'significant_other_of'
+              AND object_entity_id = $3
+              AND status = 'active'
+              AND valid_until IS NULL
+            ORDER BY valid_from DESC
+            LIMIT 1
+          `,
+          [namespaceId, candidate.subject_entity_id, candidate.object_entity_id]
+        );
+
+        const activeRow = activeRomantic.rows[0];
+        if (activeRow) {
+          await client.query(
+            `
+              UPDATE relationship_memory
+              SET
+                status = 'superseded',
+                valid_until = $2,
+                metadata = relationship_memory.metadata || $3::jsonb
+              WHERE id = $1
+            `,
+            [
+              activeRow.id,
+              occurredAt,
+              JSON.stringify({
+                relationship_transition: "ended",
+                ended_by_candidate_id: candidate.id,
+                ended_at: occurredAt
+              })
+            ]
+          );
+        }
+
+        await markRelationshipCandidate(
+          client,
+          candidate.id,
+          "accepted",
+          activeRow
+            ? "Closed active romantic relationship tenure from historical breakup evidence."
+            : "Accepted breakup evidence without an active romantic tenure to close."
+        );
+        await logEvent(client, {
+          namespaceId,
+          candidateId: candidate.id,
+          relationshipMemoryId: activeRow?.id ?? null,
+          action: activeRow ? "superseded" : "accepted",
+          reason: activeRow
+            ? "Closed active romantic relationship tenure from breakup evidence."
+            : "Accepted breakup evidence without active romantic tenure.",
+          metadata: {
+            run_id: context.runId,
+            confidence: candidate.confidence,
+            prior_score: candidate.prior_score,
+            effective_confidence: effectiveConfidence,
+            prior_reason: candidate.prior_reason,
+            historical_relationship: true,
+            relationship_transition: relationshipTransition
+          }
+        });
+        accepted += 1;
+        if (activeRow) {
+          superseded += 1;
+        }
+        continue;
+      }
+
+      if (
+        historicalRelationship &&
+        candidate.predicate !== "was_with" &&
+        candidate.predicate !== "relationship_ended"
+      ) {
+        const reason = "Historical relationship transition retained as accepted evidence without active relationship promotion.";
+        await markRelationshipCandidate(client, candidate.id, "accepted", reason);
+        await logEvent(client, {
+          namespaceId,
+          candidateId: candidate.id,
+          relationshipMemoryId: null,
+          action: "accepted",
+          reason,
+          metadata: {
+            run_id: context.runId,
+            confidence: candidate.confidence,
+            prior_score: candidate.prior_score,
+            effective_confidence: effectiveConfidence,
+            prior_reason: candidate.prior_reason,
+            historical_relationship: true,
+            relationship_transition: relationshipTransition
+          }
+        });
+        accepted += 1;
+        continue;
+      }
+
+      if (!providerAccepted && effectiveConfidence < rejectThreshold) {
         const reason = `Rejected deterministic adjudication: effective confidence ${effectiveConfidence.toFixed(2)} < ${rejectThreshold.toFixed(2)} (raw ${candidate.confidence.toFixed(2)}, prior ${candidate.prior_score.toFixed(2)}).`;
         await markRelationshipCandidate(client, candidate.id, "rejected", reason);
         await logEvent(client, {
@@ -164,7 +418,7 @@ export async function runRelationshipAdjudication(
         continue;
       }
 
-      if (effectiveConfidence < acceptThreshold) {
+      if (!providerAccepted && effectiveConfidence < acceptThreshold) {
         const reason = `Rejected deterministic adjudication: effective confidence ${effectiveConfidence.toFixed(2)} below accept threshold ${acceptThreshold.toFixed(2)} (raw ${candidate.confidence.toFixed(2)}, prior ${candidate.prior_score.toFixed(2)}).`;
         await markRelationshipCandidate(client, candidate.id, "rejected", reason);
         await logEvent(client, {
@@ -185,7 +439,57 @@ export async function runRelationshipAdjudication(
         continue;
       }
 
+      if (await hasMoreSpecificResidenceCandidate(client, candidate)) {
+        const reason = "Rejected broader residence edge because a more specific contained place exists in the same source context.";
+        await markRelationshipCandidate(client, candidate.id, "rejected", reason);
+        await logEvent(client, {
+          namespaceId,
+          candidateId: candidate.id,
+          relationshipMemoryId: null,
+          action: "rejected",
+          reason,
+          metadata: {
+            run_id: context.runId,
+            confidence: candidate.confidence,
+            prior_score: candidate.prior_score,
+            effective_confidence: effectiveConfidence,
+            prior_reason: candidate.prior_reason
+          }
+        });
+        rejected += 1;
+        continue;
+      }
+
       const occurredAt = candidate.valid_from ?? candidate.created_at;
+      if (canonicalPredicate === "member_of" && candidate.metadata?.membership_signal === "participation") {
+        const signalCount = await countParticipationMembershipSignals(client, candidate, occurredAt);
+        if (signalCount < 3) {
+          await markRelationshipCandidate(
+            client,
+            candidate.id,
+            "accepted",
+            `Membership participation threshold not met (${signalCount}/3 signals in 180 days).`
+          );
+          await logEvent(client, {
+            namespaceId,
+            candidateId: candidate.id,
+            relationshipMemoryId: null,
+            action: "accepted",
+            reason: `Membership participation threshold not met (${signalCount}/3 signals in 180 days).`,
+            metadata: {
+              run_id: context.runId,
+              confidence: candidate.confidence,
+              prior_score: candidate.prior_score,
+              effective_confidence: effectiveConfidence,
+              prior_reason: candidate.prior_reason,
+              signal_count: signalCount
+            }
+          });
+          accepted += 1;
+          continue;
+        }
+      }
+
       const exactActive = await client.query<ActiveRelationshipRow>(
         `
           SELECT id, object_entity_id
@@ -199,7 +503,7 @@ export async function runRelationshipAdjudication(
           ORDER BY valid_from DESC
           LIMIT 1
         `,
-        [namespaceId, candidate.subject_entity_id, candidate.predicate, candidate.object_entity_id]
+        [namespaceId, candidate.subject_entity_id, canonicalPredicate, candidate.object_entity_id]
       );
 
       const exactMatch = exactActive.rows[0];
@@ -254,10 +558,10 @@ export async function runRelationshipAdjudication(
             AND valid_until IS NULL
           ORDER BY valid_from DESC
         `,
-        [namespaceId, candidate.subject_entity_id, candidate.predicate]
+        [namespaceId, candidate.subject_entity_id, canonicalPredicate]
       );
 
-      const activeConflicts = isExclusivePredicate(candidate.predicate)
+      const activeConflicts = isExclusivePredicate(canonicalPredicate)
         ? conflictingActive.rows.filter((row) => row.object_entity_id !== candidate.object_entity_id)
         : [];
 
@@ -280,7 +584,7 @@ export async function runRelationshipAdjudication(
         [
           namespaceId,
           candidate.subject_entity_id,
-          candidate.predicate,
+          canonicalPredicate,
           candidate.object_entity_id,
           effectiveConfidence,
           occurredAt,
@@ -288,10 +592,13 @@ export async function runRelationshipAdjudication(
           JSON.stringify({
             run_id: context.runId,
             source_memory_id: candidate.source_memory_id,
-            prior_score: candidate.prior_score,
-            effective_confidence: effectiveConfidence,
-            prior_reason: candidate.prior_reason
-          })
+              prior_score: candidate.prior_score,
+              effective_confidence: effectiveConfidence,
+              prior_reason: candidate.prior_reason,
+              relationship_kind: relationshipKind(candidate.metadata),
+              relationship_transition: relationshipTransition,
+              original_predicate: candidate.predicate
+            })
         ]
       );
 
@@ -307,10 +614,21 @@ export async function runRelationshipAdjudication(
             SET
               status = 'superseded',
               valid_until = $2,
-              superseded_by_id = $3
+              superseded_by_id = $3,
+              metadata = relationship_memory.metadata || $4::jsonb
             WHERE id = $1
           `,
-          [prior.id, occurredAt, relationshipMemoryId]
+          [
+            prior.id,
+            occurredAt,
+            relationshipMemoryId,
+            JSON.stringify({
+              superseded_at: occurredAt,
+              superseded_by_candidate_id: candidate.id,
+              superseded_by_predicate: canonicalPredicate,
+              superseded_by_object_entity_id: candidate.object_entity_id
+            })
+          ]
         );
       }
 
