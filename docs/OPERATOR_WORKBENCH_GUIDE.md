@@ -50,6 +50,7 @@ Use it to:
 
 - verify runtime reachability
 - confirm setup progress
+- inspect background worker health
 - know exactly what step comes next
 - avoid jumping into operator work too early
 
@@ -113,6 +114,8 @@ Monitoring strategy in the current app:
 
 This keeps source monitoring aligned with the same evidence-first ingestion contract used everywhere else.
 
+The import surface now also shows the current source-monitor worker state, last run, next due time, and retry guidance when the latest background run failed or degraded.
+
 ### When OpenClaw is recommended
 
 If you already have OpenClaw-style markdown memory/session files, this is the recommended import path.
@@ -150,6 +153,12 @@ A session groups:
 - clarifications
 - graph and timeline views
 
+Session timelines now show:
+
+- evidence linked to that session
+- overlapping day/week/month/year summaries
+- semantic summary metadata when the LLM overlay is enabled
+
 Use sessions when you are actively ingesting or reviewing a discrete batch of material.
 
 ### Models
@@ -176,6 +185,8 @@ Use it to:
 - test embeddings
 - rebuild namespace vectors
 - save preferred OpenRouter defaults
+- tune source monitor, inbox/outbox, and temporal summary operations
+- inspect runtime worker health and retry guidance
 
 Current provider meanings:
 

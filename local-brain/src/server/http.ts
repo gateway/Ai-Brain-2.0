@@ -17,7 +17,7 @@ import { isActiveRelationshipQuery, preferredRelationshipPredicates } from "../r
 import { getOpsAmbiguityWorkbench, getOpsClarificationInbox, getOpsIdentityConflictHistory, getOpsNamespaceCatalog, getOpsOverview, getOpsRelationshipGraph, getOpsTimelineView } from "../ops/service.js";
 import { resolveEmbeddingRuntimeSelection } from "../providers/embedding-config.js";
 import { getProviderAdapter } from "../providers/registry.js";
-import { createSession, getSessionDetail, getSessionReview, ingestSessionFile, ingestSessionText, listSessions, updateSession } from "../ops/session-service.js";
+import { createSession, getSessionDetail, getSessionReview, getSessionTimeline, ingestSessionFile, ingestSessionText, listSessions, updateSession } from "../ops/session-service.js";
 import {
   createMonitoredSource,
   deleteMonitoredSource,
@@ -546,6 +546,16 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
       statusCode: 200,
       body: {
         review
+      }
+    };
+  }
+
+  const sessionTimelineMatch = url.pathname.match(/^\/ops\/sessions\/([0-9a-f-]+)\/timeline$/i);
+  if (request.method === "GET" && sessionTimelineMatch) {
+    return {
+      statusCode: 200,
+      body: {
+        timeline: await getSessionTimeline(sessionTimelineMatch[1]!, optionalNumber(url.searchParams.get("limit")) ?? 40)
       }
     };
   }

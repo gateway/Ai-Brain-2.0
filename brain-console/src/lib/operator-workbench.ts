@@ -10,6 +10,7 @@ interface JsonEnvelope<T> {
   readonly session?: T;
   readonly sessions?: readonly T[];
   readonly review?: T;
+  readonly timeline?: T;
   readonly bootstrap?: T;
   readonly source?: T;
   readonly sources?: readonly T[];
@@ -150,6 +151,36 @@ export interface SessionReview {
     readonly claimCount: number;
     readonly unresolvedCount: number;
   };
+}
+
+export interface WorkbenchSessionTimelineItem {
+  readonly memoryId: string;
+  readonly content: string;
+  readonly occurredAt: string;
+  readonly artifactId?: string | null;
+  readonly sourceUri?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface WorkbenchSessionTemporalSummary {
+  readonly temporalNodeId: string;
+  readonly layer: "session" | "day" | "week" | "month" | "year" | "profile";
+  readonly summaryText: string;
+  readonly generatedBy: string;
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  readonly sourceCount: number;
+  readonly depth?: number | null;
+  readonly parentId?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface WorkbenchSessionTimelineView {
+  readonly session: WorkbenchSession;
+  readonly timeStart: string;
+  readonly timeEnd: string;
+  readonly timeline: readonly WorkbenchSessionTimelineItem[];
+  readonly summaries: readonly WorkbenchSessionTemporalSummary[];
 }
 
 export interface WorkbenchBootstrapState {
@@ -681,6 +712,18 @@ export async function getWorkbenchSessionReview(sessionId: string): Promise<Sess
     throw new Error(`Review payload missing for session ${sessionId}.`);
   }
   return payload.review;
+}
+
+export async function getWorkbenchSessionTimeline(sessionId: string, limit = 40): Promise<WorkbenchSessionTimelineView> {
+  const payload = await fetchJson<JsonEnvelope<WorkbenchSessionTimelineView>>(`/ops/sessions/${sessionId}/timeline?limit=${limit}`, {
+    method: "GET",
+    headers: {}
+  });
+
+  if (!payload.timeline) {
+    throw new Error(`Timeline payload missing for session ${sessionId}.`);
+  }
+  return payload.timeline;
 }
 
 export async function getBootstrapState(): Promise<WorkbenchBootstrapState> {

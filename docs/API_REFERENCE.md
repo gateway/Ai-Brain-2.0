@@ -44,6 +44,17 @@ Ingest one file into a session and optionally run ASR and classification.
 
 Return structured review data for the session.
 
+### `GET /ops/sessions/:sessionId/timeline`
+
+Return the session-scoped timeline view.
+
+It includes:
+
+- the session time window
+- session-linked episodic rows
+- overlapping temporal summaries for that session window
+- semantic summary metadata when present
+
 ## Operator Overview
 
 ### `GET /ops/overview`
@@ -304,6 +315,7 @@ It includes:
 - latest run metadata
 - next due time
 - recent failure history
+- retry guidance derived from failure classification when the latest run failed or degraded
 
 ### `POST /ops/outbox/process`
 
@@ -323,6 +335,19 @@ Useful body fields:
 - optional `model`
 - optional `preset_id`
 - optional `system_prompt`
+
+## Failure Classification
+
+Worker failures are normalized into operator-facing categories so the UI can show actionable retry guidance.
+
+Current categories include:
+
+- `provider_auth`
+- `provider_timeout`
+- `schema_mismatch`
+- `source_access`
+- `runtime_dependency`
+- `unknown`
 
 ## Notes
 

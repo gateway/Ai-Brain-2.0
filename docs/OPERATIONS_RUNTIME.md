@@ -107,6 +107,14 @@ The current UI status model is:
 - `failed`
 - `stale`
 
+The first compact status panels now live in:
+
+- Dashboard
+- Start Here
+- Guided Setup import
+- Settings
+- session timeline views
+
 Each run records:
 
 - worker key
@@ -118,6 +126,22 @@ Each run records:
 - attempted / processed / failed / skipped counts
 - structured summary JSON
 - error class and error message when applicable
+
+Failure summaries may also include:
+
+- `failure_category`
+- `retry_guidance`
+
+Current normalized failure categories:
+
+- `provider_auth`
+- `provider_timeout`
+- `schema_mismatch`
+- `source_access`
+- `runtime_dependency`
+- `unknown`
+
+This lets the operator UI distinguish between things like a bad provider key, a dimension mismatch, and a missing folder path instead of only showing a raw stack trace.
 
 ## Combined operations worker
 
@@ -139,6 +163,21 @@ Or alongside the full stack:
 cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
 BRAIN_RUNTIME_OPS_ENABLED=true npm run dev
 ```
+
+## Session timeline surface
+
+The workbench now also has a session-scoped timeline view so operators can inspect a single intake run without jumping straight into the global console timeline.
+
+That surface combines:
+
+- the session time window
+- session-linked episodic rows
+- overlapping temporal summaries
+- semantic summary metadata such as provider, model, recurring themes, and uncertainties
+
+Key endpoint:
+
+- `GET /ops/sessions/:sessionId/timeline`
 
 ## Why this is not MCP
 

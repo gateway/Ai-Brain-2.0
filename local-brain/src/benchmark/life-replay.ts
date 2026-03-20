@@ -28,11 +28,13 @@ interface ReplayQueryExpectation {
   readonly expectTopTypes?: readonly RecallResult["memoryType"][];
   readonly expectTopIncludes: readonly string[];
   readonly expectExcludes?: readonly string[];
+  readonly expectedDualityClaimIncludes?: readonly string[];
   readonly requireEvidence?: boolean;
   readonly requireDuality?: boolean;
   readonly minimumConfidence?: RecallConfidenceGrade;
   readonly expectNoResults?: boolean;
   readonly expectedFollowUpAction?: "none" | "suggest_verification" | "route_to_clarifications";
+  readonly beforeReconsolidationQuery?: string;
 }
 
 interface ReplayStateExpectation {
@@ -197,6 +199,18 @@ const FIXTURES: readonly ReplayFixture[] = [
     capturedAt: "2026-03-01T09:00:00Z"
   },
   {
+    path: replayFixturePath("alex-contact-paused.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:alex-contact-paused",
+    capturedAt: "2026-03-05T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("alex-reconnected.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:alex-reconnected",
+    capturedAt: "2026-03-10T09:00:00Z"
+  },
+  {
     path: replayFixturePath("nina-current-dating.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:nina-current-dating",
@@ -333,6 +347,18 @@ const FIXTURES: readonly ReplayFixture[] = [
     sourceType: "markdown",
     sourceChannel: "life-replay:style-specs-3",
     capturedAt: "2026-03-20T14:00:00Z"
+  },
+  {
+    path: replayFixturePath("replay-integrity-1.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:replay-integrity-1",
+    capturedAt: "2026-03-21T14:00:00Z"
+  },
+  {
+    path: replayFixturePath("replay-integrity-2.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:replay-integrity-2",
+    capturedAt: "2026-03-22T14:00:00Z"
   }
 ];
 
@@ -406,10 +432,11 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     name: "dating_current_query",
     query: "who is Steve dating now?",
     expectTopIncludes: [],
-    expectExcludes: ["Lauren"],
-    expectNoResults: true,
+    expectedDualityClaimIncludes: ["Unknown."],
+    requireEvidence: true,
     requireDuality: true,
-    expectedFollowUpAction: "route_to_clarifications"
+    minimumConfidence: "confident",
+    expectedFollowUpAction: "none"
   },
   {
     name: "alex_current_partner_query",
@@ -424,6 +451,17 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     expectTopIncludes: ["Omar"],
     requireEvidence: true,
     minimumConfidence: "confident"
+  },
+  {
+    name: "nina_current_partner_query",
+    query: "who is Nina dating now?",
+    expectTopIncludes: [],
+    expectedDualityClaimIncludes: ["Unknown."],
+    requireEvidence: true,
+    requireDuality: true,
+    minimumConfidence: "confident",
+    expectedFollowUpAction: "none",
+    beforeReconsolidationQuery: "check Nina's profile summary for consistency."
   },
   {
     name: "lauren_breakup_history_query",
@@ -547,6 +585,13 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     name: "db_replay_protocol_query",
     query: "what should be done with the database after each ontology slice?",
     expectTopIncludes: ["replay", "database"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "operational_protocol_query",
+    query: "what is the mandatory protocol for maintaining database integrity after an implementation slice?",
+    expectTopIncludes: ["wipe", "replay", "database"],
     requireEvidence: true,
     minimumConfidence: "confident"
   },
@@ -912,16 +957,16 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
   {
     name: "historical_significant_other_exists",
     sql: `
-      SELECT concat(predicate, ' ', valid_from::text, ' ', coalesce(valid_until::text, 'active')) AS value
+      SELECT concat(rm.predicate, ' ', subject_entity.canonical_name, ' ', object_entity.canonical_name, ' ', rm.valid_from::text, ' ', coalesce(rm.valid_until::text, 'active')) AS value
       FROM relationship_memory rm
       JOIN entities subject_entity ON subject_entity.id = rm.subject_entity_id
       JOIN entities object_entity ON object_entity.id = rm.object_entity_id
       WHERE rm.namespace_id = 'personal'
         AND rm.predicate = 'significant_other_of'
-        AND subject_entity.canonical_name = 'Steve Tietze'
-        AND object_entity.canonical_name = 'Lauren'
+        AND subject_entity.canonical_name = 'Nina'
+        AND object_entity.canonical_name = 'Omar'
     `,
-    expectIncludes: ["significant_other_of"]
+    expectIncludes: ["significant_other_of Nina Omar"]
   },
   {
     name: "alex_current_relationship_state_exists",
@@ -936,6 +981,30 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     expectIncludes: ["Alex", "Sam"]
   },
   {
+    name: "alex_closed_relationship_tenure_exists",
+    sql: `
+      SELECT concat(
+        coalesce(rm.valid_from::text, ''),
+        ' ',
+        coalesce(rm.valid_until::text, ''),
+        ' ',
+        coalesce(rm.superseded_by_id::text, ''),
+        ' ',
+        coalesce(rm.metadata->>'relationship_transition', '')
+      ) AS value
+      FROM relationship_memory rm
+      JOIN entities subject_entity ON subject_entity.id = rm.subject_entity_id
+      JOIN entities object_entity ON object_entity.id = rm.object_entity_id
+      WHERE rm.namespace_id = 'personal'
+        AND rm.predicate = 'significant_other_of'
+        AND subject_entity.canonical_name = 'Alex'
+        AND object_entity.canonical_name = 'Sam'
+        AND rm.valid_until IS NOT NULL
+      ORDER BY rm.valid_from ASC
+    `,
+    expectIncludes: ["2026-03-05", "paused"]
+  },
+  {
     name: "nina_historical_relationship_state_exists",
     sql: `
       SELECT coalesce(string_agg(state_value::text || ' @ ' || coalesce(valid_until::text, ''), ' | ' ORDER BY updated_at DESC), '') AS value
@@ -946,6 +1015,18 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
         AND state_value->>'person' = 'Nina'
     `,
     expectIncludes: ["Nina", "Omar", "2026"]
+  },
+  {
+    name: "nina_current_relationship_state_absent",
+    sql: `
+      SELECT count(*)::text AS value
+      FROM procedural_memory
+      WHERE namespace_id = 'personal'
+        AND state_type = 'current_relationship'
+        AND valid_until IS NULL
+        AND state_value->>'person' = 'Nina'
+    `,
+    expectIncludes: ["0"]
   },
   {
     name: "activity_entities_exist",
@@ -1045,6 +1126,25 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
       "style_spec:keep_responses_concise",
       "style_spec:prefer_natural-language_queryability",
       "style_spec:wipe_and_replay_database_after_each_slice"
+    ]
+  },
+  {
+    name: "heuristic_replay_integrity_state_exists",
+    sql: `
+      SELECT concat(state_key, ' ', state_value::text, ' ', metadata::text) AS value
+      FROM procedural_memory
+      WHERE namespace_id = 'personal'
+        AND state_type = 'style_spec'
+        AND state_key = 'style_spec:wipe_and_replay_database_after_each_slice'
+        AND valid_until IS NULL
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `,
+    expectIncludes: [
+      "style_spec:wipe_and_replay_database_after_each_slice",
+      "induced",
+      "heuristic_induction",
+      "rule_of_3_distinct_days"
     ]
   },
   {
@@ -1152,6 +1252,42 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
       ORDER BY created_at DESC
     `,
     expectIncludes: ["day_summary weak"]
+  },
+  {
+    name: "nina_relationship_profile_summary_active",
+    sql: `
+      SELECT concat(memory_kind, ' ', canonical_key, ' ', content_abstract) AS value
+      FROM semantic_memory
+      WHERE namespace_id = 'personal'
+        AND canonical_key = 'reconsolidated:profile_summary:relationship:nina'
+        AND status = 'active'
+        AND valid_until IS NULL
+      ORDER BY valid_from DESC
+    `,
+    expectIncludes: ["profile_summary reconsolidated:profile_summary:relationship:nina", "Nina's current relationship status is unknown", "Omar"]
+  },
+  {
+    name: "nina_relationship_profile_summary_superseded",
+    sql: `
+      SELECT concat(status, ' ', canonical_key, ' ', content_abstract) AS value
+      FROM semantic_memory
+      WHERE namespace_id = 'personal'
+        AND canonical_key = 'reconsolidated:profile_summary:relationship:nina'
+        AND status = 'superseded'
+      ORDER BY valid_from DESC
+    `,
+    expectIncludes: ["superseded reconsolidated:profile_summary:relationship:nina", "Nina is currently dating Omar."]
+  },
+  {
+    name: "relationship_profile_reconsolidation_event_logged",
+    sql: `
+      SELECT concat(action, ' ', target_memory_kind, ' ', reason) AS value
+      FROM memory_reconsolidation_events
+      WHERE namespace_id = 'personal'
+        AND query_text = 'check Nina''s profile summary for consistency.'
+      ORDER BY created_at DESC
+    `,
+    expectIncludes: ["profile_summary", "Superseded a stale relationship profile summary"]
   },
   {
     name: "multimodal_derivation_exists",
@@ -1282,6 +1418,56 @@ async function seedNamespace(namespaceId: string): Promise<number> {
     workerId: "life-replay-derivation-worker"
   });
 
+  await withTransaction(async (client) => {
+    const sourceResult = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM episodic_memory
+        WHERE namespace_id = $1
+          AND content ILIKE '%Nina is currently dating Omar%'
+        ORDER BY occurred_at ASC
+        LIMIT 1
+      `,
+      [namespaceId]
+    );
+
+    await client.query(
+      `
+        INSERT INTO semantic_memory (
+          namespace_id,
+          content_abstract,
+          importance_score,
+          valid_from,
+          valid_until,
+          status,
+          is_anchor,
+          source_episodic_id,
+          memory_kind,
+          canonical_key,
+          normalized_value,
+          metadata,
+          decay_exempt
+        )
+        VALUES ($1, $2, 0.82, $3::timestamptz, NULL, 'active', true, $4::uuid, 'profile_summary', $5, $6::jsonb, $7::jsonb, true)
+      `,
+      [
+        namespaceId,
+        "Nina is currently dating Omar.",
+        "2026-01-15T09:00:00Z",
+        sourceResult.rows[0]?.id ?? null,
+        "reconsolidated:profile_summary:relationship:nina",
+        JSON.stringify({
+          person_name: "Nina",
+          partner_name: "Omar"
+        }),
+        JSON.stringify({
+          source: "life_replay_stale_profile_seed",
+          seeded_for_reconsolidation: true
+        })
+      ]
+    );
+  });
+
   return FIXTURES.length + 1;
 }
 
@@ -1350,6 +1536,12 @@ async function runQueryExpectation(namespaceId: string, expectation: ReplayQuery
 
   if ((expectation.requireEvidence || expectation.requireDuality) && !dualityPresent) {
     failures.push("missing claim-plus-evidence duality object");
+  }
+
+  for (const term of expectation.expectedDualityClaimIncludes ?? []) {
+    if (!String(result.duality?.claim.text ?? "").toLowerCase().includes(term.toLowerCase())) {
+      failures.push(`missing duality claim term ${term}`);
+    }
   }
 
   if (expectation.expectedFollowUpAction && result.meta.followUpAction !== expectation.expectedFollowUpAction) {
@@ -1483,6 +1675,13 @@ export async function runLifeReplayBenchmark(): Promise<LifeReplayBenchmarkRepor
       await runMemoryReconsolidation({
         namespaceId,
         query: "what did Steve do on March 20 2026?",
+        limit: 8
+      });
+    }
+    if (expectation.beforeReconsolidationQuery) {
+      await runMemoryReconsolidation({
+        namespaceId,
+        query: expectation.beforeReconsolidationQuery,
         limit: 8
       });
     }

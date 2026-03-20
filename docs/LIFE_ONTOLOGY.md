@@ -77,6 +77,7 @@ same substrate instead of adding one-off extractors for every domain.
 - `procedural_memory`: active truth and mutable state
 - `semantic_memory`: compacted patterns and stable abstractions
 - `temporal_nodes`: TMT rollups for day/week/month/year summaries
+- `artifact_derivations`: durable text derived from binary artifacts like images and PDFs, always linked back to the source artifact observation
 - `ambiguity_inbox` / identity conflicts: unresolved operator work
 
 ## Active Truth Rules
@@ -92,8 +93,11 @@ same substrate instead of adding one-off extractors for every domain.
 - `constraint` entities anchor durable rules and should be queryable as active operational truth.
 - `routine` entities anchor repeated habits only after deterministic promotion from multiple weeks of event evidence.
 - `style_spec` entities anchor durable response-style or workflow truth such as concise response preferences and ontology-work protocols.
+- recurrence-gated operational heuristics may also land in `style_spec` when they survive repeated evidence across distinct sessions or days.
 - `belief` entities anchor explicit stances or opinions while older versions remain historically queryable through supersession.
 - active romantic relationship truth can be mirrored into `procedural_memory` as `current_relationship` while ended tenures remain historical in `relationship_memory`.
+- current relationship queries may return a confident `Unknown.` when ended or paused-contact tenure evidence proves there is no active partner.
+- reconnect evidence should only reopen a romantic tenure when it is temporally separable from the prior ended tenure; collapsed same-timestamp autobiography should remain historical evidence instead of forcing fake active truth.
 
 ## Hierarchy Rules
 
@@ -110,6 +114,7 @@ same substrate instead of adding one-off extractors for every domain.
   - time anchor
   - activity kind
   - links back to source fragments
+- binary artifacts may also generate `artifact_derivations` first, then become queryable evidence through the same duality contract as text-native memory.
 - episodic and narrative rows may also carry salience annotation such as `salience_labels`, `sentiment_score`, and `surprise_magnitude` without promoting emotion into current truth.
 
 ## Clarification Rules
@@ -121,3 +126,4 @@ same substrate instead of adding one-off extractors for every domain.
   - relationship memory
   - procedural truth
   - temporal summaries
+- stale semantic summaries that disagree with newer active tenure state should be superseded by deterministic reconsolidation rather than left active.

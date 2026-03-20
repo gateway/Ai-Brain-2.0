@@ -157,7 +157,7 @@ Prove that changing truth does not pollute current state.
   - `goal`
   - `plan`
   - `belief`
-- current verified additions:
+  - current verified additions:
   - `Snowboarding` and `Hiking` are first-class `activity` entities
   - favorite movies and watchlist items are first-class `media` entities
   - explicit capability evidence now promotes first-class `skill` entities like `Full-Stack Web Development`, `Photogrammetry`, and `Stable Diffusion`
@@ -270,15 +270,33 @@ Move beyond the broad `concept` bucket where it materially improves retrieval.
     - `who was Nina dating?`
     - active `current_relationship` state now exists for present-tense dating facts
     - superseded `current_relationship` state now closes when a breakup arrives later
+  - current-dating abstention is now stronger and evidence-backed:
+    - `who is Steve dating now?` returns a confident duality claim of `Unknown.`
+    - `who is Nina dating now?` returns a confident duality claim of `Unknown.`
+    - direct breakup or paused-contact evidence is now sufficient to prove the absence of an active partner without hallucinating a new one
+  - romantic tenure transitions are now replay-verified:
+    - paused or ended contact closes the active romantic tenure and closes `current_relationship`
+    - reconnect reopens a new active romantic tenure when the evidence is temporally separable
+    - dense autobiographical notes that collapse dating, breakup, and reconnection onto the same timestamp are now kept as historical evidence instead of forcing fake active tenure
+  - conflict-aware reconsolidation now covers relationship profile summaries:
+    - stale relationship profile summaries are superseded deterministically when newer tenure evidence changes state
+    - replay proves this with a seeded stale Nina profile summary that heals to `Unknown`
   - historical work-history queries still return broad timeline coverage
+  - multimodal-native derivation is now replay-verified through a conservative OCR vertical slice:
+    - `what was written on the whiteboard photo from the March redesign packet?`
+    - durable `artifact_derivations` rows are created from `derivation_jobs`
+    - multimodal answers now return direct evidence instead of relying on text-only proxies
+  - procedural heuristic induction is now replay-verified for one recurrence-gated operational rule:
+    - repeated replay-integrity evidence across three distinct days promotes `Wipe And Replay The Database After Each Slice`
+    - the active workflow rule carries induction metadata and supporting memory IDs
+    - `what is the mandatory protocol for maintaining database integrity after an implementation slice?`
   - latest clean replay report:
-    - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T05-06-17-639Z.json`
+    - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T05-59-19-839Z.json`
   - current confidence snapshot:
-    - `46 confident`
-    - `2 weak`
+    - `50 confident`
+    - `1 weak`
     - `0 missing`
   - current known weak cases:
-    - expected abstention for `who is Steve dating now?`
     - pre-reconsolidation day-summary check for `what did Steve do on March 20 2026?`
 
 ### Goal
@@ -290,7 +308,7 @@ tenures.
 
 1. broader contradiction healing beyond preferences and beliefs
 2. clarification-triggered memory gap tickets for truly missing facts
-3. stronger explicit abstention responses for “no current relationship” style questions
+3. complexity-aware hierarchical descent and sufficiency gating beyond the current temporal stack
 
 ### Scope
 
@@ -314,10 +332,12 @@ tenures.
 
 - `who was Steve dating in 2024?`
 - `who is Steve dating now?`
+- `who is Nina dating now?`
 - `where does Steve work?`
 - `where does Steve live now?` still returns one active home
 - `what groups is Steve a member of?`
 - `why does the brain believe Steve works at X?`
+- stale relationship profile summaries are superseded when newer tenure evidence changes the active state
 - active `resides_at` edge exists for the current home
 - active `works_at` edge exists for the current employer
 - historical `worked_at` rows remain queryable for prior employers
@@ -326,7 +346,7 @@ tenures.
 
 1. additional group-membership edge cases as corpus expands
 2. deeper relationship transition queries with more time-bounded status coverage
-3. stronger explicit abstention responses for “no current relationship” style questions
+3. relationship-aware profile summaries beyond the current romantic-status slice
 
 ## Phase 6: Higher Abstractions
 
@@ -338,16 +358,21 @@ tenures.
   - `goal`
   - `plan`
   - `belief`
-- current verified additions:
+  - current verified additions:
   - weekly repeated coworking now promotes a first-class `routine`
   - explicit goal, plan, and belief abstractions now remain evidence-backed after replay
   - routine answers remain evidence-backed after replay
+  - multimodal OCR derivations now survive replay and are queryable through the same duality contract as text-native memory
+  - one deterministic operational heuristic now survives replay with a hard recurrence gate instead of a one-off directive promotion
   - event-bounded retrieval now returns richer event context plus evidence bundles without overriding stronger graph truth
   - sufficiency-gated temporal descent is now active in replay with weak-vs-confident grading instead of pass/fail only
   - structured salience annotation is now replay-verified on episodic and narrative memory without promoting emotion into active truth
+  - conflict-aware reconsolidation is now replay-verified for:
+    - `day_summary`
+    - relationship `profile_summary`
   - existing ontology queries still pass after the new abstraction
   - latest clean replay report:
-    - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T05-06-17-639Z.json`
+    - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T05-59-19-839Z.json`
 
 ### Goal
 
@@ -384,9 +409,8 @@ stable.
 
 1. broader contradiction healing beyond preferences and beliefs
 2. smarter recall-planner gating by query complexity
-3. stronger explicit abstention responses and negative-state answers
-4. procedural heuristic induction from repeated successful slices
-5. richer life-phase annotation after the above stays replay-green
+3. extend procedural heuristic induction beyond replay integrity into one more machine-enforceable workflow rule
+4. richer life-phase annotation after the above stays replay-green
 
 ## Phase Gates
 

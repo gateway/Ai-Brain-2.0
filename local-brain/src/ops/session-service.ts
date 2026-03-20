@@ -125,6 +125,28 @@ interface ReviewClaimRow {
   readonly metadata: Record<string, unknown>;
 }
 
+interface SessionTimelineRow {
+  readonly memory_id: string;
+  readonly content: string;
+  readonly occurred_at: string;
+  readonly artifact_id: string | null;
+  readonly source_uri: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+interface SessionTemporalSummaryRow {
+  readonly temporal_node_id: string;
+  readonly layer: "session" | "day" | "week" | "month" | "year" | "profile";
+  readonly summary_text: string;
+  readonly generated_by: string;
+  readonly period_start: string;
+  readonly period_end: string;
+  readonly source_count: number;
+  readonly depth: number | null;
+  readonly parent_id: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
 export interface OpsSession {
   readonly id: string;
   readonly namespaceId: string;
@@ -250,6 +272,36 @@ export interface OpsSessionReview {
     readonly claimCount: number;
     readonly unresolvedCount: number;
   };
+}
+
+export interface OpsSessionTimelineItem {
+  readonly memoryId: string;
+  readonly content: string;
+  readonly occurredAt: string;
+  readonly artifactId?: string | null;
+  readonly sourceUri?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface OpsSessionTemporalSummary {
+  readonly temporalNodeId: string;
+  readonly layer: "session" | "day" | "week" | "month" | "year" | "profile";
+  readonly summaryText: string;
+  readonly generatedBy: string;
+  readonly periodStart: string;
+  readonly periodEnd: string;
+  readonly sourceCount: number;
+  readonly depth?: number | null;
+  readonly parentId?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface OpsSessionTimelineView {
+  readonly session: OpsSession;
+  readonly timeStart: string;
+  readonly timeEnd: string;
+  readonly timeline: readonly OpsSessionTimelineItem[];
+  readonly summaries: readonly OpsSessionTemporalSummary[];
 }
 
 export interface CreateSessionRequest {
@@ -1938,5 +1990,110 @@ export async function getSessionReview(sessionId: string): Promise<OpsSessionRev
       claimCount: claims.length,
       unresolvedCount: unresolvedItems.length
     }
+  };
+}
+
+export async function getSessionTimeline(sessionId: string, limit = 40): Promise<OpsSessionTimelineView> {
+  const session = mapSession(await getSessionRow(sessionId));
+  const [windowRows, timelineRows] = await Promise.all([
+    queryRows<{ readonly min_occurred_at: string | null; readonly max_occurred_at: string | null }>(
+      `
+        SELECT
+          min(et.occurred_at)::text AS min_occurred_at,
+          max(et.occurred_at)::text AS max_occurred_at
+        FROM ops.session_artifacts sa
+        JOIN episodic_timeline et ON et.artifact_id = sa.artifact_id
+        WHERE sa.session_id = $1::uuid
+      `,
+      [sessionId]
+    ),
+    queryRows<SessionTimelineRow>(
+      `
+        SELECT
+          et.memory_id::text,
+          et.content,
+          et.occurred_at::text,
+          et.artifact_id::text,
+          a.uri AS source_uri,
+          et.metadata
+        FROM ops.session_artifacts sa
+        JOIN episodic_timeline et ON et.artifact_id = sa.artifact_id
+        LEFT JOIN artifacts a ON a.id = et.artifact_id
+        WHERE sa.session_id = $1::uuid
+        ORDER BY et.occurred_at ASC, et.memory_id ASC
+        LIMIT $2
+      `,
+      [sessionId, limit]
+    )
+  ]);
+
+  const timeStart = windowRows[0]?.min_occurred_at ?? session.createdAt;
+  const timeEnd = windowRows[0]?.max_occurred_at ?? session.updatedAt;
+
+  const summaryRows = await queryRows<SessionTemporalSummaryRow>(
+    `
+      WITH ranked AS (
+        SELECT
+          tn.id::text AS temporal_node_id,
+          tn.layer,
+          tn.summary_text,
+          tn.generated_by,
+          tn.period_start::text,
+          tn.period_end::text,
+          tn.source_count,
+          tn.depth,
+          tn.parent_id::text,
+          tn.metadata,
+          ROW_NUMBER() OVER (
+            PARTITION BY tn.layer
+            ORDER BY tn.period_start DESC, tn.source_count DESC, tn.id
+          ) AS layer_rank
+        FROM temporal_nodes tn
+        WHERE tn.namespace_id = $1
+          AND tn.period_end >= $2::timestamptz
+          AND tn.period_start <= $3::timestamptz
+      )
+      SELECT *
+      FROM ranked
+      WHERE layer_rank <= 3
+      ORDER BY
+        CASE layer
+          WHEN 'year' THEN 1
+          WHEN 'month' THEN 2
+          WHEN 'week' THEN 3
+          WHEN 'day' THEN 4
+          WHEN 'session' THEN 5
+          WHEN 'profile' THEN 6
+          ELSE 7
+        END,
+        period_start ASC
+    `,
+    [session.namespaceId, timeStart, timeEnd]
+  );
+
+  return {
+    session,
+    timeStart,
+    timeEnd,
+    timeline: timelineRows.map((row) => ({
+      memoryId: row.memory_id,
+      content: row.content,
+      occurredAt: row.occurred_at,
+      artifactId: row.artifact_id,
+      sourceUri: row.source_uri,
+      metadata: row.metadata
+    })),
+    summaries: summaryRows.map((row) => ({
+      temporalNodeId: row.temporal_node_id,
+      layer: row.layer,
+      summaryText: row.summary_text,
+      generatedBy: row.generated_by,
+      periodStart: row.period_start,
+      periodEnd: row.period_end,
+      sourceCount: row.source_count,
+      depth: row.depth,
+      parentId: row.parent_id,
+      metadata: row.metadata
+    }))
   };
 }

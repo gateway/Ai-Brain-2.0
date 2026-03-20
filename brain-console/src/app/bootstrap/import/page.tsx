@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { getBootstrapState, getNamespaceCatalog, getWorkbenchSourcePreview, listWorkbenchSources } from "@/lib/operator-workbench";
+import { getBootstrapState, getNamespaceCatalog, getWorkbenchSourcePreview, getWorkbenchWorkerStatus, listWorkbenchSources } from "@/lib/operator-workbench";
 
 function formatBytes(value: number): string {
   if (value < 1024) {
@@ -45,6 +45,14 @@ function statusTone(status: string): string {
   }
 }
 
+function formatDateTime(value?: string | null): string {
+  if (!value) {
+    return "not yet";
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
 export default async function BootstrapImportPage({
   searchParams
 }: {
@@ -52,13 +60,19 @@ export default async function BootstrapImportPage({
 }) {
   const params = await searchParams;
   const requestedSourceId = typeof params.source === "string" ? params.source : Array.isArray(params.source) ? params.source[0] : undefined;
-  const [sources, namespaces, bootstrap] = await Promise.all([listWorkbenchSources(), getNamespaceCatalog(), getBootstrapState()]);
+  const [sources, namespaces, bootstrap, workerStatus] = await Promise.all([
+    listWorkbenchSources(),
+    getNamespaceCatalog(),
+    getBootstrapState(),
+    getWorkbenchWorkerStatus().catch(() => ({ checkedAt: new Date(0).toISOString(), namespaceId: "personal", workers: [] }))
+  ]);
   const selectedSourceId = requestedSourceId ?? sources[0]?.id;
   const preview = selectedSourceId ? await getWorkbenchSourcePreview(selectedSourceId).catch(() => undefined) : undefined;
   const ownerBootstrapSessionId =
     typeof bootstrap.metadata.ownerBootstrapSessionId === "string" ? bootstrap.metadata.ownerBootstrapSessionId : undefined;
   const defaultNamespaceId = bootstrap.metadata.defaultNamespaceId ?? namespaces.defaultNamespaceId;
   const defaultSourceIntent = bootstrap.metadata.sourceDefaults?.intent ?? "ongoing_folder_monitor";
+  const sourceMonitorWorker = workerStatus.workers.find((worker) => worker.workerKey === "source_monitor");
 
   return (
     <OperatorShell
@@ -85,6 +99,26 @@ export default async function BootstrapImportPage({
           nextLabel="Next: verify the brain"
         />
         <div className="grid gap-4 xl:grid-cols-2">
+          <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] xl:col-span-2">
+            <CardHeader>
+              <CardDescription>Monitor health</CardDescription>
+              <CardTitle>Watched-folder status</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
+              <p>Checked {formatDateTime(workerStatus.checkedAt)}. Source monitoring runs in the local runtime worker, not the browser.</p>
+              <p>
+                Current state:
+                {" "}
+                <span className="font-medium text-white">{sourceMonitorWorker?.state ?? "unknown"}</span>.
+                {" "}Last run {formatDateTime(sourceMonitorWorker?.latestRun?.finishedAt ?? sourceMonitorWorker?.latestRun?.startedAt)}.
+                {" "}Next due {formatDateTime(sourceMonitorWorker?.nextDueAt)}.
+              </p>
+              {typeof sourceMonitorWorker?.latestRun?.summary?.retry_guidance === "string" ? (
+                <p>Retry guidance: <span className="font-medium text-white">{sourceMonitorWorker.latestRun.summary.retry_guidance}</span></p>
+              ) : null}
+            </CardContent>
+          </Card>
+
           <Card className="border-cyan-300/18 bg-[linear-gradient(180deg,_rgba(12,28,39,0.94)_0%,_rgba(8,11,20,0.98)_100%)]">
             <CardHeader>
               <CardDescription>Bootstrap document paths</CardDescription>
@@ -299,6 +333,8 @@ export default async function BootstrapImportPage({
                       <span>{source.counts.filesDiscovered} discovered</span>
                       <span>{source.counts.filesImported} imported</span>
                       <span>{source.counts.filesPending} pending</span>
+                      <span>last scan {formatDateTime(source.lastScanAt)}</span>
+                      <span>last import {formatDateTime(source.lastImportAt)}</span>
                     </div>
                     <div className="mt-4 flex flex-wrap gap-2">
                       <Link

@@ -53,12 +53,15 @@ source corpus reconstructs the same life graph and active truth.
 - `what is Steve's preferred response style?`
 - `what is the mandatory protocol for changing the brain's ontology?`
 - `what should be done with the database after each ontology slice?`
+- `what is the mandatory protocol for maintaining database integrity after an implementation slice?`
 - `what is Steve's current stance on infrastructure?`
 - `how has Steve's opinion on infrastructure changed since 2025?`
 - `did Steve still support hosted infrastructure in January 2025?`
 - `who is Steve dating now?`
 - `who is Alex dating now?`
 - `who was Nina dating?`
+- `who is Nina dating now?`
+- `what was written on the whiteboard photo from the March redesign packet?`
 
 ## Core State Checks
 
@@ -71,7 +74,11 @@ source corpus reconstructs the same life graph and active truth.
 - evidence bundle is present on query responses
 - claim-plus-evidence duality object is present on evidence-backed query responses
 - event-bounded answers preserve source-evidence bundles
+- multimodal derivation rows and derivation job completion survive replay
+- recurrence-gated operational heuristics survive replay with induction metadata
 - focused graph expansion for the self anchor includes connected event nodes and related people/projects/places
+- direct breakup or paused-contact evidence can justify a confident current-state abstention as `Unknown.`
+- stale relationship profile summaries are superseded by reconsolidation when active tenure state changes
 
 ## Output
 
@@ -84,4 +91,4 @@ Each run should write:
 
 Current green reference run:
 
-- `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T05-06-17-639Z.json`
+- `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T05-59-19-839Z.json`

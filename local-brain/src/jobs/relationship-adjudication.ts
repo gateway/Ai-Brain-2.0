@@ -25,6 +25,13 @@ interface ActiveRelationshipRow {
   readonly object_entity_id: string;
 }
 
+interface RelationshipTenureRow {
+  readonly id: string;
+  readonly object_entity_id: string;
+  readonly valid_from: string | null;
+  readonly valid_until: string | null;
+}
+
 interface ActiveProceduralStateRow {
   readonly id: string;
   readonly version: number;
@@ -152,6 +159,66 @@ function currentRelationshipStateKey(subjectEntityId: string): string {
   return `current_relationship:${subjectEntityId}:romantic`;
 }
 
+async function hasHistoricalRomanticTenure(
+  client: PoolClient,
+  namespaceId: string,
+  subjectEntityId: string,
+  objectEntityId: string
+): Promise<boolean> {
+  const [relationshipResult, stateResult] = await Promise.all([
+    client.query<{ matches: boolean }>(
+      `
+        SELECT EXISTS(
+          SELECT 1
+          FROM relationship_memory
+          WHERE namespace_id = $1
+            AND subject_entity_id = $2
+            AND object_entity_id = $3
+            AND predicate = 'significant_other_of'
+        ) AS matches
+      `,
+      [namespaceId, subjectEntityId, objectEntityId]
+    ),
+    client.query<{ matches: boolean }>(
+      `
+        SELECT EXISTS(
+          SELECT 1
+          FROM procedural_memory
+          WHERE namespace_id = $1
+            AND state_type = 'current_relationship'
+            AND state_key = $2
+            AND coalesce(state_value->>'partner_entity_id', '') = $3
+        ) AS matches
+      `,
+      [namespaceId, currentRelationshipStateKey(subjectEntityId), objectEntityId]
+    )
+  ]);
+
+  return Boolean(relationshipResult.rows[0]?.matches || stateResult.rows[0]?.matches);
+}
+
+async function isRomanticRelationshipTransition(
+  client: PoolClient,
+  candidate: RelationshipCandidateRow,
+  canonicalPredicate: string
+): Promise<boolean> {
+  const kind = relationshipKind(candidate.metadata);
+  if (kind === "romantic" || canonicalPredicate === "significant_other_of") {
+    return true;
+  }
+
+  if (!["relationship_contact_paused", "relationship_reconnected", "relationship_ended"].includes(candidate.predicate)) {
+    return false;
+  }
+
+  return hasHistoricalRomanticTenure(
+    client,
+    candidate.namespace_id,
+    candidate.subject_entity_id,
+    candidate.object_entity_id
+  );
+}
+
 async function lookupCanonicalName(client: PoolClient, entityId: string): Promise<string | null> {
   const result = await client.query<{ canonical_name: string | null }>(
     `
@@ -203,6 +270,16 @@ async function upsertCurrentRelationshipState(
         AND valid_until IS NULL
       ORDER BY version DESC
       LIMIT 1
+    `,
+    [options.namespaceId, stateKey]
+  );
+  const latestVersionResult = await client.query<{ version: number }>(
+    `
+      SELECT COALESCE(MAX(version), 0)::int AS version
+      FROM procedural_memory
+      WHERE namespace_id = $1
+        AND state_type = 'current_relationship'
+        AND state_key = $2
     `,
     [options.namespaceId, stateKey]
   );
@@ -258,7 +335,7 @@ async function upsertCurrentRelationshipState(
       options.namespaceId,
       stateKey,
       JSON.stringify(stateValue),
-      (activeRow?.version ?? 0) + 1,
+      (latestVersionResult.rows[0]?.version ?? 0) + 1,
       options.occurredAt,
       activeRow?.id ?? null,
       JSON.stringify({
@@ -279,6 +356,8 @@ async function closeCurrentRelationshipState(
     readonly objectEntityId: string;
     readonly occurredAt: string;
     readonly candidateId: string;
+    readonly supersededById?: string | null;
+    readonly transition: "ended" | "paused";
   }
 ): Promise<void> {
   await client.query(
@@ -298,13 +377,125 @@ async function closeCurrentRelationshipState(
       currentRelationshipStateKey(options.subjectEntityId),
       options.occurredAt,
       JSON.stringify({
-        relationship_transition: "ended",
+        relationship_transition: options.transition,
         ended_at: options.occurredAt,
-        ended_by_candidate_id: options.candidateId
+        ended_by_candidate_id: options.candidateId,
+        superseded_by_id: options.supersededById ?? null
       }),
       options.objectEntityId
     ]
   );
+}
+
+async function loadActiveRomanticTenure(
+  client: PoolClient,
+  namespaceId: string,
+  subjectEntityId: string,
+  objectEntityId: string
+): Promise<RelationshipTenureRow | null> {
+  const result = await client.query<RelationshipTenureRow>(
+    `
+      SELECT id, object_entity_id, valid_until
+      , valid_from
+      FROM relationship_memory
+      WHERE namespace_id = $1
+        AND subject_entity_id = $2
+        AND object_entity_id = $3
+        AND predicate = 'significant_other_of'
+        AND status = 'active'
+        AND valid_until IS NULL
+      ORDER BY valid_from DESC
+      LIMIT 1
+    `,
+    [namespaceId, subjectEntityId, objectEntityId]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function loadLatestClosedRomanticTenure(
+  client: PoolClient,
+  namespaceId: string,
+  subjectEntityId: string,
+  objectEntityId: string
+): Promise<RelationshipTenureRow | null> {
+  const result = await client.query<RelationshipTenureRow>(
+    `
+      SELECT id, object_entity_id, valid_until
+      , valid_from
+      FROM relationship_memory
+      WHERE namespace_id = $1
+        AND subject_entity_id = $2
+        AND object_entity_id = $3
+        AND predicate = 'significant_other_of'
+        AND valid_until IS NOT NULL
+      ORDER BY valid_until DESC, valid_from DESC
+      LIMIT 1
+    `,
+    [namespaceId, subjectEntityId, objectEntityId]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function closeActiveRomanticTenure(
+  client: PoolClient,
+  options: {
+    readonly namespaceId: string;
+    readonly subjectEntityId: string;
+    readonly objectEntityId: string;
+    readonly occurredAt: string;
+    readonly candidateId: string;
+    readonly transition: "ended" | "paused";
+    readonly supersededById?: string | null;
+  }
+): Promise<RelationshipTenureRow | null> {
+  const activeRow = await loadActiveRomanticTenure(
+    client,
+    options.namespaceId,
+    options.subjectEntityId,
+    options.objectEntityId
+  );
+
+  if (!activeRow) {
+    return null;
+  }
+
+  await client.query(
+    `
+      UPDATE relationship_memory
+      SET
+        status = 'superseded',
+        valid_until = $2,
+        superseded_by_id = $3,
+        metadata = relationship_memory.metadata || $4::jsonb
+      WHERE id = $1
+    `,
+    [
+      activeRow.id,
+      options.occurredAt,
+      options.supersededById ?? null,
+      JSON.stringify({
+        relationship_transition: options.transition,
+        ended_by_candidate_id: options.candidateId,
+        ended_at: options.occurredAt,
+        superseded_by_candidate_id: options.candidateId,
+        superseded_by_id: options.supersededById ?? null
+      })
+    ]
+  );
+
+  await closeCurrentRelationshipState(client, {
+    namespaceId: options.namespaceId,
+    subjectEntityId: options.subjectEntityId,
+    objectEntityId: options.objectEntityId,
+    occurredAt: options.occurredAt,
+    candidateId: options.candidateId,
+    supersededById: options.supersededById ?? null,
+    transition: options.transition
+  });
+
+  return activeRow;
 }
 
 async function countParticipationMembershipSignals(
@@ -329,6 +520,44 @@ async function countParticipationMembershipSignals(
   );
 
   return Number(result.rows[0]?.signal_count ?? 0);
+}
+
+async function hasCollapsedRomanticTransitionContext(
+  client: PoolClient,
+  candidate: RelationshipCandidateRow
+): Promise<boolean> {
+  if (candidate.predicate !== "was_with" || relationshipKind(candidate.metadata) !== "romantic") {
+    return false;
+  }
+
+  const occurredAt = candidate.valid_from ?? candidate.created_at;
+  const result = await client.query<{ matches: boolean }>(
+    `
+      SELECT EXISTS(
+        SELECT 1
+        FROM relationship_candidates rc
+        WHERE rc.namespace_id = $1
+          AND rc.subject_entity_id = $2
+          AND rc.object_entity_id = $3
+          AND rc.id <> $4
+          AND rc.status IN ('pending', 'accepted')
+          AND rc.predicate = ANY($5::text[])
+          AND COALESCE(rc.valid_from, rc.created_at) = $6::timestamptz
+          AND rc.source_memory_id IS NOT DISTINCT FROM $7::uuid
+      ) AS matches
+    `,
+    [
+      candidate.namespace_id,
+      candidate.subject_entity_id,
+      candidate.object_entity_id,
+      candidate.id,
+      ["relationship_ended", "relationship_contact_paused", "relationship_reconnected"],
+      occurredAt,
+      candidate.source_memory_id
+    ]
+  );
+
+  return Boolean(result.rows[0]?.matches);
 }
 
 async function markRelationshipCandidate(
@@ -460,78 +689,53 @@ export async function runRelationshipAdjudication(
       const canonicalPredicate = canonicalRelationshipPredicate(candidate);
       const relationshipTransition =
         typeof candidate.metadata?.relationship_transition === "string" ? candidate.metadata.relationship_transition : null;
+      const romanticTransition = await isRomanticRelationshipTransition(client, candidate, canonicalPredicate);
 
-      if (historicalRelationship && candidate.predicate === "relationship_ended" && relationshipKind(candidate.metadata) === "romantic") {
+      if (romanticTransition && (candidate.predicate === "relationship_ended" || candidate.predicate === "relationship_contact_paused")) {
         const occurredAt = candidate.valid_from ?? candidate.created_at;
-        const activeRomantic = await client.query<ActiveRelationshipRow>(
-          `
-            SELECT id, object_entity_id
-            FROM relationship_memory
-            WHERE namespace_id = $1
-              AND subject_entity_id = $2
-              AND predicate = 'significant_other_of'
-              AND object_entity_id = $3
-              AND status = 'active'
-              AND valid_until IS NULL
-            ORDER BY valid_from DESC
-            LIMIT 1
-          `,
-          [namespaceId, candidate.subject_entity_id, candidate.object_entity_id]
-        );
+        const transition = candidate.predicate === "relationship_contact_paused" ? "paused" : "ended";
+        const activeRow = await closeActiveRomanticTenure(client, {
+          namespaceId,
+          subjectEntityId: candidate.subject_entity_id,
+          objectEntityId: candidate.object_entity_id,
+          occurredAt,
+          candidateId: candidate.id,
+          transition
+        });
 
-        const activeRow = activeRomantic.rows[0];
+        const transitionReason =
+          transition === "paused"
+            ? "Closed active romantic relationship tenure from paused-contact evidence."
+            : "Closed active romantic relationship tenure from breakup evidence.";
         if (activeRow) {
-          await client.query(
-            `
-              UPDATE relationship_memory
-              SET
-                status = 'superseded',
-                valid_until = $2,
-                metadata = relationship_memory.metadata || $3::jsonb
-              WHERE id = $1
-            `,
-            [
-              activeRow.id,
-              occurredAt,
-              JSON.stringify({
-                relationship_transition: "ended",
-                ended_by_candidate_id: candidate.id,
-                ended_at: occurredAt
-              })
-            ]
+          await markRelationshipCandidate(client, candidate.id, "accepted", transitionReason);
+        } else {
+          await markRelationshipCandidate(
+            client,
+            candidate.id,
+            "accepted",
+            transition === "paused"
+              ? "Accepted paused-contact evidence without an active romantic tenure to close."
+              : "Accepted breakup evidence without an active romantic tenure to close."
           );
-          await closeCurrentRelationshipState(client, {
-            namespaceId,
-            subjectEntityId: candidate.subject_entity_id,
-            objectEntityId: candidate.object_entity_id,
-            occurredAt,
-            candidateId: candidate.id
-          });
         }
-
-        await markRelationshipCandidate(
-          client,
-          candidate.id,
-          "accepted",
-          activeRow
-            ? "Closed active romantic relationship tenure from historical breakup evidence."
-            : "Accepted breakup evidence without an active romantic tenure to close."
-        );
         await logEvent(client, {
           namespaceId,
           candidateId: candidate.id,
           relationshipMemoryId: activeRow?.id ?? null,
           action: activeRow ? "superseded" : "accepted",
           reason: activeRow
-            ? "Closed active romantic relationship tenure from breakup evidence."
-            : "Accepted breakup evidence without active romantic tenure.",
+            ? transitionReason
+            : transition === "paused"
+              ? "Accepted paused-contact evidence without active romantic tenure."
+              : "Accepted breakup evidence without active romantic tenure.",
           metadata: {
             run_id: context.runId,
             confidence: candidate.confidence,
             prior_score: candidate.prior_score,
             effective_confidence: effectiveConfidence,
             prior_reason: candidate.prior_reason,
-            historical_relationship: true,
+            historical_relationship: historicalRelationship,
             relationship_transition: relationshipTransition
           }
         });
@@ -539,6 +743,190 @@ export async function runRelationshipAdjudication(
         if (activeRow) {
           superseded += 1;
         }
+        continue;
+      }
+
+      if (romanticTransition && candidate.predicate === "relationship_reconnected") {
+        const occurredAt = candidate.valid_from ?? candidate.created_at;
+        const exactRomantic = await loadActiveRomanticTenure(
+          client,
+          namespaceId,
+          candidate.subject_entity_id,
+          candidate.object_entity_id
+        );
+
+        if (exactRomantic) {
+          await client.query(
+            `
+              UPDATE relationship_memory
+              SET
+                confidence = GREATEST(confidence, $2),
+                metadata = relationship_memory.metadata || $3::jsonb
+              WHERE id = $1
+            `,
+            [
+              exactRomantic.id,
+              effectiveConfidence,
+              JSON.stringify({
+                last_candidate_id: candidate.id,
+                last_reinforced_at: occurredAt,
+                last_prior_score: candidate.prior_score,
+                last_effective_confidence: effectiveConfidence,
+                relationship_transition: "reconnected"
+              })
+            ]
+          );
+          await upsertCurrentRelationshipState(client, {
+            namespaceId,
+            subjectEntityId: candidate.subject_entity_id,
+            objectEntityId: candidate.object_entity_id,
+            occurredAt,
+            sourceMemoryId: candidate.source_memory_id,
+            relationshipMemoryId: exactRomantic.id,
+            candidateId: candidate.id
+          });
+          await markRelationshipCandidate(client, candidate.id, "accepted", "Reinforced existing active romantic relationship after reconnection evidence.");
+          await logEvent(client, {
+            namespaceId,
+            candidateId: candidate.id,
+            relationshipMemoryId: exactRomantic.id,
+            action: "reinforced",
+            reason: "Reinforced existing active romantic relationship after reconnection evidence.",
+            metadata: {
+              run_id: context.runId,
+              confidence: candidate.confidence,
+              prior_score: candidate.prior_score,
+              effective_confidence: effectiveConfidence,
+              prior_reason: candidate.prior_reason,
+              relationship_transition: relationshipTransition
+            }
+          });
+          reinforced += 1;
+          continue;
+        }
+
+        const priorClosed = await loadLatestClosedRomanticTenure(
+          client,
+          namespaceId,
+          candidate.subject_entity_id,
+          candidate.object_entity_id
+        );
+        if (priorClosed?.valid_from === occurredAt) {
+          await markRelationshipCandidate(
+            client,
+            candidate.id,
+            "accepted",
+            "Accepted reconnection evidence as historical-only because the source collapsed multiple romantic transitions onto the same timestamp."
+          );
+          await logEvent(client, {
+            namespaceId,
+            candidateId: candidate.id,
+            relationshipMemoryId: priorClosed.id,
+            action: "accepted",
+            reason: "Accepted reconnection evidence as historical-only because the source collapsed multiple romantic transitions onto the same timestamp.",
+            metadata: {
+              run_id: context.runId,
+              confidence: candidate.confidence,
+              prior_score: candidate.prior_score,
+              effective_confidence: effectiveConfidence,
+              prior_reason: candidate.prior_reason,
+              relationship_transition: relationshipTransition,
+              collapsed_same_timestamp: true
+            }
+          });
+          accepted += 1;
+          continue;
+        }
+
+        const inserted = await client.query<{ id: string }>(
+          `
+            INSERT INTO relationship_memory (
+              namespace_id,
+              subject_entity_id,
+              predicate,
+              object_entity_id,
+              confidence,
+              status,
+              valid_from,
+              source_candidate_id,
+              metadata
+            )
+            VALUES ($1, $2, 'significant_other_of', $3, $4, 'active', $5, $6, $7::jsonb)
+            RETURNING id
+          `,
+          [
+            namespaceId,
+            candidate.subject_entity_id,
+            candidate.object_entity_id,
+            effectiveConfidence,
+            occurredAt,
+            candidate.id,
+            JSON.stringify({
+              run_id: context.runId,
+              source_memory_id: candidate.source_memory_id,
+              prior_score: candidate.prior_score,
+              effective_confidence: effectiveConfidence,
+              prior_reason: candidate.prior_reason,
+              relationship_kind: "romantic",
+              relationship_transition: "reconnected",
+              original_predicate: candidate.predicate
+            })
+          ]
+        );
+
+        const relationshipMemoryId = inserted.rows[0]?.id;
+        if (!relationshipMemoryId) {
+          throw new Error("Failed to insert reconnected romantic relationship memory");
+        }
+
+        if (priorClosed) {
+          await client.query(
+            `
+              UPDATE relationship_memory
+              SET
+                superseded_by_id = $2,
+                metadata = relationship_memory.metadata || $3::jsonb
+              WHERE id = $1
+            `,
+            [
+              priorClosed.id,
+              relationshipMemoryId,
+              JSON.stringify({
+                superseded_by_candidate_id: candidate.id,
+                reconnected_at: occurredAt
+              })
+            ]
+          );
+        }
+
+        await upsertCurrentRelationshipState(client, {
+          namespaceId,
+          subjectEntityId: candidate.subject_entity_id,
+          objectEntityId: candidate.object_entity_id,
+          occurredAt,
+          sourceMemoryId: candidate.source_memory_id,
+          relationshipMemoryId,
+          candidateId: candidate.id
+        });
+
+        await markRelationshipCandidate(client, candidate.id, "accepted", "Reopened romantic relationship tenure from reconnection evidence.");
+        await logEvent(client, {
+          namespaceId,
+          candidateId: candidate.id,
+          relationshipMemoryId,
+          action: "accepted",
+          reason: "Reopened romantic relationship tenure from reconnection evidence.",
+          metadata: {
+            run_id: context.runId,
+            confidence: candidate.confidence,
+            prior_score: candidate.prior_score,
+            effective_confidence: effectiveConfidence,
+            prior_reason: candidate.prior_reason,
+            relationship_transition: relationshipTransition,
+            reopened_prior_tenure_id: priorClosed?.id ?? null
+          }
+        });
+        accepted += 1;
         continue;
       }
 
@@ -660,6 +1048,30 @@ export async function runRelationshipAdjudication(
           accepted += 1;
           continue;
         }
+      }
+
+      if (historicalRelationship && canonicalPredicate === "significant_other_of" && await hasCollapsedRomanticTransitionContext(client, candidate)) {
+        const reason =
+          "Historical romantic evidence retained without active tenure promotion because the source collapses dating, breakup, and reconnection transitions onto the same timestamp.";
+        await markRelationshipCandidate(client, candidate.id, "accepted", reason);
+        await logEvent(client, {
+          namespaceId,
+          candidateId: candidate.id,
+          relationshipMemoryId: null,
+          action: "accepted",
+          reason,
+          metadata: {
+            run_id: context.runId,
+            confidence: candidate.confidence,
+            prior_score: candidate.prior_score,
+            effective_confidence: effectiveConfidence,
+            prior_reason: candidate.prior_reason,
+            historical_relationship: true,
+            collapsed_transition_source: true
+          }
+        });
+        accepted += 1;
+        continue;
       }
 
       const exactActive = await client.query<ActiveRelationshipRow>(

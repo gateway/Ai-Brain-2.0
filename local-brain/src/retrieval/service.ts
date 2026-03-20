@@ -467,11 +467,34 @@ function lexicalCoverageForResult(content: string, terms: readonly string[]): {
   };
 }
 
+function isCurrentDatingQuery(queryText: string): boolean {
+  return /\bwho\s+(?:am|is|are)\s+.+\s+dating(?:\s+now)?\b/i.test(queryText);
+}
+
+function isCurrentDatingUnknownEvidence(top: RecallResult | undefined, queryText: string): boolean {
+  if (!top || !isCurrentDatingQuery(queryText)) {
+    return false;
+  }
+
+  const predicate = typeof top.provenance.predicate === "string" ? top.provenance.predicate : "";
+  const transition = typeof top.provenance.relationship_transition === "string" ? top.provenance.relationship_transition : "";
+  const validUntil = typeof top.provenance.valid_until === "string" ? top.provenance.valid_until : null;
+
+  return (
+    predicate === "relationship_ended" ||
+    predicate === "relationship_contact_paused" ||
+    transition === "ended" ||
+    transition === "paused" ||
+    (predicate === "significant_other_of" && Boolean(validUntil))
+  );
+}
+
 function assessRecallAnswer(
   results: readonly RecallResult[],
   evidence: RecallResponse["evidence"],
   planner: ReturnType<typeof planRecallQuery>,
-  temporalSummarySufficient: boolean
+  temporalSummarySufficient: boolean,
+  queryText: string
 ): NonNullable<RecallResponse["meta"]["answerAssessment"]> {
   const top = results[0];
   if (!top) {
@@ -498,6 +521,7 @@ function assessRecallAnswer(
     top.memoryType === "relationship_memory" ||
     top.memoryType === "narrative_event" ||
     top.memoryType === "temporal_nodes";
+  const currentDatingUnknownEvidence = isCurrentDatingUnknownEvidence(top, queryText);
 
   if (evidence.length === 0) {
     return {
@@ -517,6 +541,18 @@ function assessRecallAnswer(
       reason: top.memoryType === "temporal_nodes" || temporalSummarySufficient
         ? "The answer is grounded through temporal summary support, but the top claim is not directly anchored to a leaf evidence row."
         : "The answer is grounded, but only indirect or complementary evidence was attached to the top claim.",
+      lexicalCoverage: coverage.lexicalCoverage,
+      matchedTerms: coverage.matchedTerms,
+      totalTerms: coverage.totalTerms,
+      evidenceCount: evidence.length,
+      directEvidence
+    };
+  }
+
+  if (currentDatingUnknownEvidence) {
+    return {
+      confidence: "confident",
+      reason: "Current relationship lookup is authoritative because ended or paused tenure evidence rules out an active partner.",
       lexicalCoverage: coverage.lexicalCoverage,
       matchedTerms: coverage.matchedTerms,
       totalTerms: coverage.totalTerms,
@@ -558,6 +594,10 @@ function buildDualityObject(
   queryText: string
 ): RecallResponse["duality"] {
   const top = results[0];
+  const currentDatingUnknownFromEvidence = isCurrentDatingUnknownEvidence(top, queryText);
+  const unknownCurrentRelationship =
+    ((!top && isCurrentDatingQuery(queryText)) || currentDatingUnknownFromEvidence) &&
+    assessment.confidence !== "missing";
   const followUpAction: RecallFollowUpAction =
     assessment.confidence === "confident"
       ? "none"
@@ -583,7 +623,7 @@ function buildDualityObject(
       ? {
           memoryId: top.memoryId,
           memoryType: top.memoryType,
-          text: top.content,
+          text: currentDatingUnknownFromEvidence ? "Unknown." : top.content,
           occurredAt: top.occurredAt ?? null,
           artifactId: top.artifactId ?? null,
           sourceUri: typeof top.provenance.source_uri === "string" ? top.provenance.source_uri : null,
@@ -593,7 +633,7 @@ function buildDualityObject(
       : {
           memoryId: null,
           memoryType: null,
-          text: "No authoritative evidence found.",
+          text: unknownCurrentRelationship ? "Unknown." : "No authoritative evidence found.",
           occurredAt: null,
           artifactId: null,
           sourceUri: null,
@@ -1922,7 +1962,12 @@ function proceduralContentExpression(): string {
         'brain constraint rule policy follow follows ' || coalesce(state_value->>'constraint', state_key) || ' ' || coalesce(state_value->>'modality', '')
       WHEN state_type = 'style_spec' THEN
         coalesce(state_value->>'person', 'User') || ' style spec work style response style formatting preference ' ||
-        coalesce(state_value->>'style_spec', state_key) || ' ' || coalesce(state_value->>'scope', '')
+        coalesce(state_value->>'style_spec', state_key) || ' ' || coalesce(state_value->>'scope', '') || ' ' ||
+        CASE
+          WHEN state_value->>'scope' = 'workflow' THEN 'workflow protocol procedure mandatory implementation slice database integrity replay benchmark'
+          WHEN state_value->>'scope' = 'retrieval_style' THEN 'retrieval protocol queryability natural language direct questions'
+          ELSE 'response protocol formatting'
+        END
       WHEN state_type = 'goal' THEN
         coalesce(state_value->>'person', 'User') || ' current primary goal objective intent is ' || coalesce(state_value->>'goal', state_key)
       WHEN state_type = 'plan' THEN
@@ -2489,6 +2534,34 @@ function pruneRankedResults(
       return activeRelationships.slice(0, relationshipCap);
     }
     if (activeRelationships.length === 0) {
+      if (preferredRelationshipPredicates.includes("significant_other_of")) {
+        const negativeRelationshipEvidence = relationshipRows
+          .filter((item) => {
+            const predicate = String(item.row.provenance.predicate ?? "");
+            const transition = String(item.row.provenance.relationship_transition ?? "");
+            const validUntil = String(item.row.provenance.valid_until ?? "");
+            return (
+              predicate === "relationship_ended" ||
+              predicate === "relationship_contact_paused" ||
+              transition === "ended" ||
+              transition === "paused" ||
+              (predicate === "significant_other_of" && Boolean(validUntil))
+            );
+          })
+          .slice()
+          .sort((left, right) => {
+            const leftIso = toIsoString(left.row.occurred_at);
+            const rightIso = toIsoString(right.row.occurred_at);
+            if (leftIso && rightIso && leftIso !== rightIso) {
+              return rightIso.localeCompare(leftIso);
+            }
+            return right.rrfScore - left.rrfScore;
+          });
+
+        if (negativeRelationshipEvidence.length > 0) {
+          return negativeRelationshipEvidence.slice(0, 2);
+        }
+      }
       return focusedProceduralRows.slice(0, 1);
     }
     return [...focusedProceduralRows.slice(0, 1), ...activeRelationships, ...episodicRows.slice(0, 1)].slice(0, relationshipCap);
@@ -4673,7 +4746,7 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
   }
 
   const evidence = buildEvidenceBundle(results);
-  const answerAssessment = assessRecallAnswer(results, evidence, planner, temporalSummarySufficient);
+  const answerAssessment = assessRecallAnswer(results, evidence, planner, temporalSummarySufficient, query.query);
   const duality = buildDualityObject(results, evidence, answerAssessment, query.namespaceId, query.query);
 
   return {

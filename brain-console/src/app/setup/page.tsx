@@ -2,7 +2,7 @@ import Link from "next/link";
 import { OperatorShell } from "@/components/operator-shell";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getBootstrapState, getRuntimeHealth, resolveBootstrapEmbeddingSettings } from "@/lib/operator-workbench";
+import { getBootstrapState, getRuntimeHealth, getWorkbenchWorkerStatus, resolveBootstrapEmbeddingSettings } from "@/lib/operator-workbench";
 import { SetupStepGuide } from "@/components/setup-step-guide";
 
 function checklistTone(completed: boolean, current: boolean): string {
@@ -29,15 +29,24 @@ function searchValue(value: string | readonly string[] | undefined): string | un
   return typeof value === "string" ? value : Array.isArray(value) ? value[0] : undefined;
 }
 
+function formatDateTime(value?: string | null): string {
+  if (!value) {
+    return "not yet";
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
 export default async function SetupPage({
   searchParams
 }: {
   readonly searchParams: Promise<Record<string, string | readonly string[] | undefined>>;
 }) {
   const params = await searchParams;
-  const [bootstrap, health] = await Promise.all([
+  const [bootstrap, health, workerStatus] = await Promise.all([
     getBootstrapState().catch(() => null),
-    getRuntimeHealth().catch(() => ({ ok: false }))
+    getRuntimeHealth().catch(() => ({ ok: false })),
+    getWorkbenchWorkerStatus().catch(() => ({ checkedAt: new Date(0).toISOString(), namespaceId: "personal", workers: [] }))
   ]);
   const defaultNamespaceId = bootstrap?.metadata.defaultNamespaceId ?? "personal";
   const embeddingSettings = bootstrap ? resolveBootstrapEmbeddingSettings(bootstrap.metadata) : {
@@ -275,6 +284,30 @@ export default async function SetupPage({
           </section>
 
           <div className="space-y-5">
+            <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
+              <CardHeader className="pb-3">
+                <CardDescription>Background health</CardDescription>
+                <CardTitle className="text-[1.35rem] tracking-tight">Workers keeping the brain current</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4 pt-0 text-[15px] leading-8 text-slate-300">
+                <p>Checked {formatDateTime(workerStatus.checkedAt)}. These loops monitor folders, propagate inbox fixes, and rebuild temporal summaries.</p>
+                {workerStatus.workers.map((worker) => (
+                  <div key={worker.workerKey} className="rounded-[20px] border border-white/8 bg-white/5 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-medium text-white">{worker.workerKey.replace(/_/g, " ")}</p>
+                      <Badge variant="outline" className="border-white/10 bg-white/5 text-stone-200">{worker.state}</Badge>
+                    </div>
+                    <p className="mt-2 text-sm leading-7 text-slate-300">
+                      Last run {formatDateTime(worker.latestRun?.finishedAt ?? worker.latestRun?.startedAt)}. Next due {formatDateTime(worker.nextDueAt)}.
+                    </p>
+                    {typeof worker.latestRun?.summary?.retry_guidance === "string" ? (
+                      <p className="mt-2 text-xs leading-6 text-amber-100">Retry guidance: {worker.latestRun.summary.retry_guidance}</p>
+                    ) : null}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
             <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
               <CardHeader className="pb-3">
                 <CardDescription>Provider options</CardDescription>

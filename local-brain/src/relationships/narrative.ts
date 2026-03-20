@@ -1282,6 +1282,54 @@ function extractClaimsFromScene(
         });
       }
     }
+    const explicitGenericReconnectedMatch = sentenceText.match(
+      /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+and\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+started\s+talking\s+again\b/u
+    );
+    if (explicitGenericReconnectedMatch) {
+      const subject = resolvePersonName(explicitGenericReconnectedMatch[1], aliasMap, resolvedSelfName, explicitPeople);
+      const partner = resolvePersonName(explicitGenericReconnectedMatch[2], aliasMap, resolvedSelfName, explicitPeople);
+      if (subject && partner && normalizeName(subject) !== normalizeName(partner)) {
+        claims.push({
+          claimType: "relationship",
+          subjectName: subject,
+          subjectType: subject === resolvedSelfName ? "self" : "person",
+          predicate: "relationship_reconnected",
+          objectName: partner,
+          objectType: "person",
+          confidence: 0.82,
+          status: "accepted",
+          metadata: {
+            relationship_kind: "interpersonal",
+            historical_relationship: true,
+            relationship_transition: "reconnected"
+          }
+        });
+      }
+    }
+    const explicitGenericPausedMatch = sentenceText.match(
+      /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+and\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+stopped\s+talking\b/u
+    );
+    if (explicitGenericPausedMatch) {
+      const subject = resolvePersonName(explicitGenericPausedMatch[1], aliasMap, resolvedSelfName, explicitPeople);
+      const partner = resolvePersonName(explicitGenericPausedMatch[2], aliasMap, resolvedSelfName, explicitPeople);
+      if (subject && partner && normalizeName(subject) !== normalizeName(partner)) {
+        claims.push({
+          claimType: "relationship",
+          subjectName: subject,
+          subjectType: subject === resolvedSelfName ? "self" : "person",
+          predicate: "relationship_contact_paused",
+          objectName: partner,
+          objectType: "person",
+          confidence: 0.8,
+          status: "accepted",
+          metadata: {
+            relationship_kind: "interpersonal",
+            historical_relationship: true,
+            relationship_transition: "contact_paused"
+          }
+        });
+      }
+    }
     if (
       resolvedSelfName &&
       companionPerson &&

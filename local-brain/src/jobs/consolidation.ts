@@ -93,6 +93,13 @@ interface RoutinePatternRow {
   readonly representative_memory_id: string | null;
 }
 
+interface HeuristicEvidenceRow {
+  readonly memory_id: string;
+  readonly content: string;
+  readonly occurred_at: string | null;
+  readonly source_chunk_id: string | null;
+}
+
 interface TypedPreferenceEntity {
   readonly entityType: TypedPreferenceEntityType;
   readonly canonicalName: string;
@@ -3231,6 +3238,193 @@ async function syncDerivedRoutines(
   };
 }
 
+async function syncOperationalHeuristics(
+  client: PoolClient,
+  namespaceId: string
+): Promise<{
+  readonly decisions: ConsolidationDecision[];
+  readonly promotedCount: number;
+  readonly supersededCount: number;
+}> {
+  const evidenceRows = await client.query<HeuristicEvidenceRow>(
+    `
+      SELECT
+        em.id AS memory_id,
+        em.content,
+        em.occurred_at,
+        em.source_chunk_id
+      FROM episodic_memory em
+      WHERE em.namespace_id = $1
+        AND lower(em.content) LIKE '%wipe and replay the database%'
+      ORDER BY em.occurred_at ASC NULLS LAST, em.id ASC
+    `,
+    [namespaceId]
+  );
+
+  const distinctDays = new Set(
+    evidenceRows.rows
+      .map((row) => {
+        if (!row.occurred_at) {
+          return null;
+        }
+        const iso = new Date(row.occurred_at).toISOString();
+        return Number.isNaN(Date.parse(iso)) ? null : iso.slice(0, 10);
+      })
+      .filter((value): value is string => Boolean(value))
+  );
+
+  if (distinctDays.size < 3) {
+    return {
+      decisions: [],
+      promotedCount: 0,
+      supersededCount: 0
+    };
+  }
+
+  const statement: StyleSpecStatement = {
+    rule: "Wipe And Replay The Database After Each Slice",
+    canonicalKey: buildCanonicalStyleSpecKey("wipe_and_replay_database_after_each_slice"),
+    scope: "workflow"
+  };
+
+  const typedEntity = resolveTypedStyleSpecEntity(statement.rule, statement.scope);
+  const typedEntityId = typedEntity ? await upsertTypedEntity(client, namespaceId, typedEntity) : null;
+  const sourceMemoryIds = evidenceRows.rows.map((row) => row.memory_id);
+  const sourceMemoryId = sourceMemoryIds[0] ?? null;
+  const occurredAt = evidenceRows.rows.at(-1)?.occurred_at ?? new Date().toISOString();
+  const metadata = {
+    source: "heuristic_induction",
+    heuristic_kind: "replay_integrity",
+    promotion_gate: "rule_of_3_distinct_days",
+    evidence_memory_ids: sourceMemoryIds,
+    evidence_count: sourceMemoryIds.length,
+    ontology_phase: "phase6"
+  };
+
+  if (typedEntityId) {
+    for (const row of evidenceRows.rows) {
+      await upsertTypedEntityMention(client, {
+        namespaceId,
+        entityId: typedEntityId,
+        sourceMemoryId: row.memory_id,
+        sourceChunkId: row.source_chunk_id,
+        mentionText: row.content,
+        occurredAt: row.occurred_at ?? occurredAt,
+        metadata: {
+          source: "heuristic_induction",
+          heuristic_kind: "replay_integrity",
+          promotion_gate: "rule_of_3_distinct_days"
+        }
+      });
+    }
+  }
+
+  const semanticRows = await client.query<{ id: string }>(
+    `
+      SELECT id
+      FROM semantic_memory
+      WHERE namespace_id = $1
+        AND canonical_key = $2
+        AND status = 'active'
+        AND valid_until IS NULL
+      ORDER BY valid_from DESC
+      LIMIT 1
+    `,
+    [namespaceId, statement.canonicalKey]
+  );
+
+  let promotedCount = 0;
+  const semanticRow = semanticRows.rows[0];
+  const normalizedValue = {
+    style_spec: statement.rule,
+    scope: statement.scope,
+    entity_id: typedEntityId,
+    entity_type: typedEntity?.entityType ?? null,
+    support_memory_ids: sourceMemoryIds,
+    induced: true
+  };
+
+  if (!semanticRow) {
+    await client.query(
+      `
+        INSERT INTO semantic_memory (
+          namespace_id,
+          content_abstract,
+          importance_score,
+          valid_from,
+          valid_until,
+          status,
+          is_anchor,
+          source_episodic_id,
+          source_chunk_id,
+          source_artifact_observation_id,
+          memory_kind,
+          canonical_key,
+          normalized_value,
+          metadata,
+          decay_exempt
+        )
+        VALUES ($1, $2, 0.9, $3, NULL, 'active', true, $4, NULL, NULL, 'style_spec', $5, $6::jsonb, $7::jsonb, true)
+      `,
+      [
+        namespaceId,
+        "Operational heuristic: wipe and replay the database after each implementation slice before moving on.",
+        occurredAt,
+        sourceMemoryId,
+        statement.canonicalKey,
+        JSON.stringify(normalizedValue),
+        JSON.stringify(metadata)
+      ]
+    );
+    promotedCount += 1;
+  } else {
+    await client.query(
+      `
+        UPDATE semantic_memory
+        SET normalized_value = normalized_value || $2::jsonb,
+            metadata = metadata || $3::jsonb
+        WHERE id = $1
+      `,
+      [semanticRow.id, JSON.stringify(normalizedValue), JSON.stringify(metadata)]
+    );
+  }
+
+  const namespacePersonLabel = await loadNamespacePersonLabel(client, namespaceId, "");
+  const proceduralResult = await upsertProceduralState(client, {
+    namespaceId,
+    stateType: "style_spec",
+    stateKey: statement.canonicalKey,
+    stateValue: {
+      person: namespacePersonLabel,
+      style_spec: statement.rule,
+      scope: statement.scope,
+      status: "active",
+      entity_id: typedEntityId,
+      entity_type: typedEntity?.entityType ?? null,
+      support_memory_ids: sourceMemoryIds,
+      induced: true
+    },
+    occurredAt,
+    sourceMemoryId,
+    metadata,
+    supersessionMode: "replace"
+  });
+
+  promotedCount += proceduralResult.promoted ? 1 : 0;
+
+  return {
+    decisions: [
+      buildDecision(
+        proceduralResult.superseded || semanticRow ? "UPDATE" : "ADD",
+        "Induced replay-integrity workflow heuristic from repeated evidence.",
+        0.86
+      )
+    ],
+    promotedCount,
+    supersededCount: proceduralResult.superseded ? 1 : 0
+  };
+}
+
 async function promoteProjectClaimCandidate(
   client: PoolClient,
   candidate: ClaimCandidateRow
@@ -3624,6 +3818,11 @@ export async function runCandidateConsolidation(
     promotedMemories += routineResult.promotedCount;
     supersededMemories += routineResult.supersededCount;
     decisions.push(...routineResult.decisions);
+
+    const heuristicResult = await syncOperationalHeuristics(client, namespaceId);
+    promotedMemories += heuristicResult.promotedCount;
+    supersededMemories += heuristicResult.supersededCount;
+    decisions.push(...heuristicResult.decisions);
 
     return {
       context,

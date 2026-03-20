@@ -257,8 +257,11 @@ export function isStyleSpecQuery(queryText: string): boolean {
     /\bwork-?style\b/i.test(normalized) ||
     /\bresponse\s+style\b/i.test(normalized) ||
     /\bformat(?:ting)?\s+preferences?\b/i.test(normalized) ||
+    /\bmandatory\s+protocol\b/i.test(normalized) ||
     /\bprotocol\s+for\s+changing\s+the\s+brain'?s?\s+ontology\b/i.test(normalized) ||
     (/\bdatabase\b/i.test(normalized) && /\bontology\s+slice\b/i.test(normalized)) ||
+    (/\bdatabase\s+integrity\b/i.test(normalized) && /\bimplementation\s+slice\b/i.test(normalized)) ||
+    (/\bprotocol\b/i.test(normalized) && /\bimplementation\s+slice\b/i.test(normalized)) ||
     /\bhow\s+should\s+(?:the\s+brain|you)\s+(?:answer|format|respond)\b/i.test(normalized)
   );
 }

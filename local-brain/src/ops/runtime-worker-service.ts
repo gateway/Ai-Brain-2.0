@@ -89,6 +89,64 @@ interface FinishWorkerRunInput {
   readonly summary?: Record<string, unknown>;
 }
 
+function classifyWorkerFailure(error: unknown): {
+  readonly errorClass: string;
+  readonly category: string;
+  readonly retryGuidance: string;
+  readonly message: string;
+} {
+  const errorClass = error instanceof Error && error.name ? error.name : "Error";
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes("auth") || normalized.includes("api key") || normalized.includes("bearer")) {
+    return {
+      errorClass,
+      category: "provider_auth",
+      retryGuidance: "Check the provider API key or auth header configuration, then retry the worker.",
+      message
+    };
+  }
+  if (normalized.includes("timeout") || normalized.includes("timed out") || normalized.includes("econnreset")) {
+    return {
+      errorClass,
+      category: "provider_timeout",
+      retryGuidance: "The provider or runtime was slow or unavailable. Retry once the model/runtime is responsive again.",
+      message
+    };
+  }
+  if (normalized.includes("dimension") || normalized.includes("pgvector") || normalized.includes("schema mismatch")) {
+    return {
+      errorClass,
+      category: "schema_mismatch",
+      retryGuidance: "The selected model does not match the current schema or vector dimensions. Fix the model/schema pairing, then rerun.",
+      message
+    };
+  }
+  if (normalized.includes("no such file") || normalized.includes("enoent") || normalized.includes("eacces") || normalized.includes("permission denied")) {
+    return {
+      errorClass,
+      category: "source_access",
+      retryGuidance: "Verify the watched folder still exists and the runtime can read it, then rescan or rerun the worker.",
+      message
+    };
+  }
+  if (normalized.includes("connect") || normalized.includes("econnrefused") || normalized.includes("database") || normalized.includes("sql")) {
+    return {
+      errorClass,
+      category: "runtime_dependency",
+      retryGuidance: "Check database/runtime dependencies and connectivity, then retry the worker after the service is healthy.",
+      message
+    };
+  }
+  return {
+    errorClass,
+    category: "unknown",
+    retryGuidance: "Inspect the latest failure details and retry after correcting the underlying runtime issue.",
+    message
+  };
+}
+
 function intervalSecondsForWorker(workerKey: WorkerKey, settings: OpsRuntimeOperationsSettings): number | undefined {
   if (workerKey === "source_monitor") {
     return settings.sourceMonitor.workerIntervalSeconds;
@@ -246,8 +304,12 @@ export async function executeSourceMonitorWorker(input?: {
     await finishWorkerRun(runId, {
       status: "failed",
       nextDueAt: settings.sourceMonitor.enabled ? computeNextDueAt(settings.sourceMonitor.workerIntervalSeconds) : null,
-      errorClass: error instanceof Error ? error.name : "Error",
-      errorMessage: error instanceof Error ? error.message : String(error)
+      errorClass: classifyWorkerFailure(error).errorClass,
+      errorMessage: classifyWorkerFailure(error).message,
+      summary: {
+        failure_category: classifyWorkerFailure(error).category,
+        retry_guidance: classifyWorkerFailure(error).retryGuidance
+      }
     });
     throw error;
   }
@@ -290,8 +352,12 @@ export async function executeOutboxWorker(input?: {
     await finishWorkerRun(runId, {
       status: "failed",
       nextDueAt: computeNextDueAt(settings.outbox.workerIntervalSeconds),
-      errorClass: error instanceof Error ? error.name : "Error",
-      errorMessage: error instanceof Error ? error.message : String(error)
+      errorClass: classifyWorkerFailure(error).errorClass,
+      errorMessage: classifyWorkerFailure(error).message,
+      summary: {
+        failure_category: classifyWorkerFailure(error).category,
+        retry_guidance: classifyWorkerFailure(error).retryGuidance
+      }
     });
     throw error;
   }
@@ -376,8 +442,12 @@ export async function executeTemporalSummaryWorker(input: {
     await finishWorkerRun(runId, {
       status: "failed",
       nextDueAt: settings.temporalSummary.enabled ? computeNextDueAt(settings.temporalSummary.workerIntervalSeconds) : null,
-      errorClass: error instanceof Error ? error.name : "Error",
-      errorMessage: error instanceof Error ? error.message : String(error)
+      errorClass: classifyWorkerFailure(error).errorClass,
+      errorMessage: classifyWorkerFailure(error).message,
+      summary: {
+        failure_category: classifyWorkerFailure(error).category,
+        retry_guidance: classifyWorkerFailure(error).retryGuidance
+      }
     });
     throw error;
   }
