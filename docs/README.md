@@ -7,7 +7,9 @@ If you are new to the project, start here:
 1. [FIRST_RUN_SETUP.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/FIRST_RUN_SETUP.md)
 2. [BRAIN_FEATURES_AND_EXAMPLES.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/BRAIN_FEATURES_AND_EXAMPLES.md)
 3. [OPERATOR_WORKBENCH_GUIDE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATOR_WORKBENCH_GUIDE.md)
-4. [OPERATIONS_RUNTIME.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATIONS_RUNTIME.md)
+4. [API_REFERENCE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/API_REFERENCE.md)
+5. [MCP_REFERENCE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/MCP_REFERENCE.md)
+6. [OPERATIONS_RUNTIME.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATIONS_RUNTIME.md)
 
 ## Core Documents
 
@@ -17,6 +19,10 @@ If you are new to the project, start here:
   - product overview, examples, what the brain can do
 - [OPERATOR_WORKBENCH_GUIDE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATOR_WORKBENCH_GUIDE.md)
   - dashboard sections, operator flows, review surfaces
+- [API_REFERENCE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/API_REFERENCE.md)
+  - current HTTP runtime routes grouped by purpose
+- [MCP_REFERENCE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/MCP_REFERENCE.md)
+  - current MCP tools and their inputs
 - [OPERATIONS_RUNTIME.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATIONS_RUNTIME.md)
   - workers, monitoring, outbox propagation, temporal summary processing
 
@@ -47,4 +53,6 @@ Use:
 1. [README.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/README.md)
 2. [FIRST_RUN_SETUP.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/FIRST_RUN_SETUP.md)
 3. [OPERATOR_WORKBENCH_GUIDE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATOR_WORKBENCH_GUIDE.md)
-4. [OPERATIONS_RUNTIME.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATIONS_RUNTIME.md)
+4. [API_REFERENCE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/API_REFERENCE.md)
+5. [MCP_REFERENCE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/MCP_REFERENCE.md)
+6. [OPERATIONS_RUNTIME.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATIONS_RUNTIME.md)

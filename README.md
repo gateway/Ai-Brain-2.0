@@ -260,6 +260,8 @@ For a docs index, see [docs/README.md](docs/README.md).
 - [docs/README.md](docs/README.md)
 - [docs/BRAIN_FEATURES_AND_EXAMPLES.md](docs/BRAIN_FEATURES_AND_EXAMPLES.md)
 - [docs/FIRST_RUN_SETUP.md](docs/FIRST_RUN_SETUP.md)
+- [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
+- [docs/MCP_REFERENCE.md](docs/MCP_REFERENCE.md)
 - [docs/OPERATIONS_RUNTIME.md](docs/OPERATIONS_RUNTIME.md)
 - [local-brain/QUICKSTART.md](local-brain/QUICKSTART.md)
 - [docs/OPERATOR_WORKBENCH_GUIDE.md](docs/OPERATOR_WORKBENCH_GUIDE.md)
