@@ -7,3 +7,14 @@ export async function requireSetupComplete(redirectFrom: string): Promise<void> 
     redirect(`/setup?blocked_from=${encodeURIComponent(redirectFrom)}`);
   }
 }
+
+export async function getSetupGateState(): Promise<{
+  readonly onboardingComplete: boolean;
+  readonly bootstrapExists: boolean;
+}> {
+  const bootstrap = await getBootstrapState().catch(() => null);
+  return {
+    onboardingComplete: Boolean(bootstrap?.progress.onboardingComplete),
+    bootstrapExists: Boolean(bootstrap)
+  };
+}

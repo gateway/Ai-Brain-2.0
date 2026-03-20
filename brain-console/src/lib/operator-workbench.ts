@@ -496,6 +496,10 @@ export interface WorkbenchClarificationItem {
   readonly occurredAt: string;
   readonly sceneText?: string;
   readonly sourceUri?: string;
+  readonly priorityScore: number;
+  readonly priorityLevel: 1 | 2 | 3;
+  readonly priorityLabel: string;
+  readonly priorityReasons: readonly string[];
 }
 
 export interface WorkbenchClarifications {
@@ -503,9 +507,16 @@ export interface WorkbenchClarifications {
   readonly summary: {
     readonly total: number;
     readonly byType: Record<string, number>;
+    readonly byPriority: Record<"priority_1" | "priority_2" | "priority_3", number>;
   };
   readonly items: readonly WorkbenchClarificationItem[];
   readonly available_actions: Record<string, string>;
+}
+
+interface WorkbenchClarificationWorkbenchEnvelope {
+  readonly namespaceId: string;
+  readonly inbox?: WorkbenchClarifications;
+  readonly available_actions?: Record<string, string>;
 }
 
 export interface BootstrapSmokePackItem {
@@ -1078,13 +1089,22 @@ export async function saveWorkbenchSelfProfile(input: {
 }
 
 export async function getWorkbenchClarifications(namespaceId: string, limit = 10): Promise<WorkbenchClarifications> {
-  return fetchJson<WorkbenchClarifications>(
+  const payload = await fetchJson<WorkbenchClarifications | WorkbenchClarificationWorkbenchEnvelope>(
     `/ops/clarifications?${new URLSearchParams({ namespace_id: namespaceId, limit: String(limit) }).toString()}`,
     {
       method: "GET",
       headers: {}
     }
   );
+
+  if ("inbox" in payload && payload.inbox) {
+    return {
+      ...payload.inbox,
+      available_actions: payload.available_actions ?? {}
+    };
+  }
+
+  return payload as WorkbenchClarifications;
 }
 
 export async function listOpenRouterModels(): Promise<readonly OpenRouterModelSummary[]> {

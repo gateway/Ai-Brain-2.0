@@ -22,6 +22,7 @@ const onboardingNavigation = [
   { href: "/", label: "Dashboard" },
   { href: "/setup", label: "Start Here" },
   { href: "/bootstrap", label: "Guided Setup" },
+  { href: "/clarifications", label: "Clarifications" },
   { href: "/help", label: "Help" },
   { href: "/settings", label: "Settings" }
 ] as const;

@@ -76,6 +76,7 @@ export default async function WorkbenchDashboardPage() {
   const clarifications = await getWorkbenchClarifications(defaultNamespaceId, 8).catch(() => null);
   const importedSources = sources.filter((source) => source.lastImportAt).length;
   const workerSummary = summarizeWorkerStates(workerStatus.workers);
+  const priorityOneClarifications = clarifications?.items.filter((item) => item.priorityLevel === 1).length ?? 0;
 
   return (
     <OperatorShell
@@ -352,6 +353,60 @@ export default async function WorkbenchDashboardPage() {
                 detail="Folders actively scanned by the runtime worker."
               />
             </div>
+
+            {clarifications?.summary.total ? (
+              <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
+                <CardHeader>
+                  <CardDescription>Clarification queue</CardDescription>
+                  <CardTitle className="text-[1.35rem] tracking-tight">Fix these before the graph gets ideas</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 pt-0">
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
+                    <Badge variant="outline" className="border-rose-300/20 bg-rose-300/10 text-rose-100">
+                      {priorityOneClarifications} Priority 1
+                    </Badge>
+                    <span>The queue stays visible during setup because bad grounding is much harder to clean up later.</span>
+                  </div>
+                  <div className="grid gap-3">
+                    {clarifications.items.slice(0, 4).map((item) => (
+                      <Link
+                        key={item.candidateId}
+                        href={`/clarifications?namespace=${encodeURIComponent(defaultNamespaceId)}`}
+                        className="rounded-[22px] border border-white/8 bg-white/5 p-4 transition-all hover:border-amber-300/25 hover:bg-white/8"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge
+                            variant="outline"
+                            className={
+                              item.priorityLevel === 1
+                                ? "border-rose-300/20 bg-rose-300/10 text-rose-100"
+                                : item.priorityLevel === 2
+                                  ? "border-amber-300/20 bg-amber-300/10 text-amber-100"
+                                  : "border-cyan-300/20 bg-cyan-300/10 text-cyan-100"
+                            }
+                          >
+                            {item.priorityLabel}
+                          </Badge>
+                          <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-100">
+                            {item.ambiguityType.replace(/_/g, " ")}
+                          </Badge>
+                        </div>
+                        <p className="mt-3 text-base font-semibold tracking-tight text-white">{item.rawText}</p>
+                        <p className="mt-2 text-sm leading-7 text-slate-300">{item.ambiguityReason ?? "Needs operator grounding before the graph should trust it."}</p>
+                      </Link>
+                    ))}
+                  </div>
+                  <div>
+                    <Link
+                      href={`/clarifications?namespace=${encodeURIComponent(defaultNamespaceId)}`}
+                      className="inline-flex min-h-11 items-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10 px-4 py-2.5 text-sm font-medium text-cyan-50 hover:bg-cyan-300/16"
+                    >
+                      Open clarifications queue
+                    </Link>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
 
             <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
               <CardHeader>

@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input";
 import {
   getBootstrapState,
   getWorkbenchSourcePreview,
+  type WorkbenchMonitoredSource,
+  type WorkbenchWorkerHealth,
   getWorkbenchWorkerStatus,
   listWorkbenchSourceFiles,
   listWorkbenchSources
@@ -39,6 +41,76 @@ function sourceIntentLabel(value: unknown): string {
 
 function searchValue(value: string | readonly string[] | undefined): string | undefined {
   return typeof value === "string" ? value : Array.isArray(value) ? value[0] : undefined;
+}
+
+function scheduleIntervalMs(schedule: string): number {
+  switch (schedule) {
+    case "every_30_minutes":
+      return 30 * 60 * 1000;
+    case "hourly":
+      return 60 * 60 * 1000;
+    case "daily":
+      return 24 * 60 * 60 * 1000;
+    default:
+      return 60 * 60 * 1000;
+  }
+}
+
+function sourceHealth(source: WorkbenchMonitoredSource, worker?: WorkbenchWorkerHealth): {
+  readonly label: string;
+  readonly tone: string;
+  readonly detail: string;
+} {
+  if (!source.monitorEnabled) {
+    return {
+      label: "manual lane",
+      tone: "border-white/10 bg-white/5 text-slate-100",
+      detail: "This source is intentionally not being watched."
+    };
+  }
+
+  if (worker?.state === "failed" || worker?.state === "stale" || worker?.state === "degraded") {
+    return {
+      label: worker.state,
+      tone:
+        worker.state === "failed"
+          ? "border-rose-300/20 bg-rose-300/10 text-rose-100"
+          : "border-amber-300/20 bg-amber-300/10 text-amber-100",
+      detail: "The shared source monitor needs attention before this watched lane is trustworthy."
+    };
+  }
+
+  const lastScanMs = source.lastScanAt ? Date.parse(source.lastScanAt) : Number.NaN;
+  if (!Number.isFinite(lastScanMs)) {
+    return {
+      label: "never scanned",
+      tone: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+      detail: "Monitoring is enabled, but this source has not been scanned yet."
+    };
+  }
+
+  const overdueMs = Date.now() - lastScanMs - scheduleIntervalMs(source.scanSchedule);
+  if (overdueMs > 0) {
+    return {
+      label: "overdue",
+      tone: "border-amber-300/20 bg-amber-300/10 text-amber-100",
+      detail: `Last scan is behind the ${source.scanSchedule.replace(/_/g, " ")} schedule.`
+    };
+  }
+
+  if (source.counts.filesPending > 0) {
+    return {
+      label: "changes waiting",
+      tone: "border-cyan-300/20 bg-cyan-300/10 text-cyan-100",
+      detail: `${source.counts.filesPending} file changes are staged for import.`
+    };
+  }
+
+  return {
+    label: "healthy",
+    tone: "border-emerald-300/20 bg-emerald-300/10 text-emerald-100",
+    detail: "The watched lane looks current."
+  };
 }
 
 export default async function SourcesPage({
@@ -187,6 +259,17 @@ export default async function SourcesPage({
                     <section key={source.id} className="rounded-[24px] border border-white/8 bg-white/5 p-4">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
+                          {(() => {
+                            const monitorHealth = sourceHealth(source, sourceWorker);
+                            return (
+                              <div className="mb-3">
+                                <Badge variant="outline" className={monitorHealth.tone}>
+                                  {monitorHealth.label}
+                                </Badge>
+                                <p className="mt-2 text-xs leading-6 text-slate-400">{monitorHealth.detail}</p>
+                              </div>
+                            );
+                          })()}
                           <div className="flex flex-wrap gap-2">
                             <Link href={`/sources?source=${encodeURIComponent(source.id)}`} className="text-lg font-semibold text-white hover:text-cyan-100">
                               {source.label}
@@ -206,6 +289,7 @@ export default async function SourcesPage({
                             <span>Last scan {formatDateTime(source.lastScanAt)}</span>
                             <span>Last import {formatDateTime(source.lastImportAt)}</span>
                             <span>Pending {source.counts.filesPending}</span>
+                            <span>Schedule {source.scanSchedule.replace(/_/g, " ")}</span>
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-2">

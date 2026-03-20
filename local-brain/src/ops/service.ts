@@ -233,6 +233,10 @@ export interface OpsClarificationInboxItem {
   readonly occurredAt: string;
   readonly sceneText?: string | null;
   readonly sourceUri?: string | null;
+  readonly priorityScore: number;
+  readonly priorityLevel: 1 | 2 | 3;
+  readonly priorityLabel: string;
+  readonly priorityReasons: readonly string[];
 }
 
 export interface OpsClarificationInbox {
@@ -240,6 +244,7 @@ export interface OpsClarificationInbox {
   readonly summary: {
     readonly total: number;
     readonly byType: Record<string, number>;
+    readonly byPriority: Record<"priority_1" | "priority_2" | "priority_3", number>;
   };
   readonly items: readonly OpsClarificationInboxItem[];
 }
@@ -750,6 +755,102 @@ function parseSuggestedMatches(metadata: Record<string, unknown>): string[] {
     .filter((value) => typeof value === "string" && value.trim().length > 0);
 }
 
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  if (value <= 0) {
+    return 0;
+  }
+  if (value >= 1) {
+    return 1;
+  }
+  return value;
+}
+
+function clarificationTypeWeight(ambiguityType: string | null): number {
+  switch (ambiguityType) {
+    case "kinship_resolution":
+      return 0.24;
+    case "place_grounding":
+    case "vague_place":
+      return 0.2;
+    case "possible_misspelling":
+    case "alias_collision":
+      return 0.14;
+    case "organization_match":
+      return 0.08;
+    default:
+      return 0.04;
+  }
+}
+
+function clarificationPriority(input: {
+  readonly ambiguityType: string | null;
+  readonly priorScore: number | null;
+  readonly confidence: number | null;
+  readonly occurredAt: string;
+}): {
+  readonly score: number;
+  readonly level: 1 | 2 | 3;
+  readonly label: string;
+  readonly reasons: readonly string[];
+} {
+  const prior = clamp01(input.priorScore ?? 0);
+  const confidence = clamp01(input.confidence ?? 0);
+  const typeWeight = clarificationTypeWeight(input.ambiguityType);
+  const occurredMs = Date.parse(input.occurredAt);
+  const ageDays = Number.isFinite(occurredMs) ? Math.max(0, (Date.now() - occurredMs) / 86_400_000) : Number.POSITIVE_INFINITY;
+  const recencyWeight = ageDays <= 7 ? 0.08 : ageDays <= 30 ? 0.04 : ageDays <= 120 ? 0.02 : 0;
+  const score = clamp01(prior * 0.58 + confidence * 0.18 + typeWeight + recencyWeight);
+  const reasons: string[] = [];
+
+  if (input.ambiguityType === "kinship_resolution") {
+    reasons.push("kinship ambiguity can distort identity grounding");
+  } else if (input.ambiguityType === "place_grounding" || input.ambiguityType === "vague_place") {
+    reasons.push("place ambiguity can poison recall and timeline grounding");
+  } else if (input.ambiguityType === "possible_misspelling" || input.ambiguityType === "alias_collision") {
+    reasons.push("name ambiguity can fragment entities and relationships");
+  }
+
+  if (prior >= 0.8) {
+    reasons.push("high prior score from the extraction pipeline");
+  } else if (prior >= 0.55) {
+    reasons.push("moderate prior score suggests this will surface again");
+  }
+
+  if (confidence >= 0.7) {
+    reasons.push("the candidate is strong enough to resolve instead of ignore");
+  }
+
+  if (recencyWeight >= 0.08) {
+    reasons.push("recent evidence means this ambiguity is still active");
+  }
+
+  if (score >= 0.8) {
+    return {
+      score,
+      level: 1,
+      label: "Priority 1",
+      reasons
+    };
+  }
+  if (score >= 0.58) {
+    return {
+      score,
+      level: 2,
+      label: "Priority 2",
+      reasons
+    };
+  }
+  return {
+    score,
+    level: 3,
+    label: "Priority 3",
+    reasons
+  };
+}
+
 export async function getOpsClarificationInbox(namespaceId: string, limit = 40): Promise<OpsClarificationInbox> {
   const [summaryRows, itemRows] = await Promise.all([
     queryRows<ClarificationInboxSummaryRow>(
@@ -795,14 +896,22 @@ export async function getOpsClarificationInbox(namespaceId: string, limit = 40):
     byType[row.ambiguity_type ?? "unknown"] = Number(row.total);
   }
 
-  return {
-    namespaceId,
-    summary: {
-      total: Object.values(byType).reduce((sum, value) => sum + value, 0),
-      byType
-    },
-    items: itemRows.map((row) => {
-      const targetRole =
+  const byPriority: Record<"priority_1" | "priority_2" | "priority_3", number> = {
+    priority_1: 0,
+    priority_2: 0,
+    priority_3: 0
+  };
+
+  const items = itemRows.map((row) => {
+    const priority = clarificationPriority({
+      ambiguityType: row.ambiguity_type,
+      priorScore: row.prior_score,
+      confidence: row.confidence,
+      occurredAt: row.occurred_at
+    });
+    byPriority[`priority_${priority.level}`] += 1;
+
+      const targetRole: "subject" | "object" =
         typeof row.metadata.ambiguity_target_role === "string" && (row.metadata.ambiguity_target_role === "subject" || row.metadata.ambiguity_target_role === "object")
           ? row.metadata.ambiguity_target_role
           : row.object_text
@@ -830,9 +939,22 @@ export async function getOpsClarificationInbox(namespaceId: string, limit = 40):
             : [],
         occurredAt: row.occurred_at,
         sceneText: row.scene_text,
-        sourceUri: row.source_uri
+        sourceUri: row.source_uri,
+        priorityScore: priority.score,
+        priorityLevel: priority.level,
+        priorityLabel: priority.label,
+        priorityReasons: priority.reasons
       };
-    })
+    });
+
+  return {
+    namespaceId,
+    summary: {
+      total: Object.values(byType).reduce((sum, value) => sum + value, 0),
+      byType,
+      byPriority
+    },
+    items
   };
 }
 
@@ -1238,7 +1360,7 @@ export async function getOpsTimelineView(
           'semantic_supersession'::text AS overlay_kind,
           previous_memory.id::text AS source_id,
           previous_memory.superseded_by_id::text AS target_id,
-          COALESCE(previous_memory.valid_until, previous_memory.updated_at)::text AS occurred_at,
+          COALESCE(previous_memory.valid_until, previous_memory.valid_from)::text AS occurred_at,
           CONCAT(previous_memory.memory_kind, ': ', COALESCE(previous_memory.canonical_key, previous_memory.content_abstract)) AS label,
           jsonb_build_object(
             'memory_kind', previous_memory.memory_kind,
@@ -1249,8 +1371,8 @@ export async function getOpsTimelineView(
         WHERE previous_memory.namespace_id = $1
           AND previous_memory.valid_until IS NOT NULL
           AND previous_memory.status = 'superseded'
-          AND COALESCE(previous_memory.valid_until, previous_memory.updated_at) >= $2::timestamptz
-          AND COALESCE(previous_memory.valid_until, previous_memory.updated_at) <= $3::timestamptz
+          AND COALESCE(previous_memory.valid_until, previous_memory.valid_from) >= $2::timestamptz
+          AND COALESCE(previous_memory.valid_until, previous_memory.valid_from) <= $3::timestamptz
 
         UNION ALL
 

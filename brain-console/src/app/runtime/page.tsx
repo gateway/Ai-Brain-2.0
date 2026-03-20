@@ -192,17 +192,26 @@ export default async function RuntimePage() {
                         <p>Attempted {worker.latestRun.attemptedCount}, processed {worker.latestRun.processedCount}, failed {worker.latestRun.failedCount}.</p>
                       ) : null}
                     </div>
-                    {worker.recentFailures[0] ? (
-                      <div className="mt-3 rounded-[18px] border border-rose-300/16 bg-rose-300/10 p-3 text-xs leading-6 text-rose-50">
-                        <p className="font-medium text-white">
-                          {typeof worker.recentFailures[0].summary.failure_category === "string"
-                            ? worker.recentFailures[0].summary.failure_category
-                            : worker.recentFailures[0].status}
-                        </p>
-                        {worker.recentFailures[0].errorMessage ? <p className="mt-1">{worker.recentFailures[0].errorMessage}</p> : null}
-                        {typeof worker.recentFailures[0].summary.retry_guidance === "string" ? (
-                          <p className="mt-1">Next step: {worker.recentFailures[0].summary.retry_guidance}</p>
-                        ) : null}
+                    {worker.recentFailures.length ? (
+                      <div className="mt-3 space-y-3 rounded-[18px] border border-rose-300/16 bg-rose-300/10 p-3 text-xs leading-6 text-rose-50">
+                        <p className="font-medium text-white">Recent failures</p>
+                        {worker.recentFailures.map((failure) => (
+                          <div key={failure.id} className="rounded-[14px] border border-white/10 bg-black/10 p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="font-medium text-white">
+                                {typeof failure.summary.failure_category === "string" ? failure.summary.failure_category : failure.status}
+                              </p>
+                              <span>{formatDateTime(failure.finishedAt ?? failure.startedAt)}</span>
+                            </div>
+                            <p className="mt-1 text-rose-100/90">
+                              attempted {failure.attemptedCount}, processed {failure.processedCount}, failed {failure.failedCount}
+                            </p>
+                            {failure.errorMessage ? <p className="mt-1">{failure.errorMessage}</p> : null}
+                            {typeof failure.summary.retry_guidance === "string" ? (
+                              <p className="mt-1">Next step: {failure.summary.retry_guidance}</p>
+                            ) : null}
+                          </div>
+                        ))}
                       </div>
                     ) : null}
                   </div>

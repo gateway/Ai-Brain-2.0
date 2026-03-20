@@ -154,9 +154,12 @@ Use it to:
 
 - add new trusted folders
 - see which sources are being watched
+- see monitoring intent defaults
+- see per-source health directly in the table
 - run scan/import manually
 - pause or resume monitoring
 - inspect file-level import state for a selected source
+- spot overdue scans and pending imports before data quietly drifts
 
 This is the page to use when you want operational visibility, not the onboarding import step.
 
@@ -259,6 +262,7 @@ Use it to:
 - confirm the local model runtime is reachable
 - see OpenRouter catalog visibility
 - inspect worker health and recent failures
+- drill into multiple recent failures per worker with retry guidance
 - manually trigger source monitor, inbox propagation, and temporal summaries
 
 This is where the operator checks whether the machine part of the brain is actually awake.
@@ -270,11 +274,12 @@ This is the global ranked queue of unknowns.
 Use it to:
 
 - see unresolved items across namespaces
+- keep the queue visible during setup so bad grounding can be corrected early
 - sort attention around the highest-priority ambiguities first
 - resolve kinship labels, vague places, aliases, and misspellings
 - feed corrections back through the controlled inbox endpoints so graph and memory state update cleanly
 
-The ranking is driven by the backend urgency signal, not a random frontend sort.
+The ranking is driven by the backend priority contract, including score, level, and reasons, not a random frontend sort.
 
 ### Audit
 

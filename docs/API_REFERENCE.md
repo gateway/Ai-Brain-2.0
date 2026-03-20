@@ -111,6 +111,18 @@ Read ambiguity workbench items for a namespace.
 
 Read clarification items plus available action routes.
 
+Current response shape includes:
+
+- namespace summary totals
+- ambiguity totals by type
+- priority totals by level
+- per-item `priority_score`
+- per-item `priority_level`
+- per-item `priority_label`
+- per-item `priority_reasons`
+
+This is the backend-owned ranking contract used by the workbench queue.
+
 ### `GET /ops/identity-conflicts/history`
 
 Read identity conflict history for a namespace.

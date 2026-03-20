@@ -35,7 +35,7 @@ It gives you:
 - a dedicated sources page for scan/import state and watch-folder management
 - session-based intake for text, audio, files, and reviewable evidence
 - clarifications and correction workflows for unresolved people, places, aliases, and relationships
-- a dedicated clarifications page that ranks unknowns by operator priority
+- a dedicated clarifications page that uses backend-owned priority score, level, and reasons
 - relationship graph and timeline exploration
 - query and verification surfaces that keep supporting evidence visible
 - a runtime page for provider reachability, worker health, and quick control actions
