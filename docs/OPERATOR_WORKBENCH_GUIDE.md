@@ -36,13 +36,29 @@ The operator home screen.
 
 Use it to:
 
-- see whether setup is complete
-- check runtime health
-- see whether background workers are healthy or need attention
-- jump directly into runtime, sources, and clarification work
-- review trusted-source state
-- jump into the right next action
+- understand the normal daily loop without reading the whole product in one sitting
+- see the next recommended action first
 - return to active sessions
+- see whether setup, runtime, and clarifications need attention
+- expand advanced operations only when you actually want worker and runtime detail
+
+The dashboard is intentionally split into:
+
+- `Daily operator loop`
+  - ingest new material
+  - inspect what the brain currently believes
+  - resolve clarifications before uncertainty spreads
+- `State at a glance`
+  - setup state
+  - runtime state
+  - trusted source state
+  - clarification pressure
+- `Advanced operations and system detail`
+  - worker health
+  - last run and next due timing
+  - runtime, source, knowledge, and clarification control links
+
+This is deliberate. The home screen should answer “what do I do next?” before it answers “how many subsystem boxes can I fit on one monitor?”
 
 ### Start Here
 

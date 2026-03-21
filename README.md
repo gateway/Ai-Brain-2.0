@@ -30,6 +30,7 @@ The operator dashboard is a real product surface, not just a debug shell.
 It gives you:
 
 - a guided first-run setup flow so a new install knows what to do next
+- a dashboard that now leads with the normal operator loop instead of dumping every subsystem on day one
 - purpose and owner setup so the brain is grounded before broad ingestion
 - trusted-source import and watch-folder controls
 - a dedicated sources page for scan/import state and watch-folder management
@@ -45,11 +46,11 @@ It gives you:
 In practice, the app is built to let an operator:
 
 1. set up the brain
-2. ingest material
-3. review what the system learned
-4. correct uncertainty
+2. ingest material through sessions or watched sources
+3. inspect current believed state in `What It Knows`
+4. correct uncertainty in `Clarifications`
 5. verify answers and provenance
-6. keep the memory system healthy over time
+6. open the advanced runtime and source controls only when deeper operations work is needed
 
 For a fuller product tour with examples, see [docs/BRAIN_FEATURES_AND_EXAMPLES.md](docs/BRAIN_FEATURES_AND_EXAMPLES.md).
 For a section-by-section guide to the app itself, see [docs/OPERATOR_WORKBENCH_GUIDE.md](docs/OPERATOR_WORKBENCH_GUIDE.md).

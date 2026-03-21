@@ -198,232 +198,243 @@ export default async function WorkbenchDashboardPage() {
         ) : null}
 
         <div className="grid gap-5 xl:grid-cols-[1.18fr_0.82fr]">
-          <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
-            <CardHeader>
-              <CardDescription>Recent sessions</CardDescription>
-              <CardTitle className="text-[1.45rem] tracking-tight">Operator loop entry point</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4 pt-0">
-              {!bootstrap.progress.onboardingComplete ? (
-                <div className="rounded-[26px] border border-dashed border-cyan-300/20 bg-cyan-300/10 p-6 text-[15px] leading-8 text-cyan-50">
-                  Finish setup before opening the full session workflow. That keeps new installs from jumping into intake before purpose, owner bootstrap, provider routing, and verification are in place.
+          <div className="space-y-5">
+            <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
+              <CardHeader>
+                <CardDescription>Daily operator loop</CardDescription>
+                <CardTitle className="text-[1.45rem] tracking-tight">What to do with this thing once it is alive</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4 pt-0">
+                <div className="grid gap-3">
+                  {[
+                    {
+                      href: bootstrap.progress.onboardingComplete ? "/sessions/new" : "/setup",
+                      eyebrow: bootstrap.progress.onboardingComplete ? "1. Add or review evidence" : "1. Finish setup first",
+                      title: bootstrap.progress.onboardingComplete ? "Start a session when you have something new to feed the brain." : "Get purpose, identity, providers, and verification in place before normal intake.",
+                      detail: bootstrap.progress.onboardingComplete
+                        ? "Use sessions for notes, transcripts, uploads, and operator review. That is the normal ingest path."
+                        : "Skipping setup is how you end up with a very confident potato.",
+                      cta: bootstrap.progress.onboardingComplete ? "Open sessions" : "Continue setup"
+                    },
+                    {
+                      href: "/knowledge",
+                      eyebrow: "2. Inspect believed state",
+                      title: "Open What It Knows when you want the current answer, not a tour of the plumbing.",
+                      detail: "That page is for identity, projects, people, routines, and beliefs with visible evidence.",
+                      cta: "Open knowledge"
+                    },
+                    {
+                      href: "/clarifications",
+                      eyebrow: "3. Fix uncertainty before it multiplies",
+                      title: "Resolve clarifications when the brain is unsure, conflicted, or being suspiciously poetic.",
+                      detail: "That queue is where you stop weak grounding from turning into weird memory.",
+                      cta: "Open clarifications"
+                    }
+                  ].map((item) => (
+                    <Link
+                      key={item.eyebrow}
+                      href={item.href}
+                      className="rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,_rgba(255,255,255,0.06)_0%,_rgba(255,255,255,0.035)_100%)] p-5 transition-all hover:-translate-y-0.5 hover:border-cyan-300/22 hover:bg-white/8"
+                    >
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-100/75">{item.eyebrow}</p>
+                      <p className="mt-3 text-base font-semibold tracking-tight text-white">{item.title}</p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">{item.detail}</p>
+                      <p className="mt-4 text-sm font-medium text-cyan-100">{item.cta}</p>
+                    </Link>
+                  ))}
                 </div>
-              ) : sessions.length === 0 ? (
-                <div className="rounded-[26px] border border-dashed border-white/12 bg-white/5 p-6 text-[15px] leading-8 text-slate-300">
-                  Create your first session to start ingesting material into AI Brain.
-                </div>
-              ) : (
-                sessions.slice(0, 6).map((session) => (
+              </CardContent>
+            </Card>
+
+            <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
+              <CardHeader>
+                <CardDescription>Recent sessions</CardDescription>
+                <CardTitle className="text-[1.3rem] tracking-tight">Pick up where you left off</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4 pt-0">
+                {!bootstrap.progress.onboardingComplete ? (
+                  <div className="rounded-[24px] border border-dashed border-cyan-300/20 bg-cyan-300/10 p-5 text-[15px] leading-8 text-cyan-50">
+                    Finish setup before opening the full session workflow. That keeps new installs from jumping into intake before purpose, owner bootstrap, provider routing, and verification are in place.
+                  </div>
+                ) : sessions.length === 0 ? (
+                  <div className="rounded-[24px] border border-dashed border-white/12 bg-white/5 p-5 text-[15px] leading-8 text-slate-300">
+                    No sessions yet. Start one when you have notes, audio, uploads, or a specific thing you want the brain to digest.
+                  </div>
+                ) : (
+                  <div className="grid gap-3">
+                    {sessions.slice(0, 4).map((session) => (
+                      <Link
+                        key={session.id}
+                        href={`/sessions/${session.id}/overview`}
+                        className="block rounded-[22px] border border-white/8 bg-white/5 p-4 transition-all hover:-translate-y-0.5 hover:border-amber-300/25 hover:bg-white/8"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h3 className="text-lg font-semibold tracking-tight text-white">{session.title}</h3>
+                            <p className="mt-2 text-sm leading-7 text-slate-300">{session.notes ?? "No operator notes yet."}</p>
+                          </div>
+                          <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-100">
+                            {session.status.replace(/_/g, " ")}
+                          </Badge>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-400">
+                          <span>namespace {session.namespaceId}</span>
+                          <span>inputs {session.counts?.inputs ?? 0}</span>
+                          <span>artifacts {session.counts?.artifacts ?? 0}</span>
+                          <span>clarifications {session.counts?.openClarifications ?? 0}</span>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                )}
+                {bootstrap.progress.onboardingComplete && sessions.length > 0 ? (
                   <Link
-                    key={session.id}
-                    href={`/sessions/${session.id}/overview`}
-                    className="block rounded-[26px] border border-white/8 bg-[linear-gradient(180deg,_rgba(255,255,255,0.06)_0%,_rgba(255,255,255,0.035)_100%)] p-5 transition-all hover:-translate-y-0.5 hover:border-amber-300/25 hover:bg-white/8"
+                    href="/sessions"
+                    className="inline-flex min-h-11 items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/8"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <h3 className="text-xl font-semibold tracking-tight text-white">{session.title}</h3>
-                        <p className="mt-2 text-sm leading-7 text-slate-300">{session.notes ?? "No operator notes yet."}</p>
-                      </div>
-                      <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-100">
-                        {session.status.replace(/_/g, " ")}
-                      </Badge>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-400">
-                      <span>namespace {session.namespaceId}</span>
-                      <span>inputs {session.counts?.inputs ?? 0}</span>
-                      <span>artifacts {session.counts?.artifacts ?? 0}</span>
-                      <span>clarifications {session.counts?.openClarifications ?? 0}</span>
-                    </div>
+                    View all sessions
                   </Link>
-                ))
-              )}
-            </CardContent>
-          </Card>
+                ) : null}
+              </CardContent>
+            </Card>
+          </div>
 
           <div className="space-y-5">
             <Card className="overflow-hidden border-cyan-300/14 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.1),_transparent_28%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
               <CardHeader>
-                <CardDescription>Operations health</CardDescription>
-                <CardTitle className="text-[1.45rem] tracking-tight">Brain workers at a glance</CardTitle>
+                <CardDescription>State at a glance</CardDescription>
+                <CardTitle className="text-[1.45rem] tracking-tight">What needs attention right now</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4 pt-0">
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <div className="rounded-[22px] border border-emerald-300/16 bg-emerald-300/10 p-4">
-                    <p className="text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">Healthy or running</p>
-                    <p className="mt-2 text-2xl font-semibold tracking-tight text-white">{workerSummary.healthy}</p>
-                  </div>
-                  <div className="rounded-[22px] border border-amber-300/16 bg-amber-300/10 p-4">
-                    <p className="text-[10px] uppercase tracking-[0.22em] text-amber-100/80">Needs attention</p>
-                    <p className="mt-2 text-2xl font-semibold tracking-tight text-white">{workerSummary.attention}</p>
-                  </div>
-                  <div className="rounded-[22px] border border-white/10 bg-white/5 p-4">
-                    <p className="text-[10px] uppercase tracking-[0.22em] text-slate-300">Checked</p>
-                    <p className="mt-2 text-sm font-medium leading-7 text-white">{formatDateTime(workerStatus.checkedAt)}</p>
-                  </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <MetricCard
+                    title="Runtime"
+                    value={health.ok ? "healthy" : "offline"}
+                    tone={health.ok ? "success" : "warning"}
+                    detail={health.ok ? "The brain runtime is reachable." : "The dashboard cannot reach the brain runtime."}
+                  />
+                  <MetricCard
+                    title="Setup"
+                    value={bootstrap.progress.onboardingComplete ? "ready" : `${bootstrap.progress.completedSteps}/${bootstrap.progress.totalSteps}`}
+                    tone={bootstrap.progress.onboardingComplete ? "success" : "warning"}
+                    detail="Purpose, owner setup, providers, sources, and verification."
+                  />
+                  <MetricCard
+                    title="Clarifications"
+                    value={clarifications?.summary.total ?? 0}
+                    tone={(clarifications?.summary.total ?? 0) > 0 ? "warning" : "success"}
+                    detail={`${priorityOneClarifications} urgent blockers in ${defaultNamespaceId}.`}
+                  />
+                  <MetricCard
+                    title="Trusted sources"
+                    value={sources.length}
+                    detail={`${importedSources} imported, ${sources.reduce((sum, source) => sum + source.counts.filesPending, 0)} pending.`}
+                  />
                 </div>
-                <div className="grid gap-3">
-                  {workerStatus.workers.map((worker) => (
-                    <div key={worker.workerKey} className="rounded-[22px] border border-white/8 bg-white/5 p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-sm font-medium text-white">{worker.workerKey.replace(/_/g, " ")}</p>
-                        <p className={`text-xs uppercase tracking-[0.22em] ${workerStateTone(worker.state)}`}>{worker.state}</p>
+
+                {clarifications?.summary.total ? (
+                  <div className="rounded-[22px] border border-rose-300/16 bg-rose-300/10 p-4 text-sm leading-7 text-rose-50">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="border-rose-300/20 bg-rose-300/10 text-rose-100">
+                        {priorityOneClarifications} Priority 1
+                      </Badge>
+                      <span>Clarifications are visible here on purpose. Bad grounding compounds.</span>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {clarifications.items.slice(0, 3).map((item) => (
+                        <Link
+                          key={item.candidateId}
+                          href={`/clarifications?namespace=${encodeURIComponent(defaultNamespaceId)}`}
+                          className="block rounded-[18px] border border-white/10 bg-black/15 p-3 text-slate-100 hover:bg-black/25"
+                        >
+                          <p className="font-medium text-white">{item.rawText}</p>
+                          <p className="mt-1 text-xs leading-6 text-slate-300">{item.ambiguityReason ?? "Needs operator grounding before the graph should trust it."}</p>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-[22px] border border-emerald-300/16 bg-emerald-300/10 p-4 text-sm leading-7 text-emerald-50">
+                    No open clarification fire right now. The brain may finally be behaving.
+                  </div>
+                )}
+
+                <details className="rounded-[22px] border border-white/8 bg-white/5 p-4">
+                  <summary className="cursor-pointer list-none text-sm font-medium text-white">Advanced operations and system detail</summary>
+                  <div className="mt-4 space-y-4">
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <div className="rounded-[18px] border border-emerald-300/16 bg-emerald-300/10 p-4">
+                        <p className="text-[10px] uppercase tracking-[0.22em] text-emerald-100/80">Healthy or running</p>
+                        <p className="mt-2 text-2xl font-semibold tracking-tight text-white">{workerSummary.healthy}</p>
                       </div>
-                      <p className="mt-2 text-sm leading-7 text-slate-300">
-                        Last run {formatDateTime(worker.latestRun?.finishedAt ?? worker.latestRun?.startedAt)}. Next due {formatDateTime(worker.nextDueAt)}.
-                      </p>
-                      {worker.recentFailures[0] ? (
-                        <div className="mt-3 rounded-[18px] border border-rose-300/16 bg-rose-300/10 p-3 text-xs leading-6 text-rose-50">
-                          <p className="font-medium text-white">
-                            Latest failure
-                            {typeof worker.recentFailures[0].summary.failure_category === "string"
-                              ? ` · ${worker.recentFailures[0].summary.failure_category}`
-                              : ""}
+                      <div className="rounded-[18px] border border-amber-300/16 bg-amber-300/10 p-4">
+                        <p className="text-[10px] uppercase tracking-[0.22em] text-amber-100/80">Needs attention</p>
+                        <p className="mt-2 text-2xl font-semibold tracking-tight text-white">{workerSummary.attention}</p>
+                      </div>
+                      <div className="rounded-[18px] border border-white/10 bg-white/5 p-4">
+                        <p className="text-[10px] uppercase tracking-[0.22em] text-slate-300">Checked</p>
+                        <p className="mt-2 text-sm font-medium leading-7 text-white">{formatDateTime(workerStatus.checkedAt)}</p>
+                      </div>
+                    </div>
+                    <div className="grid gap-3">
+                      {workerStatus.workers.map((worker) => (
+                        <div key={worker.workerKey} className="rounded-[18px] border border-white/8 bg-black/15 p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <p className="text-sm font-medium text-white">{worker.workerKey.replace(/_/g, " ")}</p>
+                            <p className={`text-xs uppercase tracking-[0.22em] ${workerStateTone(worker.state)}`}>{worker.state}</p>
+                          </div>
+                          <p className="mt-2 text-sm leading-7 text-slate-300">
+                            Last run {formatDateTime(worker.latestRun?.finishedAt ?? worker.latestRun?.startedAt)}. Next due {formatDateTime(worker.nextDueAt)}.
                           </p>
-                          {worker.recentFailures[0].errorMessage ? <p className="mt-1">{worker.recentFailures[0].errorMessage}</p> : null}
-                          {typeof worker.recentFailures[0].summary.retry_guidance === "string" ? (
-                            <p className="mt-1">Retry guidance: {worker.recentFailures[0].summary.retry_guidance}</p>
+                          {worker.recentFailures[0] ? (
+                            <div className="mt-3 rounded-[16px] border border-rose-300/16 bg-rose-300/10 p-3 text-xs leading-6 text-rose-50">
+                              <p className="font-medium text-white">
+                                Latest failure
+                                {typeof worker.recentFailures[0].summary.failure_category === "string"
+                                  ? ` · ${worker.recentFailures[0].summary.failure_category}`
+                                  : ""}
+                              </p>
+                              {worker.recentFailures[0].errorMessage ? <p className="mt-1">{worker.recentFailures[0].errorMessage}</p> : null}
+                              {typeof worker.recentFailures[0].summary.retry_guidance === "string" ? (
+                                <p className="mt-1">Retry guidance: {worker.recentFailures[0].summary.retry_guidance}</p>
+                              ) : null}
+                            </div>
                           ) : null}
                         </div>
-                      ) : null}
+                      ))}
                     </div>
-                  ))}
-                </div>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <Link href="/runtime" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
-                    <p className="font-medium text-white">Runtime control</p>
-                    <p className="mt-1">Inspect providers, workers, and quick-run controls.</p>
-                  </Link>
-                  <Link href="/knowledge" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
-                    <p className="font-medium text-white">What it knows</p>
-                    <p className="mt-1">Read the current identity, project, people, and belief state with evidence.</p>
-                  </Link>
-                  <Link href="/sources" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
-                    <p className="font-medium text-white">Source manager</p>
-                    <p className="mt-1">See watched folders, last scans, and pending imports.</p>
-                  </Link>
-                  <Link href="/clarifications" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
-                    <p className="font-medium text-white">Clarifications</p>
-                    <p className="mt-1">Resolve unknowns in a ranked queue instead of guessing.</p>
-                  </Link>
-                </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Link href="/runtime" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
+                        <p className="font-medium text-white">Runtime control</p>
+                        <p className="mt-1">Inspect providers, workers, and quick-run controls.</p>
+                      </Link>
+                      <Link href="/sources" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
+                        <p className="font-medium text-white">Source manager</p>
+                        <p className="mt-1">See watched folders, last scans, and pending imports.</p>
+                      </Link>
+                      <Link href="/knowledge" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
+                        <p className="font-medium text-white">What it knows</p>
+                        <p className="mt-1">Read the current identity, project, people, and belief state with evidence.</p>
+                      </Link>
+                      <Link href="/clarifications" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
+                        <p className="font-medium text-white">Clarifications</p>
+                        <p className="mt-1">Resolve unknowns in a ranked queue instead of guessing.</p>
+                      </Link>
+                    </div>
+                  </div>
+                </details>
               </CardContent>
             </Card>
 
             <div className="overflow-hidden rounded-[30px] border border-white/8 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.08),_transparent_26%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] px-5 py-5 shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-slate-300">What this home screen is for</p>
-              <h3 className="mt-3 text-[1.3rem] font-semibold tracking-tight text-white">This is your operator control room.</h3>
-              <p className="mt-3 max-w-xl text-[15px] leading-8 text-slate-300">
-                Use it to finish setup, see whether the runtime is healthy, check whether trusted evidence has been imported, and then move into normal session intake once the system is verified.
-              </p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-slate-300">How to use AI Brain day to day</p>
+              <h3 className="mt-3 text-[1.3rem] font-semibold tracking-tight text-white">Think of it as a memory operating system, not a dashboard museum.</h3>
+              <div className="mt-3 space-y-3 text-[15px] leading-8 text-slate-300">
+                <p>Bring new material in through sessions or watched sources.</p>
+                <p>Inspect the current believed state in What It Knows.</p>
+                <p>Resolve clarifications whenever the brain looks uncertain, conflicted, or creatively wrong.</p>
+              </div>
             </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <MetricCard
-                title="Runtime"
-                value={health.ok ? "healthy" : "offline"}
-                tone={health.ok ? "success" : "warning"}
-                detail="Operator workbench talks to the AI Brain HTTP runtime. Core memory logic stays behind that boundary."
-              />
-              <MetricCard
-                title="Namespaces"
-                value={namespaces.namespaces.length}
-                detail={`Default lane: ${namespaces.defaultNamespaceId}`}
-              />
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <MetricCard
-                title="Bootstrap"
-                value={bootstrap.progress.onboardingComplete ? "complete" : `${bootstrap.progress.completedSteps}/${bootstrap.progress.totalSteps}`}
-                detail="Protected first-run state for purpose, owner bootstrap, import, and verification."
-              />
-              <MetricCard
-                title="Trusted sources"
-                value={sources.length}
-                detail={`${importedSources} imported, ${sources.reduce((sum, source) => sum + source.counts.filesPending, 0)} pending`}
-              />
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <MetricCard
-                title="Clarifications"
-                value={clarifications?.summary.total ?? 0}
-                tone={(clarifications?.summary.total ?? 0) > 0 ? "warning" : "success"}
-                detail={`Default lane ${defaultNamespaceId}. Fix these before weak memory turns into weird memory.`}
-              />
-              <MetricCard
-                title="Watch folders"
-                value={sources.filter((source) => source.monitorEnabled).length}
-                detail="Folders actively scanned by the runtime worker."
-              />
-            </div>
-
-            {clarifications?.summary.total ? (
-              <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
-                <CardHeader>
-                  <CardDescription>Clarification queue</CardDescription>
-                  <CardTitle className="text-[1.35rem] tracking-tight">Fix these before the graph gets ideas</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4 pt-0">
-                  <div className="flex flex-wrap items-center gap-2 text-sm text-slate-300">
-                    <Badge variant="outline" className="border-rose-300/20 bg-rose-300/10 text-rose-100">
-                      {priorityOneClarifications} Priority 1
-                    </Badge>
-                    <span>The queue stays visible during setup because bad grounding is much harder to clean up later.</span>
-                  </div>
-                  <div className="grid gap-3">
-                    {clarifications.items.slice(0, 4).map((item) => (
-                      <Link
-                        key={item.candidateId}
-                        href={`/clarifications?namespace=${encodeURIComponent(defaultNamespaceId)}`}
-                        className="rounded-[22px] border border-white/8 bg-white/5 p-4 transition-all hover:border-amber-300/25 hover:bg-white/8"
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge
-                            variant="outline"
-                            className={
-                              item.priorityLevel === 1
-                                ? "border-rose-300/20 bg-rose-300/10 text-rose-100"
-                                : item.priorityLevel === 2
-                                  ? "border-amber-300/20 bg-amber-300/10 text-amber-100"
-                                  : "border-cyan-300/20 bg-cyan-300/10 text-cyan-100"
-                            }
-                          >
-                            {item.priorityLabel}
-                          </Badge>
-                          <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-100">
-                            {item.ambiguityType.replace(/_/g, " ")}
-                          </Badge>
-                        </div>
-                        <p className="mt-3 text-base font-semibold tracking-tight text-white">{item.rawText}</p>
-                        <p className="mt-2 text-sm leading-7 text-slate-300">{item.ambiguityReason ?? "Needs operator grounding before the graph should trust it."}</p>
-                      </Link>
-                    ))}
-                  </div>
-                  <div>
-                    <Link
-                      href={`/clarifications?namespace=${encodeURIComponent(defaultNamespaceId)}`}
-                      className="inline-flex min-h-11 items-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10 px-4 py-2.5 text-sm font-medium text-cyan-50 hover:bg-cyan-300/16"
-                    >
-                      Open clarifications queue
-                    </Link>
-                  </div>
-                </CardContent>
-              </Card>
-            ) : null}
-
-            <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
-              <CardHeader>
-                <CardDescription>Current slice</CardDescription>
-                <CardTitle className="text-[1.35rem] tracking-tight">What is live now</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4 pt-0 text-[15px] leading-8 text-slate-300">
-                <p>Session CRUD is now explicit instead of hidden behind namespace-only tooling.</p>
-                <p>Text intake runs through the brain runtime, persists durable source text, and can trigger chunked LLM classification.</p>
-                <p>Review surfaces show entities, relationships, claims, and unresolved items tied back to session-linked chunks.</p>
-              </CardContent>
-            </Card>
-
           </div>
         </div>
       </div>
