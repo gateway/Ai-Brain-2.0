@@ -9,6 +9,7 @@ This repository is intended to publish the product and engineering surface of AI
 - stable setup and operator docs in `docs`
 - architecture and run-log material in `brain-spec`
 - scripts required to bootstrap, verify, and run the app
+- small standalone tools that support real product-adjacent workflows
 - representative examples that explain how the brain works
 
 ## What stays local
@@ -23,6 +24,8 @@ The following should remain local-only and should not be part of the public repo
 - private benchmark corpora and personal sample memories
 - personal-only artifacts and inbox files
 - local agent skill wiring and workstation-only helper scripts
+- synced personal data archives under `data/`
+- generated review and audit output folders under `docs/`
 
 ## Public repo posture
 
@@ -56,6 +59,8 @@ The public-facing repository should make these things clear:
   - deep architecture notes and run logs
 - `scripts`
   - bootstrap, doctor, dev, serve, quality, and operations helpers
+- `tools`
+  - standalone utilities like sync/import helpers that are useful to ship, but are not part of the main app runtime
 
 ## Release intent
 
@@ -69,3 +74,5 @@ The goal is for a new contributor to be able to:
 6. complete first-run setup in the dashboard
 
 If the repo does not make that path obvious, the repo still needs cleanup.
+
+If a folder contains private synced data, generated audits, or workstation-only state, it should be ignored by Git rather than explained away in the README later.

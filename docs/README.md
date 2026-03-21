@@ -10,6 +10,7 @@ If you are new to the project, start here:
 4. [API_REFERENCE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/API_REFERENCE.md)
 5. [MCP_REFERENCE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/MCP_REFERENCE.md)
 6. [OPERATIONS_RUNTIME.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATIONS_RUNTIME.md)
+7. [OMI_SYNC.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OMI_SYNC.md)
 
 ## Core Documents
 
@@ -25,6 +26,8 @@ If you are new to the project, start here:
   - current MCP tools and their inputs
 - [OPERATIONS_RUNTIME.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATIONS_RUNTIME.md)
   - workers, monitoring, outbox propagation, temporal summary processing
+- [OMI_SYNC.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OMI_SYNC.md)
+  - Omi conversation sync, local archive layout, and monitored-folder ingestion path
 
 ## Architecture And Substrate
 
@@ -38,6 +41,16 @@ If you are new to the project, start here:
 
 - [GITHUB_REPOSITORY_GUIDE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/GITHUB_REPOSITORY_GUIDE.md)
 - [ENGINEERING_GUARDRAILS.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/ENGINEERING_GUARDRAILS.md)
+
+## Utility Areas
+
+- `scripts/`
+  - bootstrap, doctor, and runtime launch helpers
+- `tools/`
+  - small standalone utilities that support adjacent workflows without being part of the core runtime
+  - currently includes the Omi sync CLI used to archive and normalize Omi conversations before ingestion
+
+Generated review outputs, synced personal data, and workstation-only artifacts should not be treated as public docs.
 
 ## Recommended Reading Order
 
@@ -56,3 +69,4 @@ Use:
 4. [API_REFERENCE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/API_REFERENCE.md)
 5. [MCP_REFERENCE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/MCP_REFERENCE.md)
 6. [OPERATIONS_RUNTIME.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OPERATIONS_RUNTIME.md)
+7. [OMI_SYNC.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/OMI_SYNC.md)

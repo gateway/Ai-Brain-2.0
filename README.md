@@ -136,6 +136,29 @@ The target architecture is:
 - conflict-aware updates and slow forgetting
 - producer bridges for chat, webhook, markdown, transcript, and artifact inputs
 
+## Repository Layout
+
+The top-level repo is intentionally split by responsibility:
+
+- `brain-console`
+  - the Next.js operator product
+- `local-brain`
+  - the runtime, ingest, retrieval, graph, and worker substrate
+- `docs`
+  - public-facing docs, setup, API, MCP, and operator guides
+- `scripts`
+  - bootstrap, doctor, and launch helpers
+- `tools`
+  - small standalone utilities that support adjacent workflows without being part of the main app runtime
+
+Local sync data, generated review artifacts, benchmark outputs, and workstation-only folders are meant to stay out of GitHub.
+
+Current standalone utility:
+
+- `tools/omi-sync/sync_omi.py`
+  - incremental Omi conversation sync into a local archive and normalized markdown lane
+  - documented in [docs/OMI_SYNC.md](docs/OMI_SYNC.md)
+
 ## Example Capabilities
 
 Examples of what the system already supports:
@@ -163,13 +186,15 @@ The live app path is currently:
 
 Python is currently used as an isolated helper/sidecar environment, not as the main app runtime:
 
- - repo-local Python helper environments can be used for optional tooling like `pgai`, OCR/document processing, and related sidecar experiments
+- repo-local Python helper environments can be used for optional tooling like `pgai`, OCR/document processing, and related sidecar experiments
 Release policy:
 
 - no dependency on system Python packages
 - all Python packages installed into repo-local venvs
 - Postgres and its extensions managed separately from Python
 - local research artifacts, auth state, and workstation-only environments excluded from GitHub
+
+For the public docs index, see [docs/README.md](docs/README.md).
 
 ## Summary And Worker Controls
 
