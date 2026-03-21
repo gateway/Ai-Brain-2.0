@@ -7,7 +7,7 @@ const fullNavigation = [
   { href: "/", label: "Dashboard" },
   { href: "/setup", label: "Start Here" },
   { href: "/bootstrap", label: "Guided Setup" },
-  { href: "/help", label: "Help" },
+  { href: "/help", label: "Docs" },
   { href: "/knowledge", label: "What It Knows" },
   { href: "/sessions", label: "Sessions" },
   { href: "/clarifications", label: "Clarifications" },
@@ -25,7 +25,7 @@ const onboardingNavigation = [
   { href: "/bootstrap", label: "Guided Setup" },
   { href: "/knowledge", label: "What It Knows" },
   { href: "/clarifications", label: "Clarifications" },
-  { href: "/help", label: "Help" },
+  { href: "/help", label: "Docs" },
   { href: "/settings", label: "Settings" }
 ] as const;
 

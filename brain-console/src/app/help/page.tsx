@@ -6,7 +6,7 @@ export default function HelpPage() {
   return (
     <OperatorShell
       currentPath="/help"
-      title="Help"
+      title="Docs"
       subtitle="Use this page as the in-app guide for install, setup order, provider choices, and what each major surface in AI Brain 2.0 is for."
     >
       <div className="space-y-6">
@@ -27,7 +27,7 @@ export default function HelpPage() {
         </section>
 
         <div className="grid gap-5 xl:grid-cols-2">
-          <Card className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
+          <Card id="install-first-run" className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
             <CardHeader>
               <CardDescription>Install and first run</CardDescription>
               <CardTitle>Recommended sequence</CardTitle>
@@ -42,7 +42,7 @@ export default function HelpPage() {
             </CardContent>
           </Card>
 
-          <Card className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
+          <Card id="startup-commands" className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
             <CardHeader>
               <CardDescription>Command path</CardDescription>
               <CardTitle>Core startup commands</CardTitle>
@@ -64,15 +64,15 @@ npm run dev`}</code></pre>
             </CardContent>
           </Card>
 
-          <Card className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
+          <Card id="provider-choices" className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
             <CardHeader>
               <CardDescription>Provider choices</CardDescription>
               <CardTitle>Local runtime vs OpenRouter</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-[15px] leading-8 text-slate-300">
-              <p><span className="font-medium text-white">external</span> means your own local or private model endpoint.</p>
-              <p><span className="font-medium text-white">openrouter</span> means hosted models and embeddings.</p>
-              <p><span className="font-medium text-white">none</span> keeps retrieval lexical-only.</p>
+              <p><span className="font-medium text-white">external</span> means your own local or private model endpoint. Pick this if your local runtime is already reachable and you want the most private default.</p>
+              <p><span className="font-medium text-white">openrouter</span> means hosted models and embeddings. Pick this if you want the easiest hosted path and do not mind remote provider calls.</p>
+              <p><span className="font-medium text-white">none</span> keeps retrieval lexical-only. Pick this if you want to finish setup now and connect model intelligence later.</p>
               <p>If you already have OpenClaw-style markdown memory, use Guided Setup import as the recommended historical bootstrap path.</p>
               <pre className="overflow-x-auto rounded-[20px] border border-white/10 bg-black/25 p-4 text-sm leading-7 text-slate-100"><code>{`# Local runtime
 BRAIN_MODEL_RUNTIME_BASE_URL=http://your-runtime:8000
@@ -85,13 +85,13 @@ BRAIN_OPENROUTER_EMBEDDING_MODEL=text-embedding-3-small`}</code></pre>
             </CardContent>
           </Card>
 
-          <Card className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
+          <Card id="app-surfaces" className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
             <CardHeader>
               <CardDescription>In-app areas</CardDescription>
               <CardTitle>What each section does</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-[15px] leading-8 text-slate-300">
-              <p><span className="font-medium text-white">Dashboard</span>: current system and progress overview.</p>
+              <p><span className="font-medium text-white">Dashboard</span>: the daily operator loop, the current state, and the advanced controls you only open when needed.</p>
               <p><span className="font-medium text-white">Start Here</span>: first-run checklist.</p>
               <p><span className="font-medium text-white">Guided Setup</span>: owner bootstrap, sources, verification.</p>
               <p><span className="font-medium text-white">Sessions</span>: intake, review, artifacts, clarifications.</p>
@@ -99,7 +99,7 @@ BRAIN_OPENROUTER_EMBEDDING_MODEL=text-embedding-3-small`}</code></pre>
             </CardContent>
           </Card>
 
-          <Card className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
+          <Card id="repo-docs" className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
             <CardHeader>
               <CardDescription>Repo docs</CardDescription>
               <CardTitle>Source-of-truth markdown</CardTitle>
@@ -113,7 +113,7 @@ BRAIN_OPENROUTER_EMBEDDING_MODEL=text-embedding-3-small`}</code></pre>
             </CardContent>
           </Card>
 
-          <Card className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)] xl:col-span-2">
+          <Card id="openclaw-path" className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)] xl:col-span-2">
             <CardHeader>
               <CardDescription>OpenClaw path</CardDescription>
               <CardTitle>Recommended when you already have markdown memory</CardTitle>
@@ -126,6 +126,43 @@ BRAIN_OPENROUTER_EMBEDDING_MODEL=text-embedding-3-small`}</code></pre>
               <pre className="overflow-x-auto rounded-[20px] border border-white/10 bg-black/25 p-4 text-sm leading-7 text-slate-100"><code>{`cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
 npm run reconcile:dir -- /absolute/path/to/folder --namespace personal --source-type markdown_session --source-channel openclaw`}</code></pre>
               <p>Inside the app, the equivalent operator flow is <span className="font-medium text-white">Guided Setup to Trusted Source Import</span> with an OpenClaw-style source.</p>
+            </CardContent>
+          </Card>
+
+          <Card id="owner-bootstrap" className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
+            <CardHeader>
+              <CardDescription>Owner step</CardDescription>
+              <CardTitle>What to write in “Tell the brain who you are”</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-[15px] leading-8 text-slate-300">
+              <p>Give the brain a short, plain-language narrative. Three to six sentences is enough.</p>
+              <p>Good example: <span className="font-medium text-white">“I’m Steve. I live in Bangkok. I’m building AI Brain 2.0 and related products. I care about local-first systems, durable memory, and clean interfaces. I often work with personal notes, transcripts, and project docs.”</span></p>
+              <p>You can type, speak, or upload. Raw evidence still lands even if classification is skipped or unavailable.</p>
+            </CardContent>
+          </Card>
+
+          <Card id="trusted-import" className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)]">
+            <CardHeader>
+              <CardDescription>Source import</CardDescription>
+              <CardTitle>Which import lane to use</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-[15px] leading-8 text-slate-300">
+              <p><span className="font-medium text-white">Historical archive</span>: old notes or memory folders you want imported once.</p>
+              <p><span className="font-medium text-white">Ongoing folder monitor</span>: a folder that changes over time and should keep syncing.</p>
+              <p><span className="font-medium text-white">Project source</span>: a specific active project folder with documents worth tracking.</p>
+              <p><span className="font-medium text-white">Owner bootstrap</span>: small, high-trust personal files used during identity grounding.</p>
+            </CardContent>
+          </Card>
+
+          <Card id="verification" className="overflow-hidden rounded-[28px] border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_20px_70px_rgba(0,0,0,0.22)] xl:col-span-2">
+            <CardHeader>
+              <CardDescription>Verification</CardDescription>
+              <CardTitle>What a good result looks like</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-[15px] leading-8 text-slate-300">
+              <p><span className="font-medium text-white">Good</span>: the brain answers a simple question and shows evidence for it.</p>
+              <p><span className="font-medium text-white">Needs work</span>: the answer is vague, unsupported, or the search falls back with weak evidence.</p>
+              <p>The smoke pack is not trying to impress you. It is trying to prove the substrate can recall useful truth without improvising fiction.</p>
             </CardContent>
           </Card>
         </div>

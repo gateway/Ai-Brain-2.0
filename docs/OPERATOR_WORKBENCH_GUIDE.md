@@ -13,6 +13,7 @@ There are two operator-facing surfaces in this repo:
 - `Operator Workbench`
   - the primary guided app
   - session-centric intake, review, setup, and provider controls
+  - includes an in-app `Docs` surface for the longer explanations that do not belong on every form
 - `Legacy Console`
   - the advanced exploration surface
   - query, relationship graph, timeline, benchmark, eval, and inbox tools

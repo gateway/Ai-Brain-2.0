@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { saveOnboardingIntelligenceAction } from "@/app/bootstrap/actions";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { OperatorShell } from "@/components/operator-shell";
@@ -40,6 +41,18 @@ export default async function BootstrapIntelligencePage({
       currentPath="/bootstrap"
       title="Connect Intelligence"
       subtitle="Pick where the brain thinks, talks, and summarizes. This is the part where the software stops being a very organized filing cabinet and starts feeling alive."
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/help#provider-choices"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center rounded-2xl border border-white/10 bg-white/6 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/10"
+          >
+            Docs
+          </Link>
+        </div>
+      }
     >
       <div className="mx-auto max-w-5xl space-y-5">
         <SetupStepGuide
@@ -73,6 +86,9 @@ export default async function BootstrapIntelligencePage({
                     <option value="openrouter">OpenRouter</option>
                     <option value="skip">Skip for now</option>
                   </select>
+                  <span className="text-xs leading-6 text-slate-400">
+                    Recommended: use local runtime if it is already reachable. Use OpenRouter if you want the easiest hosted path. Skip only if you want to finish setup first and wire intelligence later.
+                  </span>
                 </label>
 
                 <div className="grid gap-4 md:grid-cols-2">
@@ -191,6 +207,15 @@ export default async function BootstrapIntelligencePage({
                 <p><span className="font-medium text-white">Use OpenRouter</span> if you want a simpler hosted path or faster testing with remote models.</p>
                 <p><span className="font-medium text-white">Use factual + readable summaries</span> if you want the day/week/month/year rollups to read more like a human wrote them without losing provenance.</p>
                 <p>You can change every one of these later in Settings. This step just saves your first sane default so the brain does not wake up confused.</p>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Link href="/help#provider-choices" target="_blank" rel="noreferrer" className="text-cyan-100 hover:text-white">
+                    Read provider docs
+                  </Link>
+                  <span className="text-slate-500">·</span>
+                  <Link href="/settings" className="text-cyan-100 hover:text-white">
+                    Tune this later in Settings
+                  </Link>
+                </div>
               </CardContent>
             </Card>
           </div>

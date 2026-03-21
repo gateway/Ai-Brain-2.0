@@ -58,6 +58,16 @@ export default async function BootstrapVerifyPage({
       currentPath="/bootstrap"
       title="Verify The Brain"
       subtitle="This is the trust test. Ask the brain simple questions, inspect the evidence, and make sure it is smart in the useful way instead of smart in the scary way."
+      actions={
+        <Link
+          href="/help#verification"
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center rounded-2xl border border-white/10 bg-white/6 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/10"
+        >
+          Docs
+        </Link>
+      }
     >
       <div className="space-y-6">
         <SetupStepGuide
@@ -85,6 +95,9 @@ export default async function BootstrapVerifyPage({
             <CardContent className="space-y-4">
               <div className="rounded-[18px] border border-white/8 bg-white/5 px-4 py-3 text-sm leading-7 text-slate-300">
                 These checks are meant to verify that the owner bootstrap produced recallable life state with supporting evidence, not just raw imported text.
+              </div>
+              <div className="rounded-[18px] border border-cyan-300/16 bg-cyan-300/10 px-4 py-3 text-sm leading-7 text-cyan-50">
+                Good result: the brain answers simply and shows evidence. Bad result: it sounds clever but cannot point to the source. We only clap for the first one.
               </div>
               {smokePack.map((item) => (
                 <div key={item.query} className="rounded-[20px] border border-white/8 bg-white/5 p-4">

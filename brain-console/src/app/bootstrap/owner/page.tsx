@@ -133,12 +133,22 @@ export default async function BootstrapOwnerPage({
       title="Owner Setup"
       subtitle="Tell the brain who you are, speak to it if that is easier, let it classify what it can, then review the result before calling this step done."
       actions={
-        <Link
-          href={`/sessions/${session.id}/review`}
-          className="inline-flex items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-2.5 text-sm font-medium text-cyan-50 hover:border-cyan-300/35 hover:bg-cyan-300/16"
-        >
-          Open full review
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/help#owner-bootstrap"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center rounded-2xl border border-white/10 bg-white/6 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/10"
+          >
+            Docs
+          </Link>
+          <Link
+            href={`/sessions/${session.id}/review`}
+            className="inline-flex items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-2.5 text-sm font-medium text-cyan-50 hover:border-cyan-300/35 hover:bg-cyan-300/16"
+          >
+            Open full review
+          </Link>
+        </div>
       }
     >
       <div className="space-y-6">
@@ -236,6 +246,9 @@ export default async function BootstrapOwnerPage({
                 <div className="rounded-[20px] border border-white/10 bg-white/4 p-4 text-sm leading-7 text-slate-300">
                   This calls <code>POST /ops/profile/self</code>. The owner narrative helps classification, but it is not the same thing as binding the self anchor.
                 </div>
+                <div className="rounded-[20px] border border-cyan-300/16 bg-cyan-300/10 p-4 text-sm leading-7 text-cyan-50">
+                  If you are not sure what to write, keep it plain: who you are, where you live, what you work on, and what keeps showing up in your life. Three to six sentences is enough. This is not a memoir defense.
+                </div>
                 <form action={saveBootstrapSelfProfileAction} className="grid gap-4">
                   <input type="hidden" name="namespace_id" value={namespaceId} />
                   <div className="grid gap-4 md:grid-cols-2">
@@ -258,7 +271,7 @@ export default async function BootstrapOwnerPage({
                       name="note"
                       rows={3}
                       defaultValue={typeof selfProfile?.metadata?.note === "string" ? selfProfile.metadata.note : ""}
-                      placeholder="Optional note about how the self profile should be interpreted."
+                      placeholder="Example: Founder building AI Brain 2.0, local-first tools, and memory systems."
                     />
                   </label>
                   <PendingSubmitButton
@@ -275,7 +288,10 @@ export default async function BootstrapOwnerPage({
                 <CardDescription>Owner narrative</CardDescription>
                 <CardTitle>Type the first “about me” pass</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
+                <div className="rounded-[20px] border border-white/10 bg-white/4 p-4 text-sm leading-7 text-slate-300">
+                  Example: <span className="text-white">I&apos;m Steve. I live in Bangkok. I&apos;m building AI Brain 2.0 and related products. I care about local-first systems, long memory, and clean interfaces.</span>
+                </div>
                 <OwnerNarrativeForm
                   sessionId={session.id}
                   defaultLlmProvider={session.defaultLlmProvider}

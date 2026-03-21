@@ -83,12 +83,22 @@ export default async function BootstrapImportPage({
       title="Trusted Source Import"
       subtitle="Add watched folders if you have them, or skip this step if you want to start with owner evidence only. The key is clarity, not maximum checkbox usage."
       actions={
-        <Link
-          href="/bootstrap/verify"
-          className="inline-flex items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-2.5 text-sm font-medium text-cyan-50 hover:border-cyan-300/35 hover:bg-cyan-300/16"
-        >
-          Verification
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link
+            href="/help#trusted-import"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center rounded-2xl border border-white/10 bg-white/6 px-4 py-2.5 text-sm font-medium text-white hover:bg-white/10"
+          >
+            Docs
+          </Link>
+          <Link
+            href="/bootstrap/verify"
+            className="inline-flex items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-2.5 text-sm font-medium text-cyan-50 hover:border-cyan-300/35 hover:bg-cyan-300/16"
+          >
+            Verification
+          </Link>
+        </div>
       }
     >
       <div className="space-y-6">
@@ -166,6 +176,19 @@ export default async function BootstrapImportPage({
                   Use this page for larger markdown and text folders that should be seeded through the normal ingest path. This is best for bulk notes and archives that you want retrievable quickly.
                 </p>
               </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <CardHeader>
+              <CardDescription>Which source type fits</CardDescription>
+              <CardTitle>Choose the boringly correct import lane</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
+              <p><span className="font-medium text-white">Historical archive</span> is for older notes you want brought in once.</p>
+              <p><span className="font-medium text-white">Ongoing folder monitor</span> is for a folder that changes and should keep syncing.</p>
+              <p><span className="font-medium text-white">Project source</span> is for a live project folder worth keeping current.</p>
+              <p><span className="font-medium text-white">Owner bootstrap</span> is for small, trusted files used to ground the person behind the brain.</p>
             </CardContent>
           </Card>
 

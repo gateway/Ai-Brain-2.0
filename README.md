@@ -31,6 +31,7 @@ It gives you:
 
 - a guided first-run setup flow so a new install knows what to do next
 - a dashboard that now leads with the normal operator loop instead of dumping every subsystem on day one
+- a `Docs` surface in the app so a user can open the longer explanation for providers, owner setup, imports, and verification without leaving the product
 - purpose and owner setup so the brain is grounded before broad ingestion
 - trusted-source import and watch-folder controls
 - a dedicated sources page for scan/import state and watch-folder management
