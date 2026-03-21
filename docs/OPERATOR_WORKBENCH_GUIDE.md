@@ -181,6 +181,12 @@ Use it to:
 
 This is the page to use when you want operational visibility, not the onboarding import step.
 
+The page is now intentionally split into a simpler sequence:
+
+- add a trusted folder
+- review current lanes
+- expand monitor-worker detail only when source health actually needs diagnosis
+
 ### When OpenClaw is recommended
 
 If you already have OpenClaw-style markdown memory/session files, this is the recommended import path.
@@ -287,6 +293,13 @@ Use it to:
 
 This is where the operator checks whether the machine part of the brain is actually awake.
 
+The page is now biased toward a simpler read order:
+
+- runtime reachability first
+- provider reachability second
+- worker health third
+- deep inventory and manual controls after that
+
 ### Clarifications
 
 This is the global ranked queue of unknowns.
@@ -315,6 +328,15 @@ Use it to:
 - spot whether a bad answer is really a clarification or source problem
 
 This page is meant to answer “what does the brain think is true right now?” without making the operator dig through graph, query, and review pages first.
+
+The top of the page now favors the most common questions first:
+
+- who is this brain about
+- where do I live
+- what am I working on
+- who matters right now
+
+Routines, beliefs, and preferences still exist, but they now live behind a deeper-lenses disclosure so the page is easier to scan.
 
 ### Audit
 

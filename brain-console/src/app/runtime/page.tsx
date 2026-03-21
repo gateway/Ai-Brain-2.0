@@ -117,11 +117,11 @@ export default async function RuntimePage() {
           <Card className="border-white/8 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.08),_transparent_28%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
             <CardHeader>
               <CardDescription>Runtime control room</CardDescription>
-              <CardTitle>What is online right now</CardTitle>
+              <CardTitle>Use this page when the brain feels slow, offline, or weird</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
-              <p>The workbench should tell you three things without making you dig: can the brain runtime answer, can the model providers answer, and are the background loops still doing their jobs.</p>
-              <p>If this page looks healthy, the rest of the app usually stops feeling haunted.</p>
+              <p>Start with three checks: is the runtime reachable, are the providers reachable, and are the workers healthy. If those are green, the rest of the app usually stops feeling haunted.</p>
+              <p>Everything else here is deeper ops detail for when you want to diagnose, not admire, the machinery.</p>
             </CardContent>
           </Card>
 
@@ -154,8 +154,8 @@ export default async function RuntimePage() {
           <div className="space-y-6">
             <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
               <CardHeader>
-                <CardDescription>Provider defaults</CardDescription>
-                <CardTitle>How this brain is currently wired</CardTitle>
+                <CardDescription>Current wiring</CardDescription>
+                <CardTitle>What route this brain is using right now</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
                 <p>Purpose mode: <span className="font-medium text-white">{bootstrap.metadata.brainPurposeMode ?? "not set"}</span></p>
@@ -213,12 +213,9 @@ export default async function RuntimePage() {
               </CardContent>
             </Card>
 
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
-              <CardHeader>
-                <CardDescription>Model families</CardDescription>
-                <CardTitle>Local runtime inventory</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
+            <details className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] p-5">
+              <summary className="cursor-pointer list-none text-lg font-semibold tracking-tight text-white">Advanced provider inventory</summary>
+              <div className="mt-4 space-y-3">
                 {runtime?.families.length ? (
                   runtime.families.map((family) => (
                     <div key={family.family} className="rounded-[18px] border border-white/8 bg-white/5 p-4 text-sm leading-7 text-slate-300">
@@ -235,15 +232,15 @@ export default async function RuntimePage() {
                 ) : (
                   <p className="text-sm leading-7 text-slate-300">No local model runtime catalog available right now.</p>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </details>
           </div>
 
           <div className="space-y-6">
             <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
               <CardHeader>
                 <CardDescription>Workers</CardDescription>
-                <CardTitle>Background loops and recent failures</CardTitle>
+                <CardTitle>Which loops need you right now</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 {workerStatus.workers.map((worker) => (
@@ -262,38 +259,37 @@ export default async function RuntimePage() {
                       ) : null}
                     </div>
                     {worker.recentFailures.length ? (
-                      <div className="mt-3 space-y-3 rounded-[18px] border border-rose-300/16 bg-rose-300/10 p-3 text-xs leading-6 text-rose-50">
-                        <p className="font-medium text-white">Recent failures</p>
-                        {worker.recentFailures.map((failure) => (
-                          <div key={failure.id} className="rounded-[14px] border border-white/10 bg-black/10 p-3">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <p className="font-medium text-white">
-                                {typeof failure.summary.failure_category === "string" ? failure.summary.failure_category : failure.status}
+                      <details className="mt-3 rounded-[18px] border border-rose-300/16 bg-rose-300/10 p-3 text-xs leading-6 text-rose-50">
+                        <summary className="cursor-pointer list-none font-medium text-white">Recent failures</summary>
+                        <div className="mt-3 space-y-3">
+                          {worker.recentFailures.map((failure) => (
+                            <div key={failure.id} className="rounded-[14px] border border-white/10 bg-black/10 p-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="font-medium text-white">
+                                  {typeof failure.summary.failure_category === "string" ? failure.summary.failure_category : failure.status}
+                                </p>
+                                <span>{formatDateTime(failure.finishedAt ?? failure.startedAt)}</span>
+                              </div>
+                              <p className="mt-1 text-rose-100/90">
+                                attempted {failure.attemptedCount}, processed {failure.processedCount}, failed {failure.failedCount}
                               </p>
-                              <span>{formatDateTime(failure.finishedAt ?? failure.startedAt)}</span>
+                              {failure.errorMessage ? <p className="mt-1">{failure.errorMessage}</p> : null}
+                              {typeof failure.summary.retry_guidance === "string" ? (
+                                <p className="mt-1">Next step: {failure.summary.retry_guidance}</p>
+                              ) : null}
                             </div>
-                            <p className="mt-1 text-rose-100/90">
-                              attempted {failure.attemptedCount}, processed {failure.processedCount}, failed {failure.failedCount}
-                            </p>
-                            {failure.errorMessage ? <p className="mt-1">{failure.errorMessage}</p> : null}
-                            {typeof failure.summary.retry_guidance === "string" ? (
-                              <p className="mt-1">Next step: {failure.summary.retry_guidance}</p>
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
+                          ))}
+                        </div>
+                      </details>
                     ) : null}
                   </div>
                 ))}
               </CardContent>
             </Card>
 
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
-              <CardHeader>
-                <CardDescription>Quick controls</CardDescription>
-                <CardTitle>Kick the important loops on purpose</CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-4 md:grid-cols-3">
+            <details className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] p-5">
+              <summary className="cursor-pointer list-none text-lg font-semibold tracking-tight text-white">Manual controls</summary>
+              <div className="mt-4 grid gap-4 md:grid-cols-3">
                 <form action={processSourceMonitorNowAction} className="space-y-3 rounded-[18px] border border-white/10 bg-white/5 p-4">
                   <p className="text-sm leading-6 text-slate-300">Run watched-folder scan/import right now.</p>
                   <PendingSubmitButton idleLabel="Run source monitor" pendingLabel="Running..." className="rounded-2xl bg-cyan-300 text-slate-950 hover:bg-cyan-200" />
@@ -306,8 +302,8 @@ export default async function RuntimePage() {
                   <p className="text-sm leading-6 text-slate-300">Rebuild deterministic summaries and semantic overlays now.</p>
                   <PendingSubmitButton idleLabel="Run summaries" pendingLabel="Summarizing..." className="rounded-2xl border border-white/10 bg-white/5 text-white hover:bg-white/10" />
                 </form>
-              </CardContent>
-            </Card>
+              </div>
+            </details>
           </div>
         </div>
       </div>

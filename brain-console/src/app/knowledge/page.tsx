@@ -136,7 +136,7 @@ export default async function KnowledgePage() {
           <Card className="border-white/8 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.08),_transparent_28%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
             <CardHeader>
               <CardDescription>Knowledge surface</CardDescription>
-              <CardTitle>The current shape of the brain</CardTitle>
+              <CardTitle>Start here when you want the answer, not the plumbing</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
               <p>This page is the clean answer to “what does the brain think is true right now?” It favors grounded answers, visible evidence, and honest uncertainty over sounding clever.</p>
@@ -174,10 +174,7 @@ export default async function KnowledgePage() {
             { title: "Self identity", description: "Who this brain belongs to", answer: selfProfile ? `${selfProfile.canonicalName}${selfProfile.aliases.length ? ` · aliases: ${selfProfile.aliases.join(", ")}` : ""}` : "No self profile has been saved yet.", evidence: [] as const, retrievalMode: "profile", query: "who am i?", historyQuery: undefined, historical: null },
             { title: "Current location", description: "Where the brain believes you live", ...home },
             { title: "Current projects", description: "What the brain thinks is active right now", ...projects },
-            { title: "Important people", description: "Who keeps showing up in your graph", ...people },
-            { title: "Routines", description: "Stable patterns the brain thinks you repeat", ...routines },
-            { title: "Current beliefs", description: "Active stance, not old debate residue", ...beliefs },
-            { title: "Preferences", description: "Tastes and likes that have enough evidence to matter", ...preferences }
+            { title: "Important people", description: "Who keeps showing up in your graph", ...people }
           ].map((item) => (
             <Card key={item.title} className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
               <CardHeader>
@@ -244,6 +241,84 @@ export default async function KnowledgePage() {
             </Card>
           ))}
         </div>
+
+        <details className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] p-5">
+          <summary className="cursor-pointer list-none text-lg font-semibold tracking-tight text-white">More lenses: routines, beliefs, and preferences</summary>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
+            Open this when you want the deeper personality and behavior layer. Most operators should not need to read every card here on every visit.
+          </p>
+          <div className="mt-4 grid gap-4 xl:grid-cols-3">
+            {[
+              { title: "Routines", description: "Stable patterns the brain thinks you repeat", ...routines },
+              { title: "Current beliefs", description: "Active stance, not old debate residue", ...beliefs },
+              { title: "Preferences", description: "Tastes and likes that have enough evidence to matter", ...preferences }
+            ].map((item) => (
+              <Card key={item.title} className="border-white/8 bg-black/15">
+                <CardHeader>
+                  <CardDescription>{item.description}</CardDescription>
+                  <CardTitle>{item.title}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="rounded-[18px] border border-white/8 bg-white/5 p-4 text-sm leading-7 text-slate-200">
+                    {item.answer}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-100">
+                      retrieval {item.retrievalMode}
+                    </Badge>
+                    {"fallbackReason" in item && item.fallbackReason ? (
+                      <Badge variant="outline" className="border-amber-300/20 bg-amber-300/10 text-amber-100">
+                        {item.fallbackReason}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  {item.evidence.length ? (
+                    <div className="space-y-2">
+                      {item.evidence.map((evidence) => (
+                        <div key={`${item.title}:${evidence.sourceUri ?? evidence.snippet}`} className="rounded-[16px] border border-white/8 bg-black/15 p-3 text-xs leading-6 text-slate-300">
+                          <p>{evidence.snippet}</p>
+                          {evidence.sourceUri ? <p className="mt-1 text-slate-400">{evidence.sourceUri}</p> : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <details className="rounded-[16px] border border-white/8 bg-black/15 p-4 text-sm leading-7 text-slate-300">
+                    <summary className="cursor-pointer list-none font-medium text-white">Why this is believed</summary>
+                    <div className="mt-3 space-y-3">
+                      <p>This answer comes from the current retrieval pass for <span className="font-medium text-white">{item.query ?? "the active lens"}</span> using the evidence shown above. If retrieval looks thin, treat the answer as a prompt to inspect source material, not divine truth.</p>
+                      {item.query ? (
+                        <Link href={`/console/query?query=${encodeURIComponent(item.query)}`} className="text-cyan-100 hover:text-white">
+                          Open this question in Query
+                        </Link>
+                      ) : null}
+                    </div>
+                  </details>
+                  <details className="rounded-[16px] border border-white/8 bg-black/15 p-4 text-sm leading-7 text-slate-300">
+                    <summary className="cursor-pointer list-none font-medium text-white">What superseded the old value</summary>
+                    <div className="mt-3 space-y-3">
+                      <p className="text-slate-200">{item.historical?.answer ?? "No older signal surfaced yet."}</p>
+                      {item.historical?.evidence.length ? (
+                        <div className="space-y-2">
+                          {item.historical.evidence.map((evidence) => (
+                            <div key={`${item.title}:history:${evidence.sourceUri ?? evidence.snippet}`} className="rounded-[14px] border border-white/8 bg-white/5 p-3 text-xs leading-6 text-slate-300">
+                              <p>{evidence.snippet}</p>
+                              {evidence.sourceUri ? <p className="mt-1 text-slate-500">{evidence.sourceUri}</p> : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {item.historyQuery ? (
+                        <Link href={`/console/query?query=${encodeURIComponent(item.historyQuery)}`} className="text-cyan-100 hover:text-white">
+                          Open the older-state query
+                        </Link>
+                      ) : null}
+                    </div>
+                  </details>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </details>
 
         <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
           <CardHeader>

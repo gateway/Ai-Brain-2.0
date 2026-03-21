@@ -250,10 +250,10 @@ export default async function SourcesPage({
           <Card className="border-white/8 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.08),_transparent_28%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
             <CardHeader>
               <CardDescription>Source manager</CardDescription>
-              <CardTitle>Trusted folders and import lanes</CardTitle>
+              <CardTitle>Use this page when the brain needs more evidence, not more vibes</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
-              <p>Use this page for folders that should be scanned once, watched forever, or kept as a historical archive. The intent decides whether monitoring should default on or stay politely off.</p>
+              <p>There are really only three jobs here: add a trusted folder, check whether the watcher is keeping up, and inspect which files changed or failed to import.</p>
               <p>Changes still go through the normal ingestion pipeline. The watcher is a finder, not a rogue database editor with a caffeine problem.</p>
             </CardContent>
           </Card>
@@ -285,12 +285,12 @@ export default async function SourcesPage({
 
         <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
           <div className="space-y-6">
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
-              <CardHeader>
-                <CardDescription>Create source</CardDescription>
-                <CardTitle>Add a trusted folder</CardTitle>
-              </CardHeader>
-              <CardContent>
+            <details className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] p-5">
+              <summary className="cursor-pointer list-none text-lg font-semibold tracking-tight text-white">Add a new trusted folder</summary>
+              <div className="mt-4 space-y-4">
+                <div className="rounded-[18px] border border-white/8 bg-white/5 p-4 text-sm leading-7 text-slate-300">
+                  Pick <span className="font-medium text-white">historical archive</span> for old notes, <span className="font-medium text-white">ongoing folder monitor</span> for a live folder, and <span className="font-medium text-white">project source</span> when the folder belongs to one active project.
+                </div>
                 <form action={saveSourceAction} className="grid gap-4">
                   <input type="hidden" name="next_url" value="/sources" />
                   <input type="hidden" name="namespace_id" value={defaultNamespaceId} />
@@ -336,8 +336,8 @@ export default async function SourcesPage({
                     </button>
                   </div>
                 </form>
-              </CardContent>
-            </Card>
+              </div>
+            </details>
 
             <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
               <CardHeader>
@@ -427,12 +427,9 @@ export default async function SourcesPage({
           </div>
 
           <div className="space-y-6">
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
-              <CardHeader>
-                <CardDescription>Monitor worker</CardDescription>
-                <CardTitle>Watch-folder health</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
+            <details className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] p-5">
+              <summary className="cursor-pointer list-none text-lg font-semibold tracking-tight text-white">Monitor worker health</summary>
+              <div className="mt-4 space-y-3 text-sm leading-7 text-slate-300">
                 <p>Checked {formatDateTime(workerStatus.checkedAt)}. Next due {formatDateTime(sourceWorker?.nextDueAt)}.</p>
                 <p>State: <span className="font-medium text-white">{sourceWorker?.state ?? "unknown"}</span></p>
                 {sourceWorker?.recentFailures[0]?.errorMessage ? (
@@ -444,8 +441,8 @@ export default async function SourcesPage({
                 <form action={processSourceMonitorNowAction}>
                   <PendingSubmitButton idleLabel="Run monitor now" pendingLabel="Running monitor..." className="rounded-2xl bg-cyan-300 text-slate-950 hover:bg-cyan-200" />
                 </form>
-              </CardContent>
-            </Card>
+              </div>
+            </details>
 
             <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
               <CardHeader>
@@ -481,8 +478,9 @@ export default async function SourcesPage({
                         <p>Finished {formatDateTime(selectedPreview.latestImport.finishedAt ?? selectedPreview.latestImport.startedAt)} via {selectedPreview.latestImport.triggerType} trigger.</p>
                       </div>
                     ) : null}
-                    <div className="overflow-hidden rounded-[24px] border border-white/8 bg-black/15">
-                      <div className="overflow-x-auto">
+                    <details className="overflow-hidden rounded-[24px] border border-white/8 bg-black/15">
+                      <summary className="cursor-pointer list-none px-4 py-4 text-sm font-medium text-white">File deltas, latest outcomes, and retry actions</summary>
+                      <div className="overflow-x-auto border-t border-white/8">
                         <table className="min-w-full text-left text-sm">
                           <thead className="bg-white/5 text-xs uppercase tracking-[0.18em] text-slate-400">
                             <tr>
@@ -536,7 +534,7 @@ export default async function SourcesPage({
                           </tbody>
                         </table>
                       </div>
-                    </div>
+                    </details>
                     {selectedFiles.length > 24 ? (
                       <p className="text-xs leading-6 text-slate-500">Showing the first 24 files in this lane. The watcher still knows about {selectedFiles.length - 24} more.</p>
                     ) : null}
