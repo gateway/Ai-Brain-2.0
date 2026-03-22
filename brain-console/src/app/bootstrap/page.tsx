@@ -39,7 +39,7 @@ export default async function BootstrapPage() {
     <OperatorShell
       currentPath="/bootstrap"
       title="Guided Setup"
-      subtitle="This is the friendly version of the hard part. One step at a time, you tell the brain what it is, where its intelligence comes from, who it belongs to, what it should read, and how to prove it works."
+      subtitle="Move through the core setup steps in order. Each one saves real state the rest of the brain depends on."
       actions={
         <Link
           href="/bootstrap/import"
@@ -54,8 +54,8 @@ export default async function BootstrapPage() {
           step="Guided Setup"
           title="Move through the setup flow one step at a time"
           statusLabel={`${bootstrap.progress.completedSteps}/${bootstrap.progress.totalSteps} complete`}
-          whatToDo="Pick the purpose first, then connect intelligence, then do owner setup, then trusted sources, then verification. If you are unsure where to go next, follow the highlighted card."
-          whyItMatters="These steps create the initial configuration and trustworthy evidence base. They are the difference between a cool demo and a brain you can actually trust."
+          whatToDo="Follow the highlighted step. The order is purpose, intelligence, owner, sources, then verification."
+          whyItMatters="These steps create the initial configuration and evidence base the brain needs to be useful."
           nextHref={
             !hasPurpose ? "/bootstrap/purpose" : !hasIntelligence ? "/bootstrap/intelligence" : !bootstrap.ownerProfileCompleted ? "/bootstrap/owner" : !bootstrap.sourceImportCompleted ? "/bootstrap/import" : "/bootstrap/verify"
           }
@@ -76,14 +76,14 @@ export default async function BootstrapPage() {
         <ConsoleSection
           eyebrow="First Run"
           title="Bootstrap flow"
-          description="This onboarding path is not a separate toy wizard. It stages real operator work: purpose, owner bootstrap, trusted source import, and verification."
+          description="This is the shortest path from a blank install to a usable brain."
         >
           <div className="grid gap-4 xl:grid-cols-3">
             <ConsoleEntryCard
               href="/bootstrap/purpose"
               eyebrow="Step 1"
               title="Brain purpose"
-              description="Tell the app what kind of brain this is. This decides the lane, the tone, and the defaults for what comes next."
+              description="Pick the lane this brain should serve."
               meta={brainPurpose.replace(/_/g, " ")}
               badge={highlightPurpose ? "current step" : bootstrap.metadata.brainPurposeMode ? "saved" : "required"}
               className={stepCardTone(highlightPurpose)}
@@ -92,7 +92,7 @@ export default async function BootstrapPage() {
               href="/bootstrap/intelligence"
               eyebrow="Step 2"
               title="Connect intelligence"
-              description="Choose whether the brain uses your local runtime, OpenRouter, or a skip-for-now mode. This also sets how summaries behave."
+              description="Choose local, OpenRouter, or skip for now."
               meta={bootstrap.metadata.intelligenceMode ?? "not chosen"}
               badge={highlightIntelligence ? "current step" : hasIntelligence ? "saved" : "required"}
               className={stepCardTone(highlightIntelligence)}
@@ -103,7 +103,7 @@ export default async function BootstrapPage() {
                   <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-200">Step 3</p>
                   <h3 className="mt-2 text-[1.15rem] font-semibold tracking-tight text-white">Owner bootstrap</h3>
                   <p className="mt-2 max-w-md text-[15px] leading-7 text-slate-100">
-                    Create a dedicated owner intake session for self-anchor data, typed narrative, voice notes, clarifications, and search-backed verification.
+                    Save the self anchor and add the first personal evidence.
                   </p>
                 </div>
                 <Badge variant="outline" className={highlightOwner ? "border-cyan-300/30 bg-cyan-300/16 text-cyan-50" : completedTone(bootstrap.ownerProfileCompleted)}>
@@ -137,7 +137,7 @@ export default async function BootstrapPage() {
               href="/bootstrap/import"
               eyebrow="Step 4"
               title="Import existing memories"
-              description="Register OpenClaw or local markdown folders, scan supported files, preview what changed, and import through the normal ingest path. Or skip this for now."
+              description="Add trusted folders, scan them, and import when the preview looks right."
               meta={`${sources.length} configured sources`}
               badge={highlightImport ? "current step" : bootstrap.sourceImportCompleted ? "imported" : "pending"}
               className={stepCardTone(highlightImport)}
@@ -152,7 +152,7 @@ export default async function BootstrapPage() {
               <CardTitle>Finish by checking the brain</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4 text-sm leading-7 text-slate-300">
-              <p>The verification page runs a real smoke pack against the current namespace and shows the evidence returned for each question. If the brain is wrong, this is where you catch it before it becomes confidently weird.</p>
+              <p>Run the smoke pack and make sure the answers come back with evidence.</p>
               <div className="flex flex-wrap gap-3">
                 <Link
                   href="/bootstrap/verify"
@@ -179,10 +179,8 @@ export default async function BootstrapPage() {
               <CardTitle>Choose local runtime or OpenRouter</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
-              <p>This app can run against your own local model runtime or against OpenRouter. Both paths are valid. You choose which one to use in Settings.</p>
-              <p><span className="font-medium text-white">Local runtime</span> is for your own endpoint and local models like Qwen. Use this when you want the brain to call a machine you control.</p>
-              <p><span className="font-medium text-white">OpenRouter</span> is optional and uses your OpenRouter API key for hosted models and embeddings.</p>
-              <p>Current note: local <span className="font-medium text-white">Qwen/Qwen3-Embedding-4B</span> can be tested now, but full namespace re-embed still requires a pgvector schema upgrade because it returns <span className="font-medium text-white">2560</span> dimensions.</p>
+              <p><span className="font-medium text-white">Local runtime</span> is the private path. <span className="font-medium text-white">OpenRouter</span> is the hosted path.</p>
+              <p>Both are valid. Pick one in setup, then change it later in Settings if needed.</p>
               <div>
                 <Link
                   href="/settings"

@@ -93,11 +93,8 @@ export default async function BootstrapVerifyPage({
               <CardTitle>Fixed verification questions</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="rounded-[18px] border border-white/8 bg-white/5 px-4 py-3 text-sm leading-7 text-slate-300">
-                These checks are meant to verify that the owner bootstrap produced recallable life state with supporting evidence, not just raw imported text.
-              </div>
               <div className="rounded-[18px] border border-cyan-300/16 bg-cyan-300/10 px-4 py-3 text-sm leading-7 text-cyan-50">
-                Good result: the brain answers simply and shows evidence. Bad result: it sounds clever but cannot point to the source. We only clap for the first one.
+                Good result: the brain answers simply and shows evidence.
               </div>
               {smokePack.map((item) => (
                 <div key={item.query} className="rounded-[20px] border border-white/8 bg-white/5 p-4">
@@ -214,7 +211,7 @@ export default async function BootstrapVerifyPage({
           </CardHeader>
           <CardContent className="flex flex-wrap items-center justify-between gap-4">
             <p className="max-w-3xl text-sm leading-7 text-slate-300">
-              Finishing onboarding now assumes the owner bootstrap has real verification state behind it. The smoke pack must have been recorded before this step can be marked complete.
+              Finish onboarding after the smoke pack has been recorded.
             </p>
             <form action={completeVerificationAction}>
               <PendingSubmitButton

@@ -198,42 +198,15 @@ export default async function BootstrapOwnerPage({
           <MetricCard title="Clarifications" value={String(clarifications?.summary?.total ?? session.counts?.openClarifications ?? 0)} detail="Open ambiguity items from the real backend." />
         </div>
 
-        <Card className="border-cyan-300/18 bg-[linear-gradient(180deg,_rgba(12,28,39,0.94)_0%,_rgba(8,11,20,0.98)_100%)]">
-          <CardHeader>
-            <CardDescription>Step 2</CardDescription>
-            <CardTitle>Owner bootstrap is a verified intake lane</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm leading-7 text-slate-200">
-            <div className="grid gap-3 lg:grid-cols-4">
-              <div className="rounded-[20px] border border-white/8 bg-white/5 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-300">1. Save self anchor</p>
-                <p className="mt-2">Bind the canonical owner identity to this namespace with real profile APIs before relying on narrative text.</p>
-              </div>
-              <div className="rounded-[20px] border border-white/8 bg-white/5 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-300">2. Add evidence</p>
-                <p className="mt-2">Typed text, markdown, audio, and microphone notes land in the protected owner bootstrap session as provenance-bearing evidence.</p>
-              </div>
-              <div className="rounded-[20px] border border-white/8 bg-white/5 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-300">3. Review and clarify</p>
-                <p className="mt-2">Inspect learned state, staged entities, and live clarification items before treating this bootstrap as trustworthy.</p>
-              </div>
-              <div className="rounded-[20px] border border-white/8 bg-white/5 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-300">4. Run smoke checks</p>
-                <p className="mt-2">Ask the substrate real questions and confirm the answer comes back with supporting evidence before completion.</p>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3 rounded-[20px] border border-white/10 bg-black/15 px-4 py-3">
-              <StatusBadge status={session.status} />
-              <span className="text-sm text-slate-300">Current defaults:</span>
-              <span className="text-sm text-slate-400">
-                LLM provider {session.defaultLlmProvider === "openrouter" ? "OpenRouter" : session.defaultLlmProvider === "external" ? "Local runtime" : "skip for now"}
-              </span>
-              <span className="text-sm text-slate-400">Preset {session.defaultLlmPreset ?? "research-analyst"}</span>
-              <span className="text-sm text-slate-400">ASR {session.defaultAsrModel ?? "runtime default"}</span>
-            </div>
-          </CardContent>
-        </Card>
+        <div className="flex flex-wrap items-center gap-3 rounded-[20px] border border-white/10 bg-black/15 px-4 py-3">
+          <StatusBadge status={session.status} />
+          <span className="text-sm text-slate-300">Current defaults:</span>
+          <span className="text-sm text-slate-400">
+            LLM provider {session.defaultLlmProvider === "openrouter" ? "OpenRouter" : session.defaultLlmProvider === "external" ? "Local runtime" : "skip for now"}
+          </span>
+          <span className="text-sm text-slate-400">Preset {session.defaultLlmPreset ?? "research-analyst"}</span>
+          <span className="text-sm text-slate-400">ASR {session.defaultAsrModel ?? "runtime default"}</span>
+        </div>
 
         <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
           <div className="grid gap-4">
@@ -243,11 +216,8 @@ export default async function BootstrapOwnerPage({
                 <CardTitle>Save the owner identity explicitly</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="rounded-[20px] border border-white/10 bg-white/4 p-4 text-sm leading-7 text-slate-300">
-                  This calls <code>POST /ops/profile/self</code>. The owner narrative helps classification, but it is not the same thing as binding the self anchor.
-                </div>
                 <div className="rounded-[20px] border border-cyan-300/16 bg-cyan-300/10 p-4 text-sm leading-7 text-cyan-50">
-                  If you are not sure what to write, keep it plain: who you are, where you live, what you work on, and what keeps showing up in your life. Three to six sentences is enough. This is not a memoir defense.
+                  Keep this plain: who you are, where you live, and what you work on. Three to six sentences is enough.
                 </div>
                 <form action={saveBootstrapSelfProfileAction} className="grid gap-4">
                   <input type="hidden" name="namespace_id" value={namespaceId} />

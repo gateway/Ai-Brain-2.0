@@ -150,57 +150,24 @@ export default async function BootstrapImportPage({
             </CardContent>
           </Card>
 
-          <Card className="border-cyan-300/18 bg-[linear-gradient(180deg,_rgba(12,28,39,0.94)_0%,_rgba(8,11,20,0.98)_100%)]">
-            <CardHeader>
-              <CardDescription>Bootstrap document paths</CardDescription>
-              <CardTitle>Use the right lane for markdown files</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4 text-sm leading-7 text-slate-200">
-              <div className="rounded-[20px] border border-white/8 bg-white/5 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-300">Owner bootstrap docs</p>
-                <p className="mt-2">
-                  Upload a few personal markdown or text documents in Step 2 when you want them classified immediately and reviewed as part of the owner profile.
-                </p>
-                <div className="mt-4">
-                  <Link
-                    href="/bootstrap/owner"
-                    className="inline-flex items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-2.5 text-sm font-medium text-cyan-50 hover:border-cyan-300/35 hover:bg-cyan-300/16"
-                  >
-                    {ownerBootstrapSessionId ? "Open owner bootstrap docs" : "Create owner bootstrap first"}
-                  </Link>
-                </div>
-              </div>
-              <div className="rounded-[20px] border border-white/8 bg-white/5 p-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-300">Trusted folder import</p>
-                <p className="mt-2">
-                  Use this page for larger markdown and text folders that should be seeded through the normal ingest path. This is best for bulk notes and archives that you want retrievable quickly.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-
           <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
             <CardHeader>
               <CardDescription>Which source type fits</CardDescription>
-              <CardTitle>Choose the boringly correct import lane</CardTitle>
+              <CardTitle>Choose the right import lane</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
               <p><span className="font-medium text-white">Historical archive</span> is for older notes you want brought in once.</p>
               <p><span className="font-medium text-white">Ongoing folder monitor</span> is for a folder that changes and should keep syncing.</p>
               <p><span className="font-medium text-white">Project source</span> is for a live project folder worth keeping current.</p>
               <p><span className="font-medium text-white">Owner bootstrap</span> is for small, trusted files used to ground the person behind the brain.</p>
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
-            <CardHeader>
-              <CardDescription>What import does today</CardDescription>
-              <CardTitle>Current boundary for bulk markdown folders</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
-              <p><strong className="text-white">Markdown and text folders</strong> are scanned, previewed, and ingested through the normal brain pipeline with provenance back to the original file path.</p>
-              <p><strong className="text-white">Bulk import</strong> is meant for trusted-folder seeding, not the step-by-step owner review lane. For highly operator-reviewed bootstrap facts, use the owner page and upload a smaller set of bootstrap docs there.</p>
-              <p><strong className="text-white">Classification visibility</strong> now lives in the owner bootstrap flow where markdown, text, and audio files can be explicitly reviewed as part of the initial profile build.</p>
+              <div className="pt-2">
+                <Link
+                  href="/bootstrap/owner"
+                  className="inline-flex items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-4 py-2.5 text-sm font-medium text-cyan-50 hover:border-cyan-300/35 hover:bg-cyan-300/16"
+                >
+                  {ownerBootstrapSessionId ? "Open owner docs lane" : "Create owner bootstrap first"}
+                </Link>
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -235,13 +202,14 @@ export default async function BootstrapImportPage({
                   <Textarea name="notes" placeholder="Optional operator note about this source." />
                 </label>
                 <div className="rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-300">v1 file types: <code>.md</code>, <code>.txt</code></div>
+                <div className="rounded-[18px] border border-cyan-300/18 bg-cyan-300/10 px-4 py-3 text-sm leading-7 text-cyan-50">
+                  First-run watch-folder flow: save the source, review the preview, import once, then leave monitoring enabled so new files arrive through the normal worker path.
+                </div>
               <div className="flex flex-wrap gap-3">
                 {!bootstrap.sourceImportCompleted ? (
-                  <form action={skipSourceImportAction}>
-                    <Button type="submit" variant="outline" className="rounded-2xl border-white/10 bg-white/5 text-white hover:bg-white/10">
-                      Skip for now
-                    </Button>
-                  </form>
+                  <Button formAction={skipSourceImportAction} variant="outline" className="rounded-2xl border-white/10 bg-white/5 text-white hover:bg-white/10">
+                    Skip for now
+                  </Button>
                 ) : null}
                 <Button type="submit" name="intent" value="save" className="rounded-2xl bg-white text-stone-950 hover:bg-stone-200">
                   Save source
@@ -286,13 +254,14 @@ export default async function BootstrapImportPage({
                   <Textarea name="notes" placeholder="Optional operator note about this folder." />
                 </label>
                 <div className="rounded-[18px] border border-white/10 bg-white/4 px-4 py-3 text-sm text-slate-300">Extensions locked in v1</div>
+                <div className="rounded-[18px] border border-cyan-300/18 bg-cyan-300/10 px-4 py-3 text-sm leading-7 text-cyan-50">
+                  Human setup path: point this at the normalized folder, save and scan, confirm the matched files look right, then import. After that the watcher should keep the lane current.
+                </div>
                 <div className="flex flex-wrap gap-3">
                   {!bootstrap.sourceImportCompleted ? (
-                    <form action={skipSourceImportAction}>
-                      <Button type="submit" variant="outline" className="rounded-2xl border-white/10 bg-white/5 text-white hover:bg-white/10">
-                        Skip for now
-                      </Button>
-                    </form>
+                    <Button formAction={skipSourceImportAction} variant="outline" className="rounded-2xl border-white/10 bg-white/5 text-white hover:bg-white/10">
+                      Skip for now
+                    </Button>
                   ) : null}
                   <Button type="submit" name="intent" value="save" className="rounded-2xl bg-white text-stone-950 hover:bg-stone-200">
                     Save source
@@ -430,6 +399,10 @@ export default async function BootstrapImportPage({
                         <span>{preview.preview.erroredFiles} errors</span>
                       </div>
                     </div>
+                  </div>
+
+                  <div className="rounded-[20px] border border-white/8 bg-white/5 p-4 text-sm leading-7 text-slate-300">
+                    Treat this preview as the source-of-truth check before import. If the matched paths or ignored files look wrong, stop here and fix the folder path instead of pushing bad evidence into the brain.
                   </div>
 
                   {preview.preview.latestModifiedFile ? (

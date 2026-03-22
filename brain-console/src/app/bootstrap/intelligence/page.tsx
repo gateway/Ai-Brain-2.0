@@ -40,7 +40,7 @@ export default async function BootstrapIntelligencePage({
     <OperatorShell
       currentPath="/bootstrap"
       title="Connect Intelligence"
-      subtitle="Pick where the brain thinks, talks, and summarizes. This is the part where the software stops being a very organized filing cabinet and starts feeling alive."
+      subtitle="Pick where the brain gets model help for chat, summaries, ASR, and embeddings."
       actions={
         <div className="flex flex-wrap gap-2">
           <Link
@@ -60,7 +60,7 @@ export default async function BootstrapIntelligencePage({
           title="Choose where the brain gets its help"
           statusLabel={bootstrap.metadata.intelligenceSetupCompletedAt ? "saved" : "choose a route"}
           whatToDo="Pick local runtime, OpenRouter, or skip for now. Then choose whether summaries stay factual-only or get a readable LLM overlay."
-          whyItMatters="This controls whether owner ASR, classification, summaries, and retrieval helpers can run during onboarding. You can change it later, but this is the cleanest moment to choose a default."
+          whyItMatters="This controls whether ASR, classification, summaries, and vector helpers are available during setup."
           nextHref="/bootstrap/owner"
           nextLabel="Next: tell the brain who you are"
         />
@@ -164,10 +164,6 @@ export default async function BootstrapIntelligencePage({
                   </label>
                 </div>
 
-                <div className="rounded-[20px] border border-white/10 bg-white/4 p-4 text-sm leading-7 text-slate-300">
-                  If you skip this step for now, the brain will still store evidence. It just will not be very chatty, and its summaries will stay plain and deterministic. Very noble. Slightly less magical.
-                </div>
-
                 <PendingSubmitButton
                   idleLabel="Save and continue"
                   pendingLabel="Saving intelligence settings..."
@@ -203,10 +199,9 @@ export default async function BootstrapIntelligencePage({
                 <CardTitle>What to pick if you just want this to work</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
-                <p><span className="font-medium text-white">Use local runtime</span> if you want the most private default and your local models are already reachable.</p>
-                <p><span className="font-medium text-white">Use OpenRouter</span> if you want a simpler hosted path or faster testing with remote models.</p>
-                <p><span className="font-medium text-white">Use factual + readable summaries</span> if you want the day/week/month/year rollups to read more like a human wrote them without losing provenance.</p>
-                <p>You can change every one of these later in Settings. This step just saves your first sane default so the brain does not wake up confused.</p>
+                <p><span className="font-medium text-white">Local runtime</span> is the private default if it is already reachable.</p>
+                <p><span className="font-medium text-white">OpenRouter</span> is the easier hosted default.</p>
+                <p><span className="font-medium text-white">Skip for now</span> is fine if you only want to finish setup and come back later.</p>
                 <div className="flex flex-wrap gap-2 pt-1">
                   <Link href="/help#provider-choices" target="_blank" rel="noreferrer" className="text-cyan-100 hover:text-white">
                     Read provider docs

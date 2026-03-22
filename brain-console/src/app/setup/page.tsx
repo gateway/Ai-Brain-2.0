@@ -160,8 +160,8 @@ export default async function SetupPage({
           step="Start Here"
           title="Follow the setup flow in order"
           statusLabel={firstPendingIndex === -1 ? "ready to use" : `next step ${firstPendingIndex + 1}`}
-          whatToDo="Work through the checklist from top to bottom. Each step is intentionally narrow so you only have one real decision to make at a time."
-          whyItMatters="This app depends on having purpose, intelligence routing, self identity, evidence, and verification in place. Skipping ahead makes the brain feel spooky in the bad way."
+          whatToDo="Start at the first unfinished step and keep moving forward. Each page is meant to ask for one decision."
+          whyItMatters="Purpose, intelligence, identity, evidence, and verification all need to exist before the brain becomes trustworthy."
           nextHref={firstPendingIndex === -1 ? "/settings" : requiredSteps[firstPendingIndex]?.href}
           nextLabel={firstPendingIndex === -1 ? "Review optional settings" : requiredSteps[firstPendingIndex]?.hrefLabel}
         />
@@ -173,10 +173,10 @@ export default async function SetupPage({
               </div>
               <div className="space-y-3">
                 <h2 className="max-w-3xl text-[1.85rem] font-semibold tracking-[-0.03em] text-white sm:text-[2.25rem]">
-                  Give the brain a name, a lane, a little intelligence, and a few trusted facts.
+                  Give the brain a lane, a little intelligence, and a few trusted facts.
                 </h2>
                 <p className="max-w-2xl text-[15px] leading-8 text-slate-200">
-                  Everything here is ordered on purpose. Pick the brain mode, choose where intelligence runs, tell it who you are, add trusted evidence, then verify it before you trust it with your digital life.
+                  Choose the lane, connect models, ground the owner, add evidence, then verify it.
                 </p>
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
@@ -228,7 +228,7 @@ export default async function SetupPage({
               <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-slate-400">Journey</p>
               <h2 className="mt-2 text-[1.55rem] font-semibold tracking-tight text-white">What to do first</h2>
               <p className="mt-2 max-w-2xl text-[15px] leading-8 text-slate-300">
-                Move from top to bottom. The highlighted step is the next recommended action. Finished steps stay visible so you can audit what has already been grounded.
+                The highlighted step is the next recommended action. Finished steps stay visible so you can see what is already grounded.
               </p>
               <div className="mt-4 flex flex-wrap gap-3">
                 <Link
@@ -360,7 +360,7 @@ export default async function SetupPage({
                 <p><span className="font-medium text-white">external</span> uses your own local or private runtime endpoint.</p>
                 <p><span className="font-medium text-white">openrouter</span> uses hosted models and embeddings through your OpenRouter key.</p>
                 <p><span className="font-medium text-white">none</span> keeps retrieval lexical-only until you are ready to enable vectors.</p>
-                <p>Today, OpenRouter is the fully working <span className="font-medium text-white">1536-dimension</span> re-embed path. Local <span className="font-medium text-white">Qwen/Qwen3-Embedding-4B</span> can be tested now, but still needs a vector-schema upgrade before full namespace sync.</p>
+                <p>Today, both paths are viable: OpenRouter is the hosted <span className="font-medium text-white">1536-dimension</span> path, and local <span className="font-medium text-white">Qwen/Qwen3-Embedding-4B</span> is verified when the runtime requests <span className="font-medium text-white">1536</span> dimensions.</p>
               </CardContent>
             </Card>
 

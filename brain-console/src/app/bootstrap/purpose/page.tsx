@@ -28,8 +28,8 @@ export default async function BootstrapPurposePage() {
           step="Step 1"
           title="Choose the kind of brain you are setting up"
           statusLabel={purpose.replace(/_/g, " ")}
-          whatToDo="Pick the mode that best matches what this brain should primarily hold: personal life context, business context, creative work, or a hybrid of those."
-          whyItMatters="This sets the default namespace, source posture, and verification hints used by the rest of setup. It tells the system what belongs in this lane."
+          whatToDo="Choose the lane that fits this brain: personal, business, creative, or hybrid."
+          whyItMatters="It sets the default namespace and the general posture for the rest of setup."
           nextHref="/bootstrap/intelligence"
           nextLabel="Next: connect intelligence"
         />
@@ -49,10 +49,6 @@ export default async function BootstrapPurposePage() {
                   <option value="hybrid">Hybrid</option>
                 </select>
               </label>
-
-              <div className="rounded-[20px] border border-white/10 bg-white/4 p-4 text-sm leading-7 text-slate-300">
-                This is a typed operating mode, not just a label. It sets the default namespace, the default posture for sources, and the verification language the bootstrap flow will use.
-              </div>
 
               <label className="grid gap-2">
                 <span className="text-sm font-medium text-slate-100">Operator notes</span>
@@ -87,9 +83,7 @@ export default async function BootstrapPurposePage() {
             <CardTitle>How to choose a purpose</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-sm leading-7 text-slate-300">
-            <div className="rounded-[20px] border border-white/10 bg-white/4 p-4 text-sm leading-7 text-slate-300">
-              Expand the sections below if you want examples before choosing a mode. Keep the selection broad enough to reflect the lane this brain should operate in, but specific enough that an operator can tell what belongs here and what does not.
-            </div>
+            <p>Use the examples below only if you need help choosing.</p>
 
             <details className="group rounded-[20px] border border-white/8 bg-white/5 p-4 open:border-amber-300/20 open:bg-amber-300/8">
               <summary className="cursor-pointer list-none">
