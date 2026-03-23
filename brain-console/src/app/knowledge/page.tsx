@@ -142,14 +142,14 @@ export default async function KnowledgePage() {
           </Card>
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <Card size="sm" className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.88)_0%,_rgba(8,11,20,0.92)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Self anchor</CardDescription>
                 <CardTitle className="text-lg text-white">{selfProfile?.canonicalName ?? "missing"}</CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-slate-300">{selfProfile ? `${selfProfile.aliases.length} aliases saved.` : "No explicit self profile bound yet."}</CardContent>
             </Card>
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <Card size="sm" className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.88)_0%,_rgba(8,11,20,0.92)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Clarifications</CardDescription>
                 <CardTitle className="text-lg text-white">{clarifications?.summary.total ?? 0}</CardTitle>

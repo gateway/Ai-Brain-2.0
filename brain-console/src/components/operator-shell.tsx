@@ -47,7 +47,7 @@ export async function OperatorShell({ title, subtitle, currentPath, children, ac
       <div className="pointer-events-none fixed inset-0 opacity-15 [background-image:linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:34px_34px]" />
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_16%_10%,rgba(255,255,255,0.06),transparent_18%),radial-gradient(circle_at_84%_16%,rgba(34,211,238,0.07),transparent_17%),radial-gradient(circle_at_60%_90%,rgba(245,158,11,0.05),transparent_18%)] opacity-70" />
       <div className="mx-auto flex min-h-screen max-w-[1680px] flex-col gap-4 px-3 py-3 sm:px-4 lg:px-6 lg:py-4">
-        <header className="overflow-hidden rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(14,16,20,0.88)_0%,_rgba(10,12,16,0.82)_100%)] px-4 py-3 shadow-[0_20px_60px_rgba(0,0,0,0.26)] backdrop-blur-xl sm:px-5">
+        <header className="overflow-hidden rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(14,16,20,0.82)_0%,_rgba(10,12,16,0.76)_100%)] px-4 py-3 shadow-[0_14px_36px_rgba(0,0,0,0.18)] backdrop-blur-xl sm:px-5">
           <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-cyan-200/55 to-transparent" />
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -112,11 +112,11 @@ export async function OperatorShell({ title, subtitle, currentPath, children, ac
           </div>
         </header>
 
-        <main className="flex-1 rounded-[36px] border border-white/8 bg-[linear-gradient(180deg,_rgba(10,12,16,0.74)_0%,_rgba(7,8,12,0.68)_100%)] p-4 shadow-[0_28px_110px_rgba(0,0,0,0.42)] backdrop-blur-xl sm:p-5 lg:p-7">
+        <main className="flex-1 rounded-[36px] border border-white/8 bg-[linear-gradient(180deg,_rgba(10,12,16,0.7)_0%,_rgba(7,8,12,0.64)_100%)] p-4 shadow-[0_18px_54px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-5 lg:p-7">
           <header className="border-b border-white/8 pb-6">
             <p className="premium-eyebrow text-stone-400">{currentPath}</p>
             <h2 className="mt-3 text-[2rem] font-semibold tracking-[-0.04em] text-white lg:text-[2.8rem]">{title}</h2>
-            <p className="mt-3 max-w-3xl text-[15px] leading-8 text-stone-300">{subtitle}</p>
+            <p className="mt-3 max-w-3xl text-[15px] leading-7 text-stone-300">{subtitle}</p>
           </header>
           <div className="pt-6">{children}</div>
         </main>

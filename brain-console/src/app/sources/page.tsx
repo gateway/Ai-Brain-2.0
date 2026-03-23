@@ -247,21 +247,21 @@ export default async function SourcesPage({
     >
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-3">
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <Card size="sm" className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.88)_0%,_rgba(8,11,20,0.92)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Tracked sources</CardDescription>
                 <CardTitle className="text-[1.6rem] text-white">{sources.length}</CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-slate-300">{importedCount} imported, {pendingCount} pending files.</CardContent>
             </Card>
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <Card size="sm" className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.88)_0%,_rgba(8,11,20,0.92)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Watching now</CardDescription>
                 <CardTitle className="text-lg text-white">{monitoredCount}</CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-slate-300">Sources with monitoring enabled.</CardContent>
             </Card>
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <Card size="sm" className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.88)_0%,_rgba(8,11,20,0.92)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Monitor worker</CardDescription>
                 <CardTitle className="text-lg text-white">{sourceWorker?.state ?? "unknown"}</CardTitle>

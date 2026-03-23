@@ -81,7 +81,7 @@ export default async function WorkbenchDashboardPage() {
     <OperatorShell
       currentPath="/"
       title="Dashboard"
-      subtitle="Operator-facing intake and review surface for AI Brain. Start a session, ingest evidence, inspect what the brain inferred, and keep provenance visible."
+      subtitle="Start sessions, inspect believed state, and fix uncertainty without digging through the plumbing."
       actions={
         <div className="flex flex-wrap gap-2">
           {!bootstrap.progress.onboardingComplete ? (
@@ -187,7 +187,7 @@ export default async function WorkbenchDashboardPage() {
         <div className="grid gap-5 xl:grid-cols-[1.18fr_0.82fr]">
           <div className="space-y-5">
             <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
-              <CardHeader>
+              <CardHeader className="pb-3">
                 <CardDescription>Daily operator loop</CardDescription>
                 <CardTitle className="text-[1.45rem] tracking-tight">What to do with this thing once it is alive</CardTitle>
               </CardHeader>
@@ -234,7 +234,7 @@ export default async function WorkbenchDashboardPage() {
             </Card>
 
             <Card className="overflow-hidden border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
-              <CardHeader>
+              <CardHeader className="pb-3">
                 <CardDescription>Recent sessions</CardDescription>
                 <CardTitle className="text-[1.3rem] tracking-tight">Pick up where you left off</CardTitle>
               </CardHeader>
@@ -288,7 +288,7 @@ export default async function WorkbenchDashboardPage() {
 
           <div className="space-y-5">
             <Card className="overflow-hidden border-cyan-300/14 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.1),_transparent_28%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
-              <CardHeader>
+              <CardHeader className="pb-3">
                 <CardDescription>State at a glance</CardDescription>
                 <CardTitle className="text-[1.45rem] tracking-tight">What needs attention right now</CardTitle>
               </CardHeader>

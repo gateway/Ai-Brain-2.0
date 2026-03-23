@@ -154,21 +154,21 @@ export default async function ClarificationsPage({
           </Card>
 
           <div className="grid gap-4 sm:grid-cols-3 xl:grid-cols-1">
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <Card size="sm" className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.88)_0%,_rgba(8,11,20,0.92)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Open items</CardDescription>
                 <CardTitle className="text-[1.6rem] text-white">{rankedItems.length}</CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-slate-300">Still waiting on operator grounding.</CardContent>
             </Card>
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <Card size="sm" className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.88)_0%,_rgba(8,11,20,0.92)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Priority 1</CardDescription>
                 <CardTitle className="text-lg text-white">{byPriority.priority_1}</CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-slate-300">The items most likely to damage grounding if they linger.</CardContent>
             </Card>
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <Card size="sm" className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.88)_0%,_rgba(8,11,20,0.92)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Most loaded lane</CardDescription>
                 <CardTitle className="text-lg text-white">{highestNamespace?.namespaceId ?? defaultNamespaceId}</CardTitle>

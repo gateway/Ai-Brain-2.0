@@ -114,21 +114,21 @@ export default async function RuntimePage() {
     >
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-3">
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <Card size="sm" className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.88)_0%,_rgba(8,11,20,0.92)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Brain runtime</CardDescription>
                 <CardTitle className="text-lg text-white">{health.ok ? "reachable" : "offline"}</CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-slate-300">HTTP boundary for sessions, search, graph, and review.</CardContent>
             </Card>
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <Card size="sm" className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.88)_0%,_rgba(8,11,20,0.92)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Local model runtime</CardDescription>
                 <CardTitle className="text-lg text-white">{runtime?.reachable ? "reachable" : "not reachable"}</CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-slate-300">{runtime?.families.length ?? 0} families discovered.</CardContent>
             </Card>
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
+            <Card size="sm" className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.88)_0%,_rgba(8,11,20,0.92)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>OpenRouter catalog</CardDescription>
                 <CardTitle className="text-lg text-white">{openRouterModels.length > 0 ? "reachable" : "not configured"}</CardTitle>
@@ -139,35 +139,26 @@ export default async function RuntimePage() {
 
         <div className="grid gap-6 xl:grid-cols-[0.94fr_1.06fr]">
           <div className="space-y-6">
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
-              <CardHeader>
-                <CardDescription>Current wiring</CardDescription>
-                <CardTitle>What route this brain is using right now</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
+            <details className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.92)_0%,_rgba(8,11,20,0.96)_100%)] p-5">
+              <summary className="cursor-pointer list-none text-lg font-semibold tracking-tight text-white">Current wiring</summary>
+              <div className="mt-4 space-y-3 text-sm leading-7 text-slate-300">
                 <p>Purpose mode: <span className="font-medium text-white">{bootstrap.metadata.brainPurposeMode ?? "not set"}</span></p>
                 <p>Intelligence route: <span className="font-medium text-white">{bootstrap.metadata.intelligenceMode ?? "not set"}</span></p>
-                <p>Embeddings route: <span className="font-medium text-white">{embeddings.provider}</span></p>
-                <p>Embeddings model: <span className="font-medium text-white">{embeddings.model ?? "provider default"}</span></p>
-                <p>Summary strategy: <span className="font-medium text-white">{operations.temporalSummary.strategy}</span></p>
-                <p>Summary provider: <span className="font-medium text-white">{operations.temporalSummary.summarizerProvider}</span></p>
-                <p>Summary model: <span className="font-medium text-white">{operations.temporalSummary.summarizerModel ?? "provider default"}</span></p>
-                <p className="pt-2">
+                <p>Embeddings: <span className="font-medium text-white">{embeddings.provider}</span> / <span className="font-medium text-white">{embeddings.model ?? "provider default"}</span></p>
+                <p>Summaries: <span className="font-medium text-white">{operations.temporalSummary.strategy}</span> via <span className="font-medium text-white">{operations.temporalSummary.summarizerProvider}</span></p>
+                <p>
                   Need the deeper knobs? Go to{" "}
                   <Link href="/settings" className="font-medium text-cyan-100 hover:text-white">
                     Settings
                   </Link>
                   .
                 </p>
-              </CardContent>
-            </Card>
+              </div>
+            </details>
 
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
-              <CardHeader>
-                <CardDescription>Provider telemetry</CardDescription>
-                <CardTitle>Latency and last verified success</CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-3">
+            <details className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.92)_0%,_rgba(8,11,20,0.96)_100%)] p-5">
+              <summary className="cursor-pointer list-none text-lg font-semibold tracking-tight text-white">Provider telemetry</summary>
+              <div className="mt-4 grid gap-3">
                 <div className="rounded-[18px] border border-white/8 bg-white/5 p-4 text-sm leading-7 text-slate-300">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="font-medium text-white">Local runtime</p>
@@ -177,7 +168,6 @@ export default async function RuntimePage() {
                   </div>
                   <p className="mt-2">Catalog latency: <span className="font-medium text-white">{runtimeResult.latencyMs ? `${runtimeResult.latencyMs}ms` : "not measured"}</span></p>
                   <p>Last verified embedding check: <span className="font-medium text-white">{lastEmbeddingTest?.provider === "external" && lastEmbeddingTest.success ? formatDateTime(lastEmbeddingTest.testedAt) : "not yet"}</span></p>
-                  <p>Verified model: <span className="font-medium text-white">{lastEmbeddingTest?.provider === "external" && lastEmbeddingTest.success ? (lastEmbeddingTest.model ?? "provider default") : (runtime?.families.find((family) => family.family === "llm")?.activeModel ?? "unknown")}</span></p>
                 </div>
                 <div className="rounded-[18px] border border-white/8 bg-white/5 p-4 text-sm leading-7 text-slate-300">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -188,17 +178,14 @@ export default async function RuntimePage() {
                   </div>
                   <p className="mt-2">Catalog latency: <span className="font-medium text-white">{openRouterResult.latencyMs ? `${openRouterResult.latencyMs}ms` : "not measured"}</span></p>
                   <p>Last verified embedding check: <span className="font-medium text-white">{lastEmbeddingTest?.provider === "openrouter" && lastEmbeddingTest.success ? formatDateTime(lastEmbeddingTest.testedAt) : "not yet"}</span></p>
-                  <p>Verified model: <span className="font-medium text-white">{lastEmbeddingTest?.provider === "openrouter" && lastEmbeddingTest.success ? (lastEmbeddingTest.model ?? "provider default") : "not yet"}</span></p>
                 </div>
                 <div className="rounded-[18px] border border-white/8 bg-white/5 p-4 text-sm leading-7 text-slate-300">
                   <p className="font-medium text-white">Last model-backed jobs</p>
                   <p className="mt-2">Temporal summary success: <span className="font-medium text-white">{temporalSuccess ? formatDateTime(temporalSuccess.finishedAt ?? temporalSuccess.startedAt) : "not yet"}</span></p>
-                  <p>Temporal route: <span className="font-medium text-white">{typeof temporalSuccess?.summary.provider === "string" ? temporalSuccess.summary.provider : operations.temporalSummary.summarizerProvider}</span> / <span className="font-medium text-white">{typeof temporalSuccess?.summary.model === "string" && temporalSuccess.summary.model ? temporalSuccess.summary.model : (operations.temporalSummary.summarizerModel ?? "provider default")}</span></p>
                   <p className="mt-2">Derivation success: <span className="font-medium text-white">{derivationSuccess ? formatDateTime(derivationSuccess.finishedAt ?? derivationSuccess.startedAt) : "not yet"}</span></p>
-                  <p>Derivation route: <span className="font-medium text-white">{typeof derivationSuccess?.summary.provider === "string" ? derivationSuccess.summary.provider : (operations.derivation.provider ?? "not set")}</span> / <span className="font-medium text-white">{typeof derivationSuccess?.summary.model === "string" && derivationSuccess.summary.model ? derivationSuccess.summary.model : (operations.derivation.model ?? "provider default")}</span></p>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </details>
 
             <details className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] p-5">
               <summary className="cursor-pointer list-none text-lg font-semibold tracking-tight text-white">Advanced provider inventory</summary>
