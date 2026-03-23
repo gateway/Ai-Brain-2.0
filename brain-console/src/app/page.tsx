@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { OperatorShell } from "@/components/operator-shell";
 import { MetricCard } from "@/components/metric-card";
-import { SetupStepGuide } from "@/components/setup-step-guide";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getBootstrapState, getNamespaceCatalog, getRuntimeHealth, getWorkbenchClarifications, getWorkbenchWorkerStatus, listWorkbenchSessions, listWorkbenchSources } from "@/lib/operator-workbench";
@@ -183,18 +182,6 @@ export default async function WorkbenchDashboardPage() {
               </div>
             </div>
           </section>
-        ) : null}
-
-        {!bootstrap.progress.onboardingComplete ? (
-          <SetupStepGuide
-            step="First-Time Setup"
-            title="What to do next"
-            statusLabel={`${bootstrap.progress.completedSteps}/${bootstrap.progress.totalSteps} complete`}
-            whatToDo="Open Start Here, then work through purpose, owner setup, source import, provider setup, and verification in order. This is the recommended first-run path."
-            whyItMatters="The brain works best when identity, provider routing, and trusted evidence are set up before normal sessions begin. That keeps later intake and retrieval from feeling random."
-            nextHref="/setup"
-            nextLabel="Continue setup"
-          />
         ) : null}
 
         <div className="grid gap-5 xl:grid-cols-[1.18fr_0.82fr]">
@@ -425,16 +412,6 @@ export default async function WorkbenchDashboardPage() {
                 </details>
               </CardContent>
             </Card>
-
-            <div className="overflow-hidden rounded-[30px] border border-white/8 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.08),_transparent_26%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)] px-5 py-5 shadow-[0_18px_60px_rgba(0,0,0,0.22)]">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-slate-300">How to use AI Brain day to day</p>
-              <h3 className="mt-3 text-[1.3rem] font-semibold tracking-tight text-white">Think of it as a memory operating system, not a dashboard museum.</h3>
-              <div className="mt-3 space-y-3 text-[15px] leading-8 text-slate-300">
-                <p>Bring new material in through sessions or watched sources.</p>
-                <p>Inspect the current believed state in What It Knows.</p>
-                <p>Resolve clarifications whenever the brain looks uncertain, conflicted, or creatively wrong.</p>
-              </div>
-            </div>
           </div>
         </div>
       </div>

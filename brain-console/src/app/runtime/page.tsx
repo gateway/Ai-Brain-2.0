@@ -110,22 +110,10 @@ export default async function RuntimePage() {
     <OperatorShell
       currentPath="/runtime"
       title="Runtime"
-      subtitle="This is the mechanical room: provider reachability, model families, worker loops, and the small levers that keep the brain from quietly drifting into nonsense."
+      subtitle="Check reachability, worker health, and provider status here. Open the deeper machinery only when you need it."
     >
       <div className="space-y-6">
-        <div className="grid gap-4 xl:grid-cols-[1.08fr_0.92fr]">
-          <Card className="border-white/8 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.08),_transparent_28%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
-            <CardHeader>
-              <CardDescription>Runtime control room</CardDescription>
-              <CardTitle>Use this page when the brain feels slow, offline, or weird</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
-              <p>Start with three checks: is the runtime reachable, are the providers reachable, and are the workers healthy. If those are green, the rest of the app usually stops feeling haunted.</p>
-              <p>Everything else here is deeper ops detail for when you want to diagnose, not admire, the machinery.</p>
-            </CardContent>
-          </Card>
-
-          <div className="grid gap-4 sm:grid-cols-3 xl:grid-cols-1">
+        <div className="grid gap-4 sm:grid-cols-3">
             <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Brain runtime</CardDescription>
@@ -147,7 +135,6 @@ export default async function RuntimePage() {
               </CardHeader>
               <CardContent className="text-sm text-slate-300">{openRouterChatCount} chat models, {openRouterEmbeddingCount} embedding models.</CardContent>
             </Card>
-          </div>
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[0.94fr_1.06fr]">

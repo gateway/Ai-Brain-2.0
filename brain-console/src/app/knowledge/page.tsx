@@ -2,7 +2,6 @@ import Link from "next/link";
 import { OperatorShell } from "@/components/operator-shell";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getOpsOverview } from "@/lib/brain-runtime";
 import {
   getBootstrapState,
   getWorkbenchClarifications,
@@ -81,10 +80,9 @@ export default async function KnowledgePage() {
   const bootstrap = await getBootstrapState();
   const namespaceId = bootstrap.metadata.defaultNamespaceId ?? "personal";
 
-  const [selfProfile, clarifications, overview, home, projects, people, routines, beliefs, preferences] = await Promise.all([
+  const [selfProfile, clarifications, home, projects, people, routines, beliefs, preferences] = await Promise.all([
     getWorkbenchSelfProfile(namespaceId).catch(() => null),
     getWorkbenchClarifications(namespaceId, 10).catch(() => null),
-    getOpsOverview().catch(() => null),
     loadKnowledgeCard(namespaceId, {
       query: "where do I live?",
       fallback: "The brain has not verified your current home yet.",
@@ -129,7 +127,7 @@ export default async function KnowledgePage() {
     <OperatorShell
       currentPath="/knowledge"
       title="What It Knows"
-      subtitle="This is the operator-facing readout of what the brain currently believes, what evidence supports it, and where the confidence still breaks down."
+      subtitle="See what the brain currently believes, what supports it, and what still needs grounding."
     >
       <div className="space-y-6">
         <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
@@ -139,12 +137,11 @@ export default async function KnowledgePage() {
               <CardTitle>Start here when you want the answer, not the plumbing</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
-              <p>This page is the clean answer to “what does the brain think is true right now?” It favors grounded answers, visible evidence, and honest uncertainty over sounding clever.</p>
-              <p>If something here looks wrong, the next place to go is almost always <Link href="/clarifications" className="font-medium text-cyan-100 hover:text-white">Clarifications</Link> or <Link href="/sources" className="font-medium text-cyan-100 hover:text-white">Sources</Link>, not vague optimism.</p>
+              <p>If something here looks wrong, go to <Link href="/clarifications" className="font-medium text-cyan-100 hover:text-white">Clarifications</Link> or <Link href="/sources" className="font-medium text-cyan-100 hover:text-white">Sources</Link>, not vague optimism.</p>
             </CardContent>
           </Card>
 
-          <div className="grid gap-4 sm:grid-cols-3 xl:grid-cols-1">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
             <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Self anchor</CardDescription>
@@ -158,13 +155,6 @@ export default async function KnowledgePage() {
                 <CardTitle className="text-lg text-white">{clarifications?.summary.total ?? 0}</CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-slate-300">{clarifications?.summary.byPriority.priority_1 ?? 0} priority 1 unknowns are still blocking clean grounding.</CardContent>
-            </Card>
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
-              <CardHeader className="pb-2">
-                <CardDescription>Memory pressure</CardDescription>
-                <CardTitle className="text-lg text-white">{overview?.memorySummary.clarificationPending ?? "?"}</CardTitle>
-              </CardHeader>
-              <CardContent className="text-sm text-slate-300">Open clarification rows across the runtime view of this brain.</CardContent>
             </Card>
           </div>
         </div>

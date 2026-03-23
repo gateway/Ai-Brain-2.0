@@ -243,22 +243,10 @@ export default async function SourcesPage({
     <OperatorShell
       currentPath="/sources"
       title="Sources"
-      subtitle="This is where you see what the brain is watching, what it already imported, and what is still waiting to be pulled through the evidence pipeline."
+      subtitle="See what the brain is watching, what changed, and what still needs import."
     >
       <div className="space-y-6">
-        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-          <Card className="border-white/8 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.08),_transparent_28%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
-            <CardHeader>
-              <CardDescription>Source manager</CardDescription>
-              <CardTitle>Use this page when the brain needs more evidence, not more vibes</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
-              <p>There are really only three jobs here: add a trusted folder, check whether the watcher is keeping up, and inspect which files changed or failed to import.</p>
-              <p>Changes still go through the normal ingestion pipeline. The watcher is a finder, not a rogue database editor with a caffeine problem.</p>
-            </CardContent>
-          </Card>
-
-          <div className="grid gap-4 sm:grid-cols-3 xl:grid-cols-1">
+        <div className="grid gap-4 sm:grid-cols-3">
             <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
               <CardHeader className="pb-2">
                 <CardDescription>Tracked sources</CardDescription>
@@ -280,7 +268,6 @@ export default async function SourcesPage({
               </CardHeader>
               <CardContent className="text-sm text-slate-300">Last run {formatDateTime(sourceWorker?.latestRun?.finishedAt ?? sourceWorker?.latestRun?.startedAt)}.</CardContent>
             </Card>
-          </div>
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">

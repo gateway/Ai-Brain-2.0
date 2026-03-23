@@ -97,10 +97,6 @@ export default async function ClarificationsPage({
       return new Date(right.item.occurredAt).getTime() - new Date(left.item.occurredAt).getTime();
     });
 
-  const byType = rankedItems.reduce<Record<string, number>>((summary, entry) => {
-    summary[entry.item.ambiguityType] = (summary[entry.item.ambiguityType] ?? 0) + 1;
-    return summary;
-  }, {});
   const byPriority = clarificationGroups.reduce(
     (summary, group) => ({
       priority_1: summary.priority_1 + (group.clarifications?.summary.byPriority.priority_1 ?? 0),
@@ -122,7 +118,7 @@ export default async function ClarificationsPage({
     <OperatorShell
       currentPath="/clarifications"
       title="Clarifications"
-      subtitle="This is the list of things the brain does not know well enough yet. Work from the top down, keep the graph honest, and let the runtime propagate the fixes."
+      subtitle="Work from the top down and fix what the brain does not know well enough yet."
     >
       <div className="space-y-6">
         <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
@@ -132,7 +128,7 @@ export default async function ClarificationsPage({
               <CardTitle>Unknowns worth fixing first</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
-              <p>These are ranked by the backend priority contract. The brain weighs extraction strength, ambiguity type, and recency so the top of the queue is not just a random pile of weird nouns.</p>
+              <p>These are already ranked by the backend, so the top of the queue is the right place to start.</p>
               {!gate.onboardingComplete ? (
                 <div className="rounded-[18px] border border-cyan-300/20 bg-cyan-300/10 px-3 py-2 text-xs leading-6 text-cyan-50">
                   Setup is still underway, but clarifications are visible here on purpose so you can fix identity or place grounding before the graph learns bad habits.
@@ -178,22 +174,6 @@ export default async function ClarificationsPage({
                 <CardTitle className="text-lg text-white">{highestNamespace?.namespaceId ?? defaultNamespaceId}</CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-slate-300">{highestNamespace?.total ?? 0} items need attention there.</CardContent>
-            </Card>
-            <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
-              <CardHeader className="pb-2">
-                <CardDescription>Top ambiguity types</CardDescription>
-                <CardTitle className="text-lg text-white">{Object.keys(byType).length}</CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-wrap gap-2">
-                {Object.entries(byType)
-                  .sort((left, right) => right[1] - left[1])
-                  .slice(0, 3)
-                  .map(([type, total]) => (
-                    <Badge key={type} variant="outline" className="border-white/10 bg-white/5 text-slate-100">
-                      {ambiguityLabel(type)} · {total}
-                    </Badge>
-                  ))}
-              </CardContent>
             </Card>
           </div>
         </div>

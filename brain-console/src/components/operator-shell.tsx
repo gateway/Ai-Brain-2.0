@@ -55,18 +55,13 @@ export async function OperatorShell({ title, subtitle, currentPath, children, ac
                 <p className="premium-eyebrow text-stone-300">AI Brain 2.0</p>
                 <h1 className="mt-1.5 text-[1.45rem] font-semibold tracking-[-0.04em] text-white sm:text-[1.7rem]">Operator Workbench</h1>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {actions}
-                <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-stone-200">
-                  evidence to memory
-                </div>
-              </div>
+              <div className="flex flex-wrap items-center gap-2">{actions}</div>
             </div>
 
             {onboardingOpen ? (
-              <div className="rounded-[18px] border border-cyan-300/25 bg-cyan-300/10 px-3 py-2 text-sm text-cyan-50">
-                Setup is still in progress. Start at <span className="font-medium text-white">Start Here</span>, then work through <span className="font-medium text-white">Guided Setup</span> before using the rest of the system normally.
-              </div>
+              <p className="text-sm text-cyan-50">
+                Setup is still in progress. Start at <span className="font-medium text-white">Start Here</span>, then move through <span className="font-medium text-white">Guided Setup</span>.
+              </p>
             ) : null}
 
             <details className="group md:hidden">
