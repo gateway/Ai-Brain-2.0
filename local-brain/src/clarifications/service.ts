@@ -343,7 +343,7 @@ function inferFollowUpAmbiguity(candidate: ClaimCandidateRow): {
 }
 
 function isRelationshipPredicate(predicate: string): boolean {
-  return ["friend_of", "was_with", "met_through", "from", "lives_in", "lived_in", "currently_in", "runs", "works_at", "worked_at", "works_on", "works_with", "member_of", "created_by"].includes(
+  return ["friend_of", "was_with", "met_through", "sibling_of", "from", "lives_in", "lived_in", "currently_in", "runs", "works_at", "worked_at", "works_on", "works_with", "member_of", "created_by"].includes(
     predicate
   );
 }
@@ -2115,7 +2115,7 @@ async function rebuildNamespaceAfterClarification(namespaceId: string): Promise<
       SELECT
         min(occurred_at)::text AS min_occurred_at,
         max(occurred_at)::text AS max_occurred_at
-      FROM episodic_timeline
+      FROM episodic_memory
       WHERE namespace_id = $1
     `,
     [namespaceId]

@@ -33,6 +33,7 @@ interface ClaimCandidateRow {
 }
 
 interface PreferenceStatement {
+  readonly subjectName?: string;
   readonly polarity: "like" | "dislike";
   readonly target: string;
   readonly canonicalKey: string;
@@ -98,6 +99,8 @@ interface HeuristicEvidenceRow {
   readonly content: string;
   readonly occurred_at: string | null;
   readonly source_chunk_id: string | null;
+  readonly occurred_week: string | null;
+  readonly source_ref: string | null;
 }
 
 interface TypedPreferenceEntity {
@@ -200,6 +203,14 @@ function normalizePreferenceTarget(value: string): string {
 
 function buildCanonicalPreferenceKey(target: string): string {
   return `preference:${target}`;
+}
+
+function buildScopedPreferenceKey(target: string, subjectName?: string): string {
+  if (!subjectName) {
+    return buildCanonicalPreferenceKey(target);
+  }
+
+  return `preference:${normalizeProjectKey(subjectName)}:${target}`;
 }
 
 function buildCanonicalWatchlistKey(target: string): string {
@@ -505,6 +516,18 @@ interface SkillStatement {
 
 function detectPreferenceCategory(header: string): string | undefined {
   const normalized = normalizeWhitespace(header).toLowerCase();
+  if (/\btravel\b/u.test(normalized)) {
+    return "travel";
+  }
+  if (/\b(?:beverage|drink|drinks)\b/u.test(normalized)) {
+    return "beverage";
+  }
+  if (/\b(?:location|place|places|neighborhood|neighbourhood)\b/u.test(normalized)) {
+    return "location";
+  }
+  if (/\b(?:diet|dietary)\b/u.test(normalized)) {
+    return "food";
+  }
   if (/\b(?:movie|movies|film|films)\b/u.test(normalized)) {
     return "movie";
   }
@@ -635,123 +658,126 @@ function extractPreferenceStatements(content: string): PreferenceStatement[] {
     .filter(Boolean);
 
   for (const clause of clauses) {
+    const categoryPrefixMatch = clause.match(/^([A-Za-z][A-Za-z /-]{1,40}?)\s+preferences?:\s+(.+)$/iu);
+    const clauseBody = normalizeWhitespace(categoryPrefixMatch?.[2] ?? clause);
+    const clauseCategory = detectPreferenceCategory(categoryPrefixMatch?.[1] ?? "");
     const firstPersonPreferenceContext =
-      /\b(?:i|user)\b/iu.test(clause) || /\bmy\s+(?:personal\s+)?preferences?\b/iu.test(clause);
+      /\b(?:i|user)\b/iu.test(clauseBody) || /\bmy\s+(?:personal\s+)?preferences?\b/iu.test(clauseBody);
+    const explicitSubjectMatch = clauseBody.match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/u);
+    const subjectName = firstPersonPreferenceContext ? undefined : normalizeWhitespace(explicitSubjectMatch?.[1] ?? "");
+    const predicateText = subjectName
+      ? normalizeWhitespace(clauseBody.slice(subjectName.length))
+      : clauseBody;
 
-    const favoriteMatch = clause.match(/\b(?:(?:my|user(?:'s)?|steve(?:'s)?)\s+)?favorite\s+(.+?)\s+is\s+(.+)$/iu);
+    const pushStatement = (options: {
+      readonly polarity: PreferenceStatement["polarity"];
+      readonly fragment: string;
+      readonly category?: string;
+    }): void => {
+      const activityEntity = resolveActivityEntity(options.fragment);
+      const target = activityEntity?.canonicalName ?? normalizeListItem(options.fragment);
+      const canonicalTarget = normalizePreferenceTarget(target);
+      if (!canonicalTarget) {
+        return;
+      }
+      statements.push({
+        subjectName: subjectName || undefined,
+        polarity: options.polarity,
+        target,
+        canonicalKey: buildScopedPreferenceKey(canonicalTarget, subjectName || undefined),
+        category: options.category ?? (activityEntity ? "sport" : undefined)
+      });
+    };
+
+    const favoriteMatch = clauseBody.match(
+      /\b(?:(?:my|user(?:'s)?|steve(?:'s)?|([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})'s)\s+)?favorite\s+(.+?)\s+is\s+(.+)$/iu
+    );
     if (favoriteMatch) {
-      const category = detectPreferenceCategory(favoriteMatch[1] ?? "");
-      for (const fragment of splitPreferenceTargets(favoriteMatch[2] ?? "", category)) {
+      const favoriteSubject = normalizeWhitespace(favoriteMatch[1] ?? subjectName ?? "");
+      const category = detectPreferenceCategory(favoriteMatch[2] ?? "") ?? clauseCategory;
+      for (const fragment of splitPreferenceTargets(favoriteMatch[3] ?? "", category)) {
         const target = resolveActivityEntity(fragment)?.canonicalName ?? normalizeListItem(fragment);
         const canonicalTarget = normalizePreferenceTarget(target);
         if (!canonicalTarget) {
           continue;
         }
         statements.push({
+          subjectName: favoriteSubject || undefined,
           polarity: "like",
           target,
-          canonicalKey: buildCanonicalPreferenceKey(canonicalTarget),
+          canonicalKey: buildScopedPreferenceKey(canonicalTarget, favoriteSubject || undefined),
           category
         });
       }
       continue;
     }
 
-    const comparativePreferenceMatch = clause.match(
-      /\b(?:(?:i|user)\s+)?prefer\s+(.+?)\s+over\s+(.+)$/iu
-    );
-    if (comparativePreferenceMatch && firstPersonPreferenceContext) {
-      const preferredTarget = normalizePreferenceTarget(comparativePreferenceMatch[1] ?? "");
-      const replacedTarget = normalizePreferenceTarget(comparativePreferenceMatch[2] ?? "");
-      if (preferredTarget) {
-        statements.push({
-          polarity: "like",
-          target: preferredTarget,
-          canonicalKey: buildCanonicalPreferenceKey(preferredTarget)
-        });
+    const comparativePreferenceMatch = predicateText.match(/\bprefer(?:s)?\s+(.+?)\s+over\s+(.+)$/iu);
+    if (comparativePreferenceMatch && (firstPersonPreferenceContext || subjectName)) {
+      for (const fragment of splitPreferenceTargets(comparativePreferenceMatch[1] ?? "", clauseCategory)) {
+        pushStatement({ polarity: "like", fragment, category: clauseCategory });
       }
-      if (replacedTarget) {
-        statements.push({
-          polarity: "dislike",
-          target: replacedTarget,
-          canonicalKey: buildCanonicalPreferenceKey(replacedTarget)
-        });
+      for (const fragment of splitPreferenceTargets(comparativePreferenceMatch[2] ?? "", clauseCategory)) {
+        pushStatement({ polarity: "dislike", fragment, category: clauseCategory });
       }
       continue;
     }
 
-    const switchedPreferenceMatch = clause.match(
-      /\b(?:(?:i|user)\s+)?(?:switched|switching)\s+from\s+(.+?)\s+to\s+(.+)$/iu
-    );
-    if (switchedPreferenceMatch && firstPersonPreferenceContext) {
-      const previousTarget = normalizePreferenceTarget(switchedPreferenceMatch[1] ?? "");
-      const nextTarget = normalizePreferenceTarget(switchedPreferenceMatch[2] ?? "");
-      if (nextTarget) {
-        statements.push({
-          polarity: "like",
-          target: nextTarget,
-          canonicalKey: buildCanonicalPreferenceKey(nextTarget)
-        });
+    const switchedPreferenceMatch = predicateText.match(/\b(?:switched|switching)\s+from\s+(.+?)\s+to\s+(.+)$/iu);
+    if (switchedPreferenceMatch && (firstPersonPreferenceContext || subjectName)) {
+      for (const fragment of splitPreferenceTargets(switchedPreferenceMatch[2] ?? "", clauseCategory)) {
+        pushStatement({ polarity: "like", fragment, category: clauseCategory });
       }
-      if (previousTarget) {
-        statements.push({
-          polarity: "dislike",
-          target: previousTarget,
-          canonicalKey: buildCanonicalPreferenceKey(previousTarget)
-        });
+      for (const fragment of splitPreferenceTargets(switchedPreferenceMatch[1] ?? "", clauseCategory)) {
+        pushStatement({ polarity: "dislike", fragment, category: clauseCategory });
       }
       continue;
     }
 
-    const dontLikeMatch = clause.match(/\b(?:(?:i|user)\s+)?(?:do\s+not|don't)\s+like\s+(.+)$/iu);
-    if (dontLikeMatch && firstPersonPreferenceContext) {
-      for (const fragment of splitPreferenceTargets(dontLikeMatch[1] ?? "")) {
-        const target = resolveActivityEntity(fragment)?.canonicalName ?? normalizeListItem(fragment);
-        const canonicalTarget = normalizePreferenceTarget(target);
-        if (!canonicalTarget) {
-          continue;
-        }
-        statements.push({
-          polarity: "dislike",
-          target,
-          canonicalKey: buildCanonicalPreferenceKey(canonicalTarget)
-        });
+    const dietMatch = predicateText.match(/\bfollows?\s+(?:a\s+)?(?:strict\s+)?(.+?)\s+diet$/iu);
+    if (dietMatch && (firstPersonPreferenceContext || subjectName)) {
+      for (const fragment of splitPreferenceTargets(dietMatch[1] ?? "", clauseCategory ?? "food")) {
+        pushStatement({ polarity: "like", fragment, category: clauseCategory ?? "food" });
       }
       continue;
     }
 
-    const negativeMatch = clause.match(/\b(?:(?:i|user)\s+)?(?:said\s+that\s+)?(?:really\s+)?(?:hate|dislike)\s+(.+)$/iu);
-    if (negativeMatch && firstPersonPreferenceContext) {
-      for (const fragment of splitPreferenceTargets(negativeMatch[1] ?? "")) {
-        const target = resolveActivityEntity(fragment)?.canonicalName ?? normalizeListItem(fragment);
-        const canonicalTarget = normalizePreferenceTarget(target);
-        if (!canonicalTarget) {
-          continue;
-        }
-        statements.push({
-          polarity: "dislike",
-          target,
-          canonicalKey: buildCanonicalPreferenceKey(canonicalTarget)
-        });
+    const onlyConsumesMatch = predicateText.match(/\bonly\s+consume(?:s)?\s+(.+)$/iu);
+    if (onlyConsumesMatch && (firstPersonPreferenceContext || subjectName)) {
+      for (const fragment of splitPreferenceTargets(onlyConsumesMatch[1] ?? "", clauseCategory ?? "food")) {
+        pushStatement({ polarity: "like", fragment, category: clauseCategory ?? "food" });
       }
       continue;
     }
 
-    const positiveMatch = clause.match(/\b(?:(?:i|user)\s+)?(?:said\s+that\s+)?(?:really\s+)?(?:like|love|prefer|enjoy)\s+(.+)$/iu);
-    if (positiveMatch && firstPersonPreferenceContext) {
-      for (const fragment of splitPreferenceTargets(positiveMatch[1] ?? "")) {
-        const activityEntity = resolveActivityEntity(fragment);
-        const target = activityEntity?.canonicalName ?? normalizeListItem(fragment);
-        const canonicalTarget = normalizePreferenceTarget(target);
-        if (!canonicalTarget) {
-          continue;
-        }
-        statements.push({
-          polarity: "like",
-          target,
-          canonicalKey: buildCanonicalPreferenceKey(canonicalTarget),
-          category: activityEntity ? "sport" : undefined
-        });
+    const dontLikeMatch = predicateText.match(/\b(?:do\s+not|don't)\s+like\s+(.+)$/iu);
+    if (dontLikeMatch && (firstPersonPreferenceContext || subjectName)) {
+      for (const fragment of splitPreferenceTargets(dontLikeMatch[1] ?? "", clauseCategory)) {
+        pushStatement({ polarity: "dislike", fragment, category: clauseCategory });
+      }
+      continue;
+    }
+
+    const aversionMatch = predicateText.match(/\b(?:has\s+a\s+strong\s+aversion\s+to|avoid(?:s)?)\s+(.+)$/iu);
+    if (aversionMatch && (firstPersonPreferenceContext || subjectName)) {
+      for (const fragment of splitPreferenceTargets(aversionMatch[1] ?? "", clauseCategory ?? "location")) {
+        pushStatement({ polarity: "dislike", fragment, category: clauseCategory ?? "location" });
+      }
+      continue;
+    }
+
+    const negativeMatch = predicateText.match(/\b(?:said\s+that\s+)?(?:really\s+|strongly\s+)?(?:hate|hates|dislike|dislikes)\s+(.+)$/iu);
+    if (negativeMatch && (firstPersonPreferenceContext || subjectName)) {
+      for (const fragment of splitPreferenceTargets(negativeMatch[1] ?? "", clauseCategory)) {
+        pushStatement({ polarity: "dislike", fragment, category: clauseCategory });
+      }
+      continue;
+    }
+
+    const positiveMatch = predicateText.match(/\b(?:said\s+that\s+)?(?:really\s+)?(?:like|likes|love|loves|prefer|prefers|enjoy|enjoys)\s+(.+)$/iu);
+    if (positiveMatch && (firstPersonPreferenceContext || subjectName)) {
+      for (const fragment of splitPreferenceTargets(positiveMatch[1] ?? "", clauseCategory)) {
+        pushStatement({ polarity: "like", fragment, category: clauseCategory });
       }
     }
   }
@@ -1716,6 +1742,7 @@ async function promotePreferenceCandidate(
   const sourceMemoryId = await resolveCandidateSourceMemoryId(client, candidate);
 
   for (const statement of statements) {
+    const preferencePerson = statement.subjectName ?? personLabel;
     const typedEntity = resolveTypedPreferenceEntity(statement.target, statement.category);
     const typedEntityId = typedEntity
       ? await upsertTypedEntity(client, candidate.namespace_id, typedEntity)
@@ -1814,7 +1841,7 @@ async function promotePreferenceCandidate(
       `,
       [
         candidate.namespace_id,
-        `${personLabel} ${statement.polarity === "like" ? "likes" : "dislikes"} ${statement.category ? `${statement.category} ` : ""}${statement.target}.`,
+        `${preferencePerson} ${statement.polarity === "like" ? "likes" : "dislikes"} ${statement.category ? `${statement.category} ` : ""}${statement.target}.`,
         statement.category ? 0.84 : 0.82,
         occurredAt,
         sourceMemoryId,
@@ -1862,7 +1889,7 @@ async function promotePreferenceCandidate(
     await upsertProceduralPreference(client, {
       namespaceId: candidate.namespace_id,
       canonicalKey: statement.canonicalKey,
-      person: personLabel,
+      person: preferencePerson,
       target: statement.target,
       polarity: statement.polarity,
       category: statement.category,
@@ -3280,8 +3307,11 @@ async function syncOperationalHeuristics(
         em.id AS memory_id,
         em.content,
         em.occurred_at,
-        em.source_chunk_id
+        em.source_chunk_id,
+        to_char(date_trunc('week', em.occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS occurred_week,
+        COALESCE(a.source_channel, a.uri, em.artifact_id::text, em.id::text) AS source_ref
       FROM episodic_memory em
+      LEFT JOIN artifacts a ON a.id = em.artifact_id
       WHERE em.namespace_id = $1
       ORDER BY em.occurred_at ASC NULLS LAST, em.id ASC
     `,
@@ -3328,19 +3358,14 @@ async function syncOperationalHeuristics(
 
   for (const pattern of patterns) {
     const matchedRows = evidenceRows.rows.filter((row) => pattern.matchers.some((matcher) => matcher.test(row.content)));
-    const distinctDays = new Set(
-      matchedRows
-        .map((row) => {
-          if (!row.occurred_at) {
-            return null;
-          }
-          const iso = new Date(row.occurred_at).toISOString();
-          return Number.isNaN(Date.parse(iso)) ? null : iso.slice(0, 10);
-        })
-        .filter((value): value is string => Boolean(value))
+    const distinctWeeks = new Set(
+      matchedRows.map((row) => row.occurred_week).filter((value): value is string => Boolean(value))
+    );
+    const distinctSources = new Set(
+      matchedRows.map((row) => row.source_ref).filter((value): value is string => Boolean(value))
     );
 
-    if (distinctDays.size < 3) {
+    if (distinctWeeks.size < 3 || distinctSources.size < 3) {
       continue;
     }
 
@@ -3352,9 +3377,11 @@ async function syncOperationalHeuristics(
     const metadata = {
       source: "heuristic_induction",
       heuristic_kind: pattern.heuristicKind,
-      promotion_gate: "rule_of_3_distinct_days",
+      promotion_gate: "rule_of_3_distinct_weeks_and_sources",
       evidence_memory_ids: sourceMemoryIds,
       evidence_count: sourceMemoryIds.length,
+      distinct_week_count: distinctWeeks.size,
+      distinct_source_count: distinctSources.size,
       ontology_phase: "phase6"
     };
 
@@ -3370,7 +3397,7 @@ async function syncOperationalHeuristics(
           metadata: {
             source: "heuristic_induction",
             heuristic_kind: pattern.heuristicKind,
-            promotion_gate: "rule_of_3_distinct_days"
+            promotion_gate: "rule_of_3_distinct_weeks_and_sources"
           }
         });
       }
@@ -3497,19 +3524,14 @@ async function syncOperationalHeuristics(
 
   for (const pattern of constraintPatterns) {
     const matchedRows = evidenceRows.rows.filter((row) => pattern.matchers.some((matcher) => matcher.test(row.content)));
-    const distinctDays = new Set(
-      matchedRows
-        .map((row) => {
-          if (!row.occurred_at) {
-            return null;
-          }
-          const iso = new Date(row.occurred_at).toISOString();
-          return Number.isNaN(Date.parse(iso)) ? null : iso.slice(0, 10);
-        })
-        .filter((value): value is string => Boolean(value))
+    const distinctWeeks = new Set(
+      matchedRows.map((row) => row.occurred_week).filter((value): value is string => Boolean(value))
+    );
+    const distinctSources = new Set(
+      matchedRows.map((row) => row.source_ref).filter((value): value is string => Boolean(value))
     );
 
-    if (distinctDays.size < 3) {
+    if (distinctWeeks.size < 3 || distinctSources.size < 3) {
       continue;
     }
 
@@ -3521,9 +3543,11 @@ async function syncOperationalHeuristics(
     const metadata = {
       source: "heuristic_induction",
       heuristic_kind: pattern.heuristicKind,
-      promotion_gate: "rule_of_3_distinct_days",
+      promotion_gate: "rule_of_3_distinct_weeks_and_sources",
       evidence_memory_ids: sourceMemoryIds,
       evidence_count: sourceMemoryIds.length,
+      distinct_week_count: distinctWeeks.size,
+      distinct_source_count: distinctSources.size,
       ontology_phase: "phase6"
     };
 
@@ -3539,7 +3563,7 @@ async function syncOperationalHeuristics(
           metadata: {
             source: "heuristic_induction",
             heuristic_kind: pattern.heuristicKind,
-            promotion_gate: "rule_of_3_distinct_days"
+            promotion_gate: "rule_of_3_distinct_weeks_and_sources"
           }
         });
       }

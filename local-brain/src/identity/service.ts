@@ -249,7 +249,23 @@ export async function upsertNamespaceSelfProfileForClient(
     identityProfileId = profileResult.rows[0]?.id ?? "";
   }
 
+  const exactSelfEntityResult = await client.query<{ id: string }>(
+    `
+      SELECT id::text
+      FROM entities
+      WHERE namespace_id = $1
+        AND entity_type = 'self'
+        AND normalized_name = $2
+        AND merged_into_entity_id IS NULL
+      ORDER BY last_seen_at DESC
+      LIMIT 1
+    `,
+    [input.namespaceId, normalizeName(canonicalName)]
+  );
+  const exactSelfEntityId = exactSelfEntityResult.rows[0]?.id ?? null;
+
   const entityId =
+    exactSelfEntityId ??
     existingBinding?.entityId ??
     (await upsertEntity(client, input.namespaceId, "self", canonicalName, {
       source: "ops_profile",

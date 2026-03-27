@@ -282,6 +282,10 @@ export interface OpsRuntimeOperationsSettings {
     readonly workerIntervalSeconds: number;
     readonly batchLimit: number;
   };
+  readonly reconsolidation: {
+    readonly enabled: boolean;
+    readonly workerIntervalSeconds: number;
+  };
   readonly temporalSummary: {
     readonly enabled: boolean;
     readonly workerIntervalSeconds: number;
@@ -291,6 +295,10 @@ export interface OpsRuntimeOperationsSettings {
     readonly summarizerModel?: string;
     readonly summarizerPreset?: string;
     readonly systemPrompt?: string;
+  };
+  readonly provenanceAudit: {
+    readonly enabled: boolean;
+    readonly workerIntervalSeconds: number;
   };
 }
 
@@ -844,6 +852,75 @@ function resultSourceTypeFor(extension: string): SourceType {
   return extension === ".md" ? "markdown" : "text";
 }
 
+function normalizeIsoCandidate(value: string | null | undefined): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  const parsed = new Date(value.trim());
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString();
+}
+
+function extractFrontmatterCapturedAt(text: string): string | null {
+  if (!text.startsWith("---\n")) {
+    return null;
+  }
+
+  const endIndex = text.indexOf("\n---", 4);
+  if (endIndex === -1) {
+    return null;
+  }
+
+  const frontmatter = text.slice(4, endIndex);
+  const values = new Map<string, string>();
+  for (const line of frontmatter.split(/\r?\n/u)) {
+    const match = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.+?)\s*$/u);
+    if (!match) {
+      continue;
+    }
+    values.set(match[1].toLowerCase(), match[2]);
+  }
+
+  return (
+    normalizeIsoCandidate(values.get("started_at")) ??
+    normalizeIsoCandidate(values.get("captured_at")) ??
+    normalizeIsoCandidate(values.get("created_at")) ??
+    normalizeIsoCandidate(values.get("finished_at"))
+  );
+}
+
+function extractTimestampFromRelativePath(relativePath: string, fileName: string): string | null {
+  const candidate = fileName || path.basename(relativePath);
+  const match = candidate.match(/^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})Z/u);
+  if (!match) {
+    return null;
+  }
+  return normalizeIsoCandidate(`${match[1]}:${match[2]}:${match[3]}Z`);
+}
+
+async function inferCapturedAtForMonitoredFile(row: Pick<MonitoredSourceFileRow, "absolute_path" | "relative_path" | "file_name" | "extension" | "modified_at">): Promise<string> {
+  if (row.extension === ".md" || row.extension === ".txt") {
+    try {
+      const text = await readFile(row.absolute_path, "utf8");
+      const frontmatterCapturedAt = extractFrontmatterCapturedAt(text);
+      if (frontmatterCapturedAt) {
+        return frontmatterCapturedAt;
+      }
+    } catch {
+      // fall through to filename/mtime heuristics
+    }
+  }
+
+  const pathTimestamp = extractTimestampFromRelativePath(row.relative_path, row.file_name);
+  if (pathTimestamp) {
+    return pathTimestamp;
+  }
+
+  return row.modified_at ?? new Date().toISOString();
+}
+
 export async function getBootstrapState(): Promise<OpsBootstrapState> {
   const row = await getBootstrapStateRow();
   return mapBootstrapState(row);
@@ -867,9 +944,17 @@ export function resolveRuntimeOperationsSettings(metadata: Record<string, unknow
     typed.outbox && typeof typed.outbox === "object" && !Array.isArray(typed.outbox)
       ? (typed.outbox as Record<string, unknown>)
       : {};
+  const reconsolidation =
+    typed.reconsolidation && typeof typed.reconsolidation === "object" && !Array.isArray(typed.reconsolidation)
+      ? (typed.reconsolidation as Record<string, unknown>)
+      : {};
   const temporalSummary =
     typed.temporalSummary && typeof typed.temporalSummary === "object" && !Array.isArray(typed.temporalSummary)
       ? (typed.temporalSummary as Record<string, unknown>)
+      : {};
+  const provenanceAudit =
+    typed.provenanceAudit && typeof typed.provenanceAudit === "object" && !Array.isArray(typed.provenanceAudit)
+      ? (typed.provenanceAudit as Record<string, unknown>)
       : {};
 
   return {
@@ -914,6 +999,13 @@ export function resolveRuntimeOperationsSettings(metadata: Record<string, unknow
           ? Math.max(1, outbox.batchLimit)
           : 25
     },
+    reconsolidation: {
+      enabled: reconsolidation.enabled === undefined ? true : Boolean(reconsolidation.enabled),
+      workerIntervalSeconds:
+        typeof reconsolidation.workerIntervalSeconds === "number" && Number.isFinite(reconsolidation.workerIntervalSeconds)
+          ? Math.max(15, reconsolidation.workerIntervalSeconds)
+          : 90
+    },
     temporalSummary: {
       enabled: temporalSummary.enabled === undefined ? true : Boolean(temporalSummary.enabled),
       workerIntervalSeconds:
@@ -944,6 +1036,13 @@ export function resolveRuntimeOperationsSettings(metadata: Record<string, unknow
         typeof temporalSummary.systemPrompt === "string" && temporalSummary.systemPrompt.trim()
           ? temporalSummary.systemPrompt
           : undefined
+    },
+    provenanceAudit: {
+      enabled: provenanceAudit.enabled === undefined ? true : Boolean(provenanceAudit.enabled),
+      workerIntervalSeconds:
+        typeof provenanceAudit.workerIntervalSeconds === "number" && Number.isFinite(provenanceAudit.workerIntervalSeconds)
+          ? Math.max(300, provenanceAudit.workerIntervalSeconds)
+          : 60 * 60 * 24 * 7
     }
   };
 }
@@ -1471,12 +1570,13 @@ export async function importMonitoredSource(
 
   for (const row of pendingRows) {
     try {
+      const capturedAt = await inferCapturedAtForMonitoredFile(row);
       const ingestResult = await ingestArtifact({
         inputUri: row.absolute_path,
         namespaceId: sourceRow.namespace_id,
         sourceType: resultSourceTypeFor(row.extension),
         sourceChannel: `bootstrap:${sourceRow.source_type}`,
-        capturedAt: row.modified_at ?? new Date().toISOString(),
+        capturedAt,
         metadata: {
           bootstrap_import: true,
           monitored_source: true,

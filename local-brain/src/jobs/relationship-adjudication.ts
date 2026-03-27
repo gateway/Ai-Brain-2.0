@@ -25,6 +25,11 @@ interface ActiveRelationshipRow {
   readonly object_entity_id: string;
 }
 
+interface EntityAliasSignatureRow {
+  readonly canonical_name: string | null;
+  readonly aliases: readonly string[] | null;
+}
+
 interface RelationshipTenureRow {
   readonly id: string;
   readonly object_entity_id: string;
@@ -231,6 +236,109 @@ async function lookupCanonicalName(client: PoolClient, entityId: string): Promis
   );
 
   return result.rows[0]?.canonical_name ?? null;
+}
+
+function normalizeAliasSignature(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  if (left === right) {
+    return 0;
+  }
+
+  if (left.length === 0) {
+    return right.length;
+  }
+
+  if (right.length === 0) {
+    return left.length;
+  }
+
+  const costs = new Array<number>(right.length + 1);
+  for (let j = 0; j <= right.length; j += 1) {
+    costs[j] = j;
+  }
+
+  for (let i = 1; i <= left.length; i += 1) {
+    let previous = i - 1;
+    costs[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const current = costs[j];
+      const substitution = left[i - 1] === right[j - 1] ? previous : previous + 1;
+      costs[j] = Math.min(costs[j] + 1, costs[j - 1] + 1, substitution);
+      previous = current;
+    }
+  }
+
+  return costs[right.length] ?? 0;
+}
+
+async function loadEntityAliasSignature(client: PoolClient, entityId: string): Promise<readonly string[]> {
+  const result = await client.query<EntityAliasSignatureRow>(
+    `
+      SELECT
+        e.canonical_name,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT ea.alias), NULL) AS aliases
+      FROM entities e
+      LEFT JOIN entity_aliases ea ON ea.entity_id = e.id
+      WHERE e.id = $1
+      GROUP BY e.id, e.canonical_name
+      LIMIT 1
+    `,
+    [entityId]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return [];
+  }
+
+  return [...new Set([row.canonical_name, ...(row.aliases ?? [])].filter(Boolean).map((value) => normalizeAliasSignature(String(value))))];
+}
+
+function aliasSignaturesSemanticallyConflict(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length === 0 || right.length === 0) {
+    return false;
+  }
+
+  const rightSet = new Set(right);
+  for (const leftAlias of left) {
+    if (rightSet.has(leftAlias)) {
+      return true;
+    }
+    for (const rightAlias of right) {
+      if (!leftAlias || !rightAlias) {
+        continue;
+      }
+      if (leftAlias[0] !== rightAlias[0]) {
+        continue;
+      }
+      const distance = levenshteinDistance(leftAlias, rightAlias);
+      if (distance <= 1 || ((leftAlias.includes(rightAlias) || rightAlias.includes(leftAlias)) && distance <= 2)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+async function hasSemanticExclusiveConflict(
+  client: PoolClient,
+  candidateObjectEntityId: string,
+  activeObjectEntityId: string
+): Promise<boolean> {
+  const [candidateSignature, activeSignature] = await Promise.all([
+    loadEntityAliasSignature(client, candidateObjectEntityId),
+    loadEntityAliasSignature(client, activeObjectEntityId)
+  ]);
+
+  return aliasSignaturesSemanticallyConflict(candidateSignature, activeSignature);
 }
 
 async function upsertCurrentRelationshipState(
@@ -1160,6 +1268,36 @@ export async function runRelationshipAdjudication(
       const activeConflicts = isExclusivePredicate(canonicalPredicate)
         ? conflictingActive.rows.filter((row) => row.object_entity_id !== candidate.object_entity_id)
         : [];
+
+      const semanticConflicts: ActiveRelationshipRow[] = [];
+      for (const prior of activeConflicts) {
+        if (await hasSemanticExclusiveConflict(client, candidate.object_entity_id, prior.object_entity_id)) {
+          semanticConflicts.push(prior);
+        }
+      }
+      if (semanticConflicts.length > 0) {
+        const reason =
+          "Accepted relationship evidence without active promotion because the new tenure conflicts semantically with an existing active alias/persona and needs merge or clarification before supersession.";
+        await markRelationshipCandidate(client, candidate.id, "accepted", reason);
+        await logEvent(client, {
+          namespaceId,
+          candidateId: candidate.id,
+          relationshipMemoryId: null,
+          action: "accepted",
+          reason,
+          metadata: {
+            run_id: context.runId,
+            confidence: candidate.confidence,
+            prior_score: candidate.prior_score,
+            effective_confidence: effectiveConfidence,
+            prior_reason: candidate.prior_reason,
+            semantic_conflict_object_entity_ids: semanticConflicts.map((row) => row.object_entity_id),
+            semantic_conflict_count: semanticConflicts.length
+          }
+        });
+        accepted += 1;
+        continue;
+      }
 
       const inserted = await client.query<{ id: string }>(
         `

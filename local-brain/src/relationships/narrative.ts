@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { loadNamespaceSelfProfileForClient, upsertNamespaceSelfProfileForClient } from "../identity/service.js";
 import type { SceneRecord, TimeGranularity } from "../types.js";
+import { stageExternalRelationCandidatesForScenes } from "./external-ie.js";
 
 type EntityType = "self" | "person" | "place" | "org" | "project" | "activity" | "media" | "skill" | "decision" | "constraint" | "routine" | "style_spec" | "goal" | "plan" | "belief" | "concept" | "unknown";
 
@@ -131,6 +132,7 @@ const PLACE_NAMES = new Map<string, string>([
   ["japan", "Japan"],
   ["koh samui", "Koh Samui"],
   ["koh samui island", "Koh Samui Island"],
+  ["kozamui", "Koh Samui"],
   ["lake tahoe", "Lake Tahoe"],
   ["mexico", "Mexico"],
   ["mexico city", "Mexico City"],
@@ -253,10 +255,27 @@ const KINSHIP_TERMS = new Set([
   "niece"
 ]);
 
+const UNKNOWN_ROLE_REFERENCES = new Set([
+  "doctor",
+  "therapist",
+  "trainer",
+  "teacher",
+  "project"
+]);
+
 const VAGUE_PLACE_PHRASES = [/^summer home$/iu, /^cabin$/iu, /^the cabin$/iu, /^lake house$/iu, /^beach house$/iu, /^family house$/iu];
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
+}
+
+function looksLikeExplicitPlaceCandidate(value: string): boolean {
+  const normalized = normalizeWhitespace(value);
+  if (!normalized) {
+    return false;
+  }
+
+  return /^[A-Z][\p{L}.-]+(?:\s+[A-Z][\p{L}.-]+){0,2}$/u.test(normalized);
 }
 
 function normalizeName(value: string): string {
@@ -409,9 +428,33 @@ function findSuggestedAliasMatches(rawText: string, namespaceAliases: ReadonlyMa
     return [];
   }
 
+  const rawTokens = normalizeWhitespace(rawText)
+    .toLowerCase()
+    .split(/\s+/u)
+    .filter(Boolean);
   const canonicals = new Set<string>();
   for (const [alias, canonical] of namespaceAliases.entries()) {
     if (!alias || !canonical) {
+      continue;
+    }
+
+    const canonicalTokens = normalizeWhitespace(canonical)
+      .toLowerCase()
+      .split(/\s+/u)
+      .filter(Boolean);
+    const sharedTokens = rawTokens.filter((token) => canonicalTokens.includes(token));
+    const canonicalNormalized = normalizeName(canonical);
+    const sameLastToken =
+      rawTokens.length > 1 &&
+      canonicalTokens.length > 1 &&
+      rawTokens[rawTokens.length - 1] === canonicalTokens[canonicalTokens.length - 1];
+    const tokenCompatible =
+      rawTokens.length < 2 ||
+      canonicalTokens.length < 2 ||
+      sharedTokens.length >= 2 ||
+      sameLastToken ||
+      levenshteinDistance(normalizedRaw, canonicalNormalized) <= 2;
+    if (!tokenCompatible) {
       continue;
     }
 
@@ -554,6 +597,21 @@ function extractStandaloneVaguePlaceReference(sceneText: string): string | null 
     /\b(the\s+summer\s+cabin|the\s+cabin\s+near\s+the\s+lake|the\s+old\s+house\s+by\s+the\s+beach|the\s+london\s+building\s+south\s+wing)\b/iu
   );
   return normalizeWhitespace(match?.[1] ?? "") || null;
+}
+
+function extractStandaloneUnknownRoleReference(sceneText: string): string | null {
+  const normalized = normalizeWhitespace(sceneText);
+  if (!normalized) {
+    return null;
+  }
+
+  const match = normalized.match(/\b(the\s+doctor|the\s+therapist|the\s+trainer|the\s+teacher|the\s+project)\b/iu);
+  const rawText = normalizeWhitespace(match?.[1] ?? "").replace(/^the\s+/iu, "");
+  if (!rawText) {
+    return null;
+  }
+
+  return UNKNOWN_ROLE_REFERENCES.has(normalizeName(rawText)) ? rawText : null;
 }
 
 async function loadExistingSelfName(client: PoolClient, namespaceId: string): Promise<string | null> {
@@ -701,13 +759,25 @@ async function loadNamespacePersonAliases(client: PoolClient, namespaceId: strin
   );
 
   const aliases = new Map<string, string>();
+  const registerAlias = (rawAlias: string, canonicalName: string) => {
+    const normalizedAlias = normalizeName(rawAlias);
+    if (!normalizedAlias) {
+      return;
+    }
+    const existing = aliases.get(normalizedAlias);
+    if (existing && existing !== canonicalName) {
+      aliases.delete(normalizedAlias);
+      return;
+    }
+    aliases.set(normalizedAlias, canonicalName);
+  };
   for (const row of result.rows) {
     const canonicalName = normalizeWhitespace(row.canonical_name);
     const firstToken = canonicalName.split(/\s+/u)[0] ?? "";
-    aliases.set(normalizeName(row.alias), canonicalName);
-    aliases.set(normalizeName(canonicalName), canonicalName);
+    registerAlias(row.alias, canonicalName);
+    registerAlias(canonicalName, canonicalName);
     if (firstToken) {
-      aliases.set(normalizeName(firstToken), canonicalName);
+      registerAlias(firstToken, canonicalName);
     }
   }
 
@@ -835,6 +905,7 @@ function resolvePersonName(
   }
 
   const normalized = normalizeName(cleaned);
+  const tokenCount = cleaned.split(/\s+/u).filter(Boolean).length;
   const normalizedSelf = selfName ? normalizeName(selfName) : null;
   const shouldRejectFalseSelf = (candidate: string | undefined): boolean =>
     Boolean(candidate && normalizedSelf && normalizeName(candidate) === normalizedSelf && normalized !== normalizedSelf);
@@ -844,7 +915,17 @@ function resolvePersonName(
     return aliased;
   }
 
-  if (looksLikePersonName(cleaned)) {
+  const direct = explicitPeople.find((name) => normalizeName(name) === normalized);
+  if (direct && !shouldRejectFalseSelf(direct)) {
+    return direct;
+  }
+
+  const titled = looksLikePersonName(cleaned) ? titleCase(cleaned) : undefined;
+  if (titled && !shouldRejectFalseSelf(titled) && tokenCount > 1) {
+    return titled;
+  }
+
+  if (looksLikePersonName(cleaned) && tokenCount === 1) {
     const fuzzyMatches = unique(findSuggestedAliasMatches(cleaned, aliasMap));
     if (fuzzyMatches.length === 1 && !shouldRejectFalseSelf(fuzzyMatches[0])) {
       return fuzzyMatches[0];
@@ -855,17 +936,12 @@ function resolvePersonName(
     return selfName;
   }
 
-  const byFirstName = explicitPeople.find((name) => normalizeName(name.split(/\s+/u)[0] ?? "") === normalized);
+  const byFirstName = tokenCount === 1
+    ? explicitPeople.find((name) => normalizeName(name.split(/\s+/u)[0] ?? "") === normalized)
+    : undefined;
   if (byFirstName && !shouldRejectFalseSelf(byFirstName)) {
     return byFirstName;
   }
-
-  const direct = explicitPeople.find((name) => normalizeName(name) === normalized);
-  if (direct && !shouldRejectFalseSelf(direct)) {
-    return direct;
-  }
-
-  const titled = looksLikePersonName(cleaned) ? titleCase(cleaned) : undefined;
   return shouldRejectFalseSelf(titled) ? undefined : titled;
 }
 
@@ -873,6 +949,7 @@ function extractClaimsFromScene(
   sceneText: string,
   selfName: string | null,
   knownAliases: ReadonlyMap<string, string>,
+  speakerNameOverride?: string | null,
   context?: {
     readonly lastPerson?: string;
     readonly lastOtherPerson?: string;
@@ -901,7 +978,7 @@ function extractClaimsFromScene(
   const claims: NarrativeClaim[] = [];
   const recentPeople = new Set<string>(explicitPeople);
   const sentences = splitSentences(sceneText);
-  let resolvedSelfName = selfName;
+  let resolvedSelfName = speakerNameOverride ?? selfName;
   let lastPerson: string | undefined = context?.lastPerson;
   let lastOtherPerson: string | undefined = context?.lastOtherPerson;
   let lastProject: string | undefined = discovered.projects[0] ?? context?.lastProject;
@@ -1057,8 +1134,8 @@ function extractClaimsFromScene(
           predicate: currentResidenceHint ? "currently_in" : "lives_in",
           objectName: rawPlace,
           objectType: "place",
-          confidence: 0.48,
-          status: "pending"
+          confidence: looksLikeExplicitPlaceCandidate(rawPlace) ? 0.76 : 0.48,
+          status: looksLikeExplicitPlaceCandidate(rawPlace) ? "accepted" : "pending"
         });
       }
 
@@ -2067,6 +2144,78 @@ function extractClaimsFromScene(
       lastPerson = person;
     }
 
+    const worksCloselyWithMatch = sentenceText.match(
+      /\b((?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})|I)\s+works?\s+closely\s+with\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/iu
+    );
+    if (worksCloselyWithMatch) {
+      const rawSubject = normalizeWhitespace(worksCloselyWithMatch[1] ?? "");
+      const subjectPerson =
+        rawSubject === "I" ? resolvedSelfName ?? undefined : resolvePersonName(rawSubject, aliasMap, resolvedSelfName, explicitPeople);
+      const colleague = resolvePersonName(worksCloselyWithMatch[2], aliasMap, resolvedSelfName, explicitPeople);
+      if (subjectPerson && colleague && normalizeName(subjectPerson) !== normalizeName(colleague)) {
+        claims.push({
+          claimType: "relationship",
+          subjectName: subjectPerson,
+          subjectType: subjectPerson === resolvedSelfName ? "self" : "person",
+          predicate: "works_with",
+          objectName: colleague,
+          objectType: "person",
+          confidence: 0.84,
+          status: "accepted",
+          metadata: { source_hint: "works_closely_with" }
+        });
+        lastPerson = colleague;
+      }
+    }
+
+    const colleagueOfMatch = sentenceText.match(
+      /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+is\s+a\s+colleague\s+of\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/iu
+    );
+    if (colleagueOfMatch) {
+      const colleague = resolvePersonName(colleagueOfMatch[1], aliasMap, resolvedSelfName, explicitPeople);
+      const subjectPerson = resolvePersonName(colleagueOfMatch[2], aliasMap, resolvedSelfName, explicitPeople);
+      if (subjectPerson && colleague && normalizeName(subjectPerson) !== normalizeName(colleague)) {
+        claims.push({
+          claimType: "relationship",
+          subjectName: subjectPerson,
+          subjectType: subjectPerson === resolvedSelfName ? "self" : "person",
+          predicate: "works_with",
+          objectName: colleague,
+          objectType: "person",
+          confidence: 0.8,
+          status: "accepted",
+          metadata: { source_hint: "colleague_of" }
+        });
+      }
+    }
+
+    const siblingMatch = sentenceText.match(
+      /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})['’]s\s+(sister|brother)\b/iu
+    );
+    if (siblingMatch) {
+      const siblingPerson = resolvePersonName(siblingMatch[1], aliasMap, resolvedSelfName, explicitPeople);
+      const subjectPerson = resolvePersonName(siblingMatch[2], aliasMap, resolvedSelfName, explicitPeople);
+      const role = normalizeWhitespace(siblingMatch[3] ?? "").toLowerCase();
+      if (subjectPerson && siblingPerson && normalizeName(subjectPerson) !== normalizeName(siblingPerson)) {
+        claims.push({
+          claimType: "relationship",
+          subjectName: siblingPerson,
+          subjectType: siblingPerson === resolvedSelfName ? "self" : "person",
+          predicate: "sibling_of",
+          objectName: subjectPerson,
+          objectType: subjectPerson === resolvedSelfName ? "self" : "person",
+          confidence: 0.9,
+          status: "accepted",
+          metadata: { kinship_role: role }
+        });
+        lastPerson = siblingPerson;
+        if (normalizeName(siblingPerson) !== normalizeName(resolvedSelfName ?? "")) {
+          lastOtherPerson = siblingPerson;
+          recentPeople.add(siblingPerson);
+        }
+      }
+    }
+
     const explicitProjectStatusMatch = sentenceText.match(
       /\b([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4})\s+status\s+is\s+(active|on hold|paused|blocked|archived|in progress)\b/iu
     );
@@ -2918,6 +3067,21 @@ function buildNarrativeEventDraft(scene: SceneRecord, claims: readonly ResolvedN
   };
 }
 
+function normalizeNarrativeTimestamp(value: string | null | undefined, fallbackIso: string): string {
+  if (!value) {
+    return fallbackIso;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return fallbackIso;
+  }
+  const year = parsed.getUTCFullYear();
+  if (year < 1900 || year > 2100) {
+    return fallbackIso;
+  }
+  return parsed.toISOString();
+}
+
 function buildNarrativeEventDrafts(scene: SceneRecord, claims: readonly ResolvedNarrativeClaim[]): readonly NarrativeEventDraft[] {
   const baseDraft = buildNarrativeEventDraft(scene, claims);
   const activityMatches = detectSceneActivities(scene.text);
@@ -2977,7 +3141,7 @@ function predicateMatchesObjectType(
     return objectType === "org";
   }
 
-  if (predicate === "works_with" || predicate === "friend_of" || predicate === "was_with" || predicate === "met_through") {
+  if (predicate === "works_with" || predicate === "friend_of" || predicate === "was_with" || predicate === "met_through" || predicate === "sibling_of") {
     return objectType === "person" || objectType === "self";
   }
 
@@ -3639,7 +3803,19 @@ export async function stageNarrativeClaims(
     });
   }
 
+  const normalizedInputCapturedAt = normalizeNarrativeTimestamp(input.capturedAt, new Date().toISOString());
+
   for (const scene of input.scenes) {
+    const safeCapturedAt = normalizedInputCapturedAt;
+    const safeSceneOccurredAt = normalizeNarrativeTimestamp(scene.occurredAt, safeCapturedAt);
+    const safeSceneTimeStart = scene.timeStart ? normalizeNarrativeTimestamp(scene.timeStart, safeSceneOccurredAt) : null;
+    const safeSceneTimeEnd = scene.timeEnd ? normalizeNarrativeTimestamp(scene.timeEnd, safeSceneOccurredAt) : null;
+    const safeScene: SceneRecord = {
+      ...scene,
+      occurredAt: safeSceneOccurredAt,
+      timeStart: safeSceneTimeStart ?? undefined,
+      timeEnd: safeSceneTimeEnd ?? undefined
+    };
     const sceneSource = input.sceneSources.find((entry) => entry.sceneIndex === scene.sceneIndex);
     const sceneInsert = await client.query<{ id: string }>(
       `
@@ -3686,25 +3862,32 @@ export async function stageNarrativeClaims(
         input.namespaceId,
         input.artifactId,
         input.observationId,
-        scene.sceneIndex,
-        scene.sceneKind,
-        scene.text,
-        scene.occurredAt,
-        input.capturedAt,
-        scene.timeExpressionText ?? null,
-        scene.timeStart ?? null,
-        scene.timeEnd ?? null,
-        scene.timeGranularity ?? "unknown",
-        scene.timeConfidence ?? 0.2,
-        scene.isRelativeTime ?? false,
-        scene.anchorBasis ?? "fallback",
-        scene.anchorSceneIndex !== undefined ? sceneIdByIndex.get(scene.anchorSceneIndex) ?? null : null,
-        scene.anchorConfidence ?? 0.2,
+        safeScene.sceneIndex,
+        safeScene.sceneKind,
+        safeScene.text,
+        safeScene.occurredAt,
+        safeCapturedAt,
+        safeScene.timeExpressionText ?? null,
+        safeSceneTimeStart,
+        safeSceneTimeEnd,
+        safeScene.timeGranularity ?? "unknown",
+        safeScene.timeConfidence ?? 0.2,
+        safeScene.isRelativeTime ?? false,
+        safeScene.anchorBasis ?? "fallback",
+        safeScene.anchorSceneIndex !== undefined ? sceneIdByIndex.get(safeScene.anchorSceneIndex) ?? null : null,
+        safeScene.anchorConfidence ?? 0.2,
         JSON.stringify({
           fragment_count: sceneSource?.sourceMemoryIds.length ?? 0,
           extraction_method: "deterministic_scene_claims",
           source_memory_ids: sceneSource?.sourceMemoryIds ?? [],
-          source_chunk_ids: sceneSource?.sourceChunkIds ?? []
+          source_chunk_ids: sceneSource?.sourceChunkIds ?? [],
+          speaker_name: safeScene.speaker ?? null,
+          utterance_index: safeScene.utteranceIndex ?? null,
+          utterance_start_ms: safeScene.utteranceStartMs ?? null,
+          utterance_end_ms: safeScene.utteranceEndMs ?? null,
+          transcript_confidence: safeScene.transcriptConfidence ?? null,
+          raw_scene_text: safeScene.rawText ?? null,
+          ...(safeScene.metadata ?? {})
         })
       ]
     );
@@ -3716,9 +3899,10 @@ export async function stageNarrativeClaims(
     sceneIdByIndex.set(scene.sceneIndex, sceneId);
 
     const { claims, aliases, sceneAliases, lastPerson, lastOtherPerson, lastProject, lastOrg, lastPlace } = extractClaimsFromScene(
-      scene.text,
+      safeScene.text,
       knownSelfName,
       namespaceAliases,
+      safeScene.speaker ?? null,
       sceneContext
     );
     sceneContext = {
@@ -3732,22 +3916,29 @@ export async function stageNarrativeClaims(
 
     for (const claim of claims) {
       const normalizedKnownSelf = knownSelfName ? normalizeName(knownSelfName) : null;
+      const normalizedSceneSpeaker = scene.speaker ? normalizeName(scene.speaker) : null;
       const normalizedSubject = claim.subjectName ? normalizeName(claim.subjectName) : null;
       const normalizedObject = claim.objectName ? normalizeName(claim.objectName) : null;
       const subjectAliasCanonical = normalizedSubject ? namespaceAliases.get(normalizedSubject) ?? null : null;
       const objectAliasCanonical = normalizedObject ? namespaceAliases.get(normalizedObject) ?? null : null;
-      const subjectType =
+      let subjectType =
         normalizedKnownSelf &&
         (normalizedSubject === normalizedKnownSelf ||
           (subjectAliasCanonical !== null && normalizeName(subjectAliasCanonical) === normalizedKnownSelf))
           ? "self"
           : claim.subjectType;
-      const objectType =
+      let objectType =
         normalizedKnownSelf &&
         (normalizedObject === normalizedKnownSelf ||
           (objectAliasCanonical !== null && normalizeName(objectAliasCanonical) === normalizedKnownSelf))
           ? "self"
           : claim.objectType;
+      if (normalizedSceneSpeaker && subjectType === "self" && normalizedSubject === normalizedSceneSpeaker) {
+        subjectType = normalizedKnownSelf && normalizedSceneSpeaker === normalizedKnownSelf ? "self" : "person";
+      }
+      if (normalizedSceneSpeaker && objectType === "self" && normalizedObject === normalizedSceneSpeaker) {
+        objectType = normalizedKnownSelf && normalizedSceneSpeaker === normalizedKnownSelf ? "self" : "person";
+      }
       const canonicalSubjectName =
         claim.subjectName && subjectType === "self"
           ? preferredCanonicalSelfName(knownSelfName, subjectAliasCanonical ?? claim.subjectName)
@@ -3809,8 +4000,10 @@ export async function stageNarrativeClaims(
       if (subjectType === "self" && claim.subjectName) {
         const canonicalSelfName = canonicalSubjectName ?? preferredCanonicalSelfName(knownSelfName, claim.subjectName);
         knownSelfName = canonicalSelfName;
-        namespaceAliases.set(normalizeName(claim.subjectName), canonicalSelfName);
         namespaceAliases.set(normalizeName(canonicalSelfName), canonicalSelfName);
+        if (!namespaceAliases.has(normalizeName(claim.subjectName)) || namespaceAliases.get(normalizeName(claim.subjectName)) === canonicalSelfName) {
+          namespaceAliases.set(normalizeName(claim.subjectName), canonicalSelfName);
+        }
         await upsertNamespaceSelfProfileForClient(client, {
           namespaceId: input.namespaceId,
           canonicalName: canonicalSelfName,
@@ -3820,16 +4013,24 @@ export async function stageNarrativeClaims(
       }
 
       if (subjectType === "person" && claim.subjectName && subjectEntityId) {
-        namespaceAliases.set(normalizeName(claim.subjectName), claim.subjectName);
+        if (!namespaceAliases.has(normalizeName(claim.subjectName)) || namespaceAliases.get(normalizeName(claim.subjectName)) === claim.subjectName) {
+          namespaceAliases.set(normalizeName(claim.subjectName), claim.subjectName);
+        }
         for (const alias of subjectAliasList) {
-          namespaceAliases.set(normalizeName(alias), claim.subjectName);
+          if (!namespaceAliases.has(normalizeName(alias)) || namespaceAliases.get(normalizeName(alias)) === claim.subjectName) {
+            namespaceAliases.set(normalizeName(alias), claim.subjectName);
+          }
         }
       }
 
       if (objectType === "person" && claim.objectName && objectEntityId) {
-        namespaceAliases.set(normalizeName(claim.objectName), claim.objectName);
+        if (!namespaceAliases.has(normalizeName(claim.objectName)) || namespaceAliases.get(normalizeName(claim.objectName)) === claim.objectName) {
+          namespaceAliases.set(normalizeName(claim.objectName), claim.objectName);
+        }
         for (const alias of objectAliasList) {
-          namespaceAliases.set(normalizeName(alias), claim.objectName);
+          if (!namespaceAliases.has(normalizeName(alias)) || namespaceAliases.get(normalizeName(alias)) === claim.objectName) {
+            namespaceAliases.set(normalizeName(alias), claim.objectName);
+          }
         }
       }
 
@@ -3890,7 +4091,7 @@ export async function stageNarrativeClaims(
       });
     }
 
-    const narrativeEventDrafts = buildNarrativeEventDrafts(scene, resolvedClaims);
+    const narrativeEventDrafts = buildNarrativeEventDrafts(safeScene, resolvedClaims);
     const primaryNarrativeEventForClaims: NarrativeEventDraft = {
       ...narrativeEventDrafts[0]!,
       metadata: {
@@ -4067,10 +4268,10 @@ export async function stageNarrativeClaims(
           typeof claim.metadata?.ambiguity_state === "string" ? claim.metadata.ambiguity_state : "none",
           typeof claim.metadata?.ambiguity_type === "string" ? claim.metadata.ambiguity_type : null,
           typeof claim.metadata?.ambiguity_reason === "string" ? claim.metadata.ambiguity_reason : null,
-          scene.occurredAt,
-          scene.timeExpressionText ?? null,
-          scene.timeStart ?? null,
-          scene.timeEnd ?? null,
+          safeScene.occurredAt,
+          safeScene.timeExpressionText ?? null,
+          safeSceneTimeStart,
+          safeSceneTimeEnd,
           scene.timeGranularity ?? "unknown",
           scene.timeConfidence ?? 0.2,
           scene.isRelativeTime ?? false,
@@ -4117,7 +4318,7 @@ export async function stageNarrativeClaims(
             sceneSource?.sourceChunkIds[0] ?? null,
             claim.subjectName ?? "",
             claim.confidence,
-            scene.occurredAt,
+            safeScene.occurredAt,
             JSON.stringify({ extractor: "deterministic_scene_claims", entity_type: claim.subjectType ?? null })
           ]
         );
@@ -4175,7 +4376,7 @@ export async function stageNarrativeClaims(
             claim.objectName,
             objectType === "place" ? "location" : objectType === "project" ? "project" : objectType === "org" ? "organization" : "participant",
             claim.confidence,
-            scene.occurredAt,
+            safeScene.occurredAt,
             JSON.stringify({ extractor: "deterministic_scene_claims", entity_type: objectType ?? null })
           ]
         );
@@ -4230,7 +4431,7 @@ export async function stageNarrativeClaims(
               sourceEventId: claimEventId,
               sourceMemoryId: sceneSource?.sourceMemoryIds[0] ?? null,
               sourceChunkId: sceneSource?.sourceChunkIds[0] ?? null,
-              occurredAt: scene.occurredAt
+              occurredAt: safeScene.occurredAt
             });
           }
         }
@@ -4241,13 +4442,13 @@ export async function stageNarrativeClaims(
         subjectEntityId &&
         objectEntityId &&
         claim.objectName &&
-        ["friend_of", "was_with", "relationship_ended", "relationship_reconnected", "relationship_contact_paused", "met_through", "from", "born_in", "lives_in", "lived_in", "currently_in", "runs", "works_at", "worked_at", "works_on", "works_with", "member_of", "created_by"].includes(
+        ["friend_of", "was_with", "relationship_ended", "relationship_reconnected", "relationship_contact_paused", "met_through", "sibling_of", "from", "born_in", "lives_in", "lived_in", "currently_in", "runs", "works_at", "worked_at", "works_on", "works_with", "member_of", "created_by"].includes(
           claim.predicate
         )
       ) {
         const relationshipPrior = computeRelationshipPrior(
           claim,
-          scene,
+          safeScene,
           primaryNarrativeEventResolved,
           primaryMergeIntoCluster,
           lookupHistoricalPriorScore(historicalPriors, subjectEntityId, objectEntityId)
@@ -4290,7 +4491,7 @@ export async function stageNarrativeClaims(
             claim.confidence,
             relationshipPrior.score,
             relationshipPrior.reason,
-            scene.occurredAt,
+            safeScene.occurredAt,
             JSON.stringify({
               extractor: "deterministic_scene_claims",
               claim_type: claim.claimType,
@@ -4310,7 +4511,7 @@ export async function stageNarrativeClaims(
       const normalizedPredicate = normalizeRelationshipPredicate(claim.predicate);
       if (
         claim.status === "accepted" &&
-        ["friend_of", "works_with", "was_with", "met_through"].includes(normalizedPredicate)
+        ["friend_of", "works_with", "was_with", "met_through", "sibling_of"].includes(normalizedPredicate)
       ) {
         if (subjectEntityId && (subjectType === "self" || subjectType === "person")) {
           sessionSocialParticipants.set(subjectEntityId, {
@@ -4427,7 +4628,7 @@ export async function stageNarrativeClaims(
             kinshipReference,
             normalizeWhitespace(kinshipReference),
             `The subject reference "${kinshipReference}" is a kinship role without a grounded person entity.`,
-            scene.occurredAt,
+            safeScene.occurredAt,
             JSON.stringify({
               raw_ambiguous_text: kinshipReference,
               suggested_matches: findSuggestedAliasMatches(kinshipReference, namespaceAliases)
@@ -4474,10 +4675,57 @@ export async function stageNarrativeClaims(
             vaguePlaceReference,
             normalizeWhitespace(vaguePlaceReference),
             `The place reference "${vaguePlaceReference}" is too vague to resolve without more context.`,
-            scene.occurredAt,
+            safeScene.occurredAt,
             JSON.stringify({
               raw_ambiguous_text: vaguePlaceReference,
               suggested_matches: findSuggestedAliasMatches(vaguePlaceReference, namespaceAliases)
+            })
+          ]
+        );
+        claimCount += 1;
+      }
+
+      const unknownRoleReference = extractStandaloneUnknownRoleReference(scene.text);
+      if (unknownRoleReference) {
+        await client.query(
+          `
+            INSERT INTO claim_candidates (
+              namespace_id,
+              source_scene_id,
+              source_event_id,
+              source_memory_id,
+              source_chunk_id,
+              claim_type,
+              subject_text,
+              subject_entity_type,
+              predicate,
+              normalized_text,
+              confidence,
+              prior_score,
+              prior_reason,
+              status,
+              ambiguity_state,
+              ambiguity_type,
+              ambiguity_reason,
+              occurred_at,
+              extraction_method,
+              metadata
+            )
+            VALUES ($1, $2, $3, $4, $5, 'identity', $6, 'person', 'unresolved_identity', $7, 0.46, 0.7, 'standalone_unknown_reference', 'accepted', 'requires_clarification', 'unknown_reference', $8, $9, 'deterministic_scene_claims', $10::jsonb)
+          `,
+          [
+            input.namespaceId,
+            sceneId,
+            claimEventId,
+            sceneSource?.sourceMemoryIds[0] ?? null,
+            sceneSource?.sourceChunkIds[0] ?? null,
+            unknownRoleReference,
+            normalizeWhitespace(unknownRoleReference),
+            `The reference "${unknownRoleReference}" is mentioned without a grounded identity.`,
+            safeScene.occurredAt,
+            JSON.stringify({
+              raw_ambiguous_text: unknownRoleReference,
+              suggested_matches: findSuggestedAliasMatches(unknownRoleReference, namespaceAliases)
             })
           ]
         );
@@ -4527,7 +4775,7 @@ export async function stageNarrativeClaims(
             participantContext.eventId,
             participantContext.sourceMemoryId,
             participantContext.sourceChunkId,
-            input.capturedAt,
+            normalizedInputCapturedAt,
             JSON.stringify({
               extractor: "session_social_circle",
               connector_scene_id: connectorContext.sceneId,
@@ -4538,6 +4786,27 @@ export async function stageNarrativeClaims(
       }
     }
   }
+
+  await stageExternalRelationCandidatesForScenes(client, {
+    namespaceId: input.namespaceId,
+    scenes: input.scenes
+      .map((scene) => {
+        const sceneId = sceneIdByIndex.get(scene.sceneIndex);
+        if (!sceneId) {
+          return null;
+        }
+        const sceneSource = input.sceneSources.find((entry) => entry.sceneIndex === scene.sceneIndex);
+        return {
+          sceneIndex: scene.sceneIndex,
+          sceneId,
+          text: scene.text,
+          occurredAt: normalizeNarrativeTimestamp(scene.occurredAt, normalizedInputCapturedAt),
+          sourceMemoryId: sceneSource?.sourceMemoryIds[0] ?? null,
+          sourceChunkId: sceneSource?.sourceChunkIds[0] ?? null
+        };
+      })
+      .filter((scene): scene is NonNullable<typeof scene> => scene !== null)
+  });
 
   return {
     sceneCount: input.scenes.length,

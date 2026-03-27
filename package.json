@@ -17,6 +17,10 @@
     "serve": "bash scripts/serve.sh",
     "serve:one": "bash scripts/serve_one_app.sh",
     "smoke:graph": "bash scripts/smoke_relationship_graph.sh",
+    "omi:sync": "bash scripts/run_omi_sync.sh",
+    "omi:schedule:enable": "bash scripts/install_omi_hourly_sync.sh",
+    "omi:schedule:disable": "bash scripts/uninstall_omi_hourly_sync.sh",
+    "omi:schedule:status": "bash scripts/status_omi_hourly_sync.sh",
     "sources:monitor": "bash scripts/run_source_monitor.sh",
     "ops:work": "bash scripts/run_runtime_ops.sh"
   }

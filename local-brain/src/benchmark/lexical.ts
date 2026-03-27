@@ -330,35 +330,7 @@ async function insertEpisodic(
     ]
   );
 
-  await queryRows(
-    `
-      INSERT INTO episodic_timeline (
-        occurred_at,
-        memory_id,
-        namespace_id,
-        session_id,
-        role,
-        content,
-        captured_at,
-        token_count,
-        metadata
-      )
-      SELECT
-        occurred_at,
-        id,
-        namespace_id,
-        session_id,
-        role,
-        content,
-        captured_at,
-        token_count,
-        metadata
-      FROM episodic_memory
-      WHERE id = $1
-      ON CONFLICT (occurred_at, memory_id) DO NOTHING
-    `,
-    [inserted.memory_id]
-  );
+  void inserted.memory_id;
 }
 
 async function insertSemantic(

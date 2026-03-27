@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { withTransaction } from "../db/client.js";
+import { linkDerivedProfileSnapshot } from "./memory-graph.js";
 import { searchMemory } from "../retrieval/service.js";
 import type { RecallConfidenceGrade } from "../retrieval/types.js";
 import type { RecallResult } from "../types.js";
@@ -53,6 +54,32 @@ interface MutableProceduralStateRow {
   readonly state_key: string;
   readonly state_value: Record<string, unknown>;
   readonly valid_from: string;
+}
+
+type DerivedProfileKind =
+  | "identity_summary"
+  | "current_picture"
+  | "focus"
+  | "role_direction"
+  | "interest_pattern"
+  | "social_pattern"
+  | "relationship_status"
+  | "project_status";
+
+type DerivedNoteFamily = "fact_note" | "profile_note" | "preference_note";
+
+interface DerivedProfileCandidate {
+  readonly personName: string;
+  readonly profileKind: DerivedProfileKind;
+  readonly canonicalKey: string;
+  readonly content: string;
+  readonly validFrom: string;
+  readonly sourceEpisodicId: string | null;
+  readonly relationshipMemoryId?: string | null;
+  readonly supportProceduralIds: readonly string[];
+  readonly supportEpisodicIds: readonly string[];
+  readonly supportStateTypes: readonly string[];
+  readonly supportStateKeys: readonly string[];
 }
 
 export interface UniversalMutableReconsolidationSummary {
@@ -117,6 +144,26 @@ function buildMutableStateSummaryCanonicalKey(stateType: string, stateKey: strin
   const normalizedStateType = normalizeSummaryContent(stateType.toLowerCase()).replace(/\s+/gu, "_");
   const normalizedStateKey = normalizeSummaryContent(stateKey.toLowerCase()).replace(/[^\p{L}\p{N}]+/gu, "_").replace(/^_+|_+$/gu, "");
   return `reconsolidated:state_summary:${normalizedStateType}:${normalizedStateKey}`;
+}
+
+function normalizePersonToken(personName: string): string {
+  return personName.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "");
+}
+
+function buildDerivedProfileCanonicalKey(profileKind: DerivedProfileKind, personName: string): string {
+  return `reconsolidated:profile_summary:${profileKind}:${normalizePersonToken(personName)}`;
+}
+
+function noteFamilyForProfileKind(profileKind: DerivedProfileKind): DerivedNoteFamily {
+  switch (profileKind) {
+    case "interest_pattern":
+      return "preference_note";
+    case "relationship_status":
+    case "project_status":
+      return "fact_note";
+    default:
+      return "profile_note";
+  }
 }
 
 function stateValueString(value: unknown): string {
@@ -209,6 +256,353 @@ function mutableStateSourceMemoryId(row: MutableProceduralStateRow): string | nu
   return typeof row.state_value?.source_memory_id === "string" && row.state_value.source_memory_id
     ? row.state_value.source_memory_id
     : null;
+}
+
+function mutableStateRelationshipMemoryId(row: MutableProceduralStateRow): string | null {
+  return typeof row.state_value?.relationship_memory_id === "string" && row.state_value.relationship_memory_id
+    ? row.state_value.relationship_memory_id
+    : null;
+}
+
+function mutableStatePersonName(row: MutableProceduralStateRow): string {
+  return stateValueString(row.state_value?.person) || "Steve";
+}
+
+function latestStateByType(rows: readonly MutableProceduralStateRow[], stateType: string): MutableProceduralStateRow | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index];
+    if (row?.state_type === stateType) {
+      return row;
+    }
+  }
+  return null;
+}
+
+function rowsByType(rows: readonly MutableProceduralStateRow[], stateType: string): readonly MutableProceduralStateRow[] {
+  return rows.filter((row) => row.state_type === stateType);
+}
+
+function listStateTargets(rows: readonly MutableProceduralStateRow[], stateType: string, extractor: (row: MutableProceduralStateRow) => string): readonly string[] {
+  const values = new Set<string>();
+  for (const row of rows) {
+    if (row.state_type !== stateType) {
+      continue;
+    }
+    const value = normalizeSummaryContent(extractor(row));
+    if (value) {
+      values.add(value);
+    }
+  }
+  return [...values];
+}
+
+function buildDerivedProfileCandidates(activeStateRows: readonly MutableProceduralStateRow[]): readonly DerivedProfileCandidate[] {
+  const rowsByPerson = new Map<string, MutableProceduralStateRow[]>();
+  for (const row of activeStateRows) {
+    const person = mutableStatePersonName(row);
+    const existing = rowsByPerson.get(person) ?? [];
+    existing.push(row);
+    rowsByPerson.set(person, existing);
+  }
+
+  const candidates: DerivedProfileCandidate[] = [];
+  for (const [personName, personRows] of rowsByPerson.entries()) {
+    const currentEmployer = latestStateByType(personRows, "current_employer");
+    const currentProject = latestStateByType(personRows, "current_project");
+    const currentRole = latestStateByType(personRows, "project_role");
+    const currentLocation = latestStateByType(personRows, "current_location");
+    const currentRelationship = latestStateByType(personRows, "current_relationship");
+    const currentGoal = latestStateByType(personRows, "goal");
+    const currentPlan = latestStateByType(personRows, "plan");
+    const currentConstraint = latestStateByType(personRows, "constraint");
+    const currentDecision = latestStateByType(personRows, "decision");
+    const preferences = rowsByType(personRows, "preference");
+    const watchlist = rowsByType(personRows, "watchlist_item");
+    const skills = rowsByType(personRows, "skill");
+    const routines = rowsByType(personRows, "routine");
+    const identityRows = rowsByType(personRows, "identity");
+
+    const buildCandidate = (
+      profileKind: DerivedProfileKind,
+      content: string,
+      supportRows: readonly MutableProceduralStateRow[]
+    ): void => {
+      const validSupportRows = supportRows.filter(Boolean);
+      if (validSupportRows.length === 0) {
+        return;
+      }
+      const normalizedContent = normalizeSummaryContent(content);
+      if (!normalizedContent) {
+        return;
+      }
+      const latestSupport = [...validSupportRows].sort((left, right) => left.valid_from.localeCompare(right.valid_from)).at(-1);
+      if (!latestSupport) {
+        return;
+      }
+      candidates.push({
+        personName,
+        profileKind,
+        canonicalKey: buildDerivedProfileCanonicalKey(profileKind, personName),
+        content: normalizedContent,
+        validFrom: latestSupport.valid_from,
+        sourceEpisodicId: mutableStateSourceMemoryId(latestSupport),
+        relationshipMemoryId: validSupportRows.map((row) => mutableStateRelationshipMemoryId(row)).find((value) => typeof value === "string") ?? null,
+        supportProceduralIds: validSupportRows.map((row) => row.id),
+        supportEpisodicIds: [
+          ...new Set(
+            validSupportRows
+              .map((row) => mutableStateSourceMemoryId(row))
+              .filter((value): value is string => typeof value === "string" && value.length > 0)
+          )
+        ],
+        supportStateTypes: [...new Set(validSupportRows.map((row) => row.state_type))],
+        supportStateKeys: [...new Set(validSupportRows.map((row) => row.state_key))]
+      });
+    };
+
+    const identitySegments: string[] = [];
+    const identitySupport: MutableProceduralStateRow[] = [];
+    const identityValues = listStateTargets(identityRows, "identity", (row) => {
+      const identity = stateValueString(row.state_value.identity) || stateValueString(row.state_value.description);
+      const qualifier = stateValueString(row.state_value.qualifier);
+      if (identity && qualifier) {
+        return `${identity} (${qualifier})`;
+      }
+      return identity;
+    }).slice(0, 3);
+    if (identityValues.length > 0) {
+      identitySegments.push(...identityValues);
+      identitySupport.push(...identityRows);
+    }
+    if (currentRole) {
+      const role = stateValueString(currentRole.state_value.role);
+      if (role) {
+        identitySegments.push(`works as ${role}`);
+        identitySupport.push(currentRole);
+      }
+    }
+    if (currentEmployer) {
+      const employer = stateValueString(currentEmployer.state_value.organization) || stateValueString(currentEmployer.state_value.employer) || stateValueString(currentEmployer.state_value.company);
+      if (employer) {
+        identitySegments.push(`at ${employer}`);
+        identitySupport.push(currentEmployer);
+      }
+    }
+    if (identitySegments.length > 0) {
+      buildCandidate(
+        "identity_summary",
+        `${personName}'s current identity summary is ${formatList(identitySegments)}.`,
+        identitySupport
+      );
+    }
+
+    const currentPictureSegments: string[] = [];
+    const currentPictureSupport: MutableProceduralStateRow[] = [];
+    if (currentEmployer) {
+      const employer = stateValueString(currentEmployer.state_value.organization) || stateValueString(currentEmployer.state_value.employer) || stateValueString(currentEmployer.state_value.company);
+      if (employer) {
+        currentPictureSegments.push(`works at ${employer}`);
+        currentPictureSupport.push(currentEmployer);
+      }
+    }
+    if (currentRole) {
+      const role = stateValueString(currentRole.state_value.role);
+      const project = stateValueString(currentRole.state_value.project) || stateValueString(currentRole.state_value.organization);
+      if (role && project) {
+        currentPictureSegments.push(`serves as ${role} on ${project}`);
+        currentPictureSupport.push(currentRole);
+      } else if (role) {
+        currentPictureSegments.push(`currently holds the role ${role}`);
+        currentPictureSupport.push(currentRole);
+      }
+    }
+    if (currentProject) {
+      const project = stateValueString(currentProject.state_value.project);
+      if (project) {
+        currentPictureSegments.push(`is focused on ${project}`);
+        currentPictureSupport.push(currentProject);
+      }
+    }
+    if (currentLocation) {
+      const place = stateValueString(currentLocation.state_value.place) || stateValueString(currentLocation.state_value.place_name) || stateValueString(currentLocation.state_value.location);
+      if (place) {
+        currentPictureSegments.push(`lives in ${place}`);
+        currentPictureSupport.push(currentLocation);
+      }
+    }
+    if (currentRelationship) {
+      const partnerName = stateValueString(currentRelationship.state_value.partner_name);
+      if (partnerName) {
+        currentPictureSegments.push(`is dating ${partnerName}`);
+        currentPictureSupport.push(currentRelationship);
+      }
+    }
+    if (currentPictureSegments.length > 0) {
+      buildCandidate(
+        "current_picture",
+        `${personName}'s current picture is that ${formatList(currentPictureSegments)}.`,
+        currentPictureSupport
+      );
+    }
+
+    const focusSegments: string[] = [];
+    const focusSupport: MutableProceduralStateRow[] = [];
+    if (currentGoal) {
+      const goal = stateValueString(currentGoal.state_value.goal);
+      if (goal) {
+        focusSegments.push(`primary goal is ${goal}`);
+        focusSupport.push(currentGoal);
+      }
+    }
+    if (currentPlan) {
+      const plan = stateValueString(currentPlan.state_value.plan);
+      if (plan) {
+        focusSegments.push(`active plan is ${plan}`);
+        focusSupport.push(currentPlan);
+      }
+    }
+    if (currentDecision) {
+      const decision = stateValueString(currentDecision.state_value.decision);
+      if (decision) {
+        focusSegments.push(`current decision is ${decision}`);
+        focusSupport.push(currentDecision);
+      }
+    }
+    if (currentConstraint) {
+      const constraint = stateValueString(currentConstraint.state_value.constraint);
+      if (constraint) {
+        focusSegments.push(`working around constraint ${constraint}`);
+        focusSupport.push(currentConstraint);
+      }
+    }
+    if (currentProject) {
+      const project = stateValueString(currentProject.state_value.project);
+      if (project) {
+        focusSegments.push(`working on ${project}`);
+        focusSupport.push(currentProject);
+      }
+    }
+    if (focusSegments.length > 0) {
+      buildCandidate(
+        "focus",
+        `${personName} is currently focused on ${formatList(focusSegments)}.`,
+        focusSupport
+      );
+    }
+
+    const roleSegments: string[] = [];
+    const roleSupport: MutableProceduralStateRow[] = [];
+    if (currentRole) {
+      const role = stateValueString(currentRole.state_value.role);
+      if (role) {
+        roleSegments.push(role);
+        roleSupport.push(currentRole);
+      }
+    }
+    if (currentEmployer) {
+      const employer = stateValueString(currentEmployer.state_value.organization) || stateValueString(currentEmployer.state_value.employer) || stateValueString(currentEmployer.state_value.company);
+      if (employer) {
+        roleSegments.push(`at ${employer}`);
+        roleSupport.push(currentEmployer);
+      }
+    }
+    if (currentGoal) {
+      const goal = stateValueString(currentGoal.state_value.goal);
+      if (goal) {
+        roleSegments.push(`with direction toward ${goal}`);
+        roleSupport.push(currentGoal);
+      }
+    }
+    if (roleSegments.length > 0) {
+      buildCandidate(
+        "role_direction",
+        `${personName}'s current role direction centers on ${formatList(roleSegments)}.`,
+        roleSupport
+      );
+    }
+
+    const interestTargets = [
+      ...listStateTargets(preferences, "preference", (row) => {
+        const polarity = stateValueString(row.state_value.polarity);
+        const target = stateValueString(row.state_value.target);
+        if (!target) {
+          return "";
+        }
+        return polarity === "dislike" ? `avoiding ${target}` : target;
+      }),
+      ...listStateTargets(watchlist, "watchlist_item", (row) => stateValueString(row.state_value.title)),
+      ...listStateTargets(skills, "skill", (row) => stateValueString(row.state_value.skill)),
+      ...listStateTargets(routines, "routine", (row) => stateValueString(row.state_value.routine))
+    ].slice(0, 4);
+    const interestSupport = [...preferences, ...watchlist, ...skills, ...routines];
+    if (interestTargets.length >= 2) {
+      buildCandidate(
+        "interest_pattern",
+        `${personName}'s recurring interests and preferences include ${formatList(interestTargets)}.`,
+        interestSupport
+      );
+    }
+
+    const socialSegments: string[] = [];
+    const socialSupport: MutableProceduralStateRow[] = [];
+    if (currentRelationship) {
+      const partnerName = stateValueString(currentRelationship.state_value.partner_name);
+      if (partnerName) {
+        socialSegments.push(`dating ${partnerName}`);
+        socialSupport.push(currentRelationship);
+      }
+    }
+    if (routines.length > 0) {
+      const routineValues = listStateTargets(routines, "routine", (row) => stateValueString(row.state_value.routine)).slice(0, 2);
+      if (routineValues.length > 0) {
+        socialSegments.push(`keeping routines like ${formatList(routineValues)}`);
+        socialSupport.push(...routines);
+      }
+    }
+    if (socialSegments.length > 0) {
+      buildCandidate(
+        "social_pattern",
+        `${personName}'s current social pattern includes ${formatList(socialSegments)}.`,
+        socialSupport
+      );
+    }
+
+    if (currentRelationship) {
+      const partnerName = stateValueString(currentRelationship.state_value.partner_name);
+      const status =
+        stateValueString(currentRelationship.state_value.relationship_status) ||
+        stateValueString(currentRelationship.state_value.status) ||
+        (partnerName ? `dating ${partnerName}` : "");
+      if (status) {
+        buildCandidate(
+          "relationship_status",
+          `${personName}'s current relationship status is ${status}.`,
+          [currentRelationship]
+        );
+      }
+    }
+
+    if (currentProject) {
+      const project = stateValueString(currentProject.state_value.project);
+      const projectStatus =
+        stateValueString(currentProject.state_value.status) ||
+        stateValueString(currentProject.state_value.project_status) ||
+        (project ? `working on ${project}` : "");
+      if (projectStatus) {
+        const projectSummary =
+          project && !normalizeSummaryContent(projectStatus).includes(normalizeSummaryContent(project))
+            ? `${project} (${projectStatus})`
+            : projectStatus;
+        buildCandidate(
+          "project_status",
+          `${personName}'s current project status is ${projectSummary}.`,
+          [currentProject]
+        );
+      }
+    }
+  }
+
+  return candidates;
 }
 
 function parseRelationshipProfileConsistencyQuery(query: string): string | null {
@@ -916,6 +1310,7 @@ export async function runUniversalMutableReconsolidation(namespaceId: string): P
         WHERE namespace_id = $1
           AND valid_until IS NULL
           AND state_type IN (
+            'identity',
             'current_location',
             'current_employer',
             'current_project',
@@ -952,9 +1347,37 @@ export async function runUniversalMutableReconsolidation(namespaceId: string): P
       `,
       [namespaceId]
     );
+    const existingProfileRows = await client.query<{
+      id: string;
+      canonical_key: string;
+      content_abstract: string;
+    }>(
+      `
+        SELECT id, canonical_key, content_abstract
+        FROM semantic_memory
+        WHERE namespace_id = $1
+          AND memory_kind = 'profile_summary'
+          AND status = 'active'
+          AND valid_until IS NULL
+          AND (
+            canonical_key LIKE 'reconsolidated:profile_summary:identity_summary:%'
+            OR
+            canonical_key LIKE 'reconsolidated:profile_summary:current_picture:%'
+            OR canonical_key LIKE 'reconsolidated:profile_summary:focus:%'
+            OR canonical_key LIKE 'reconsolidated:profile_summary:role_direction:%'
+            OR canonical_key LIKE 'reconsolidated:profile_summary:interest_pattern:%'
+            OR canonical_key LIKE 'reconsolidated:profile_summary:social_pattern:%'
+            OR canonical_key LIKE 'reconsolidated:profile_summary:relationship_status:%'
+            OR canonical_key LIKE 'reconsolidated:profile_summary:project_status:%'
+          )
+      `,
+      [namespaceId]
+    );
 
     const existingByKey = new Map(existingSummaryRows.rows.map((row) => [row.canonical_key, row] as const));
+    const existingProfileByKey = new Map(existingProfileRows.rows.map((row) => [row.canonical_key, row] as const));
     const activeKeys = new Set<string>();
+    const activeProfileKeys = new Set<string>();
     let added = 0;
     let superseded = 0;
     let retired = 0;
@@ -1074,6 +1497,181 @@ export async function runUniversalMutableReconsolidation(namespaceId: string): P
       );
     }
 
+    const derivedProfileCandidates = buildDerivedProfileCandidates(activeStateRows.rows);
+    for (const candidate of derivedProfileCandidates) {
+      const noteFamily = noteFamilyForProfileKind(candidate.profileKind);
+      activeProfileKeys.add(candidate.canonicalKey);
+      processedKeys.push(candidate.canonicalKey);
+      const existing = existingProfileByKey.get(candidate.canonicalKey);
+      if (existing && normalizeSummaryContent(existing.content_abstract) === candidate.content) {
+        abstained += 1;
+        await client.query(
+          `
+            INSERT INTO memory_reconsolidation_events (
+              namespace_id,
+              query_text,
+              trigger_confidence,
+              action,
+              target_memory_kind,
+              semantic_memory_id,
+              source_episodic_id,
+              reason,
+              metadata
+            )
+            VALUES ($1, $2, 'weak', 'abstain', 'profile_summary', $3::uuid, $4::uuid, $5, $6::jsonb)
+          `,
+          [
+            namespaceId,
+            `reinforce profile summary for ${candidate.profileKind}:${candidate.personName}`,
+            existing.id,
+            candidate.sourceEpisodicId,
+            `A matching ${candidate.profileKind} profile summary already existed.`,
+            JSON.stringify({
+              run_id: runId,
+              canonical_key: candidate.canonicalKey,
+              person_name: candidate.personName,
+              profile_kind: candidate.profileKind,
+              note_family: noteFamily,
+              adjudication_action: "reinforce",
+              reconsolidation_decision: "reinforce",
+              support_episodic_ids: candidate.supportEpisodicIds,
+              support_procedural_ids: candidate.supportProceduralIds,
+              support_state_types: candidate.supportStateTypes,
+              support_state_keys: candidate.supportStateKeys
+            })
+          ]
+        );
+        continue;
+      }
+
+      const insertResult = await client.query<{ id: string }>(
+        `
+          INSERT INTO semantic_memory (
+            namespace_id,
+            content_abstract,
+            importance_score,
+            valid_from,
+            valid_until,
+            status,
+            is_anchor,
+            source_episodic_id,
+            memory_kind,
+            canonical_key,
+            normalized_value,
+            metadata,
+            decay_exempt
+          )
+          VALUES ($1, $2, 0.87, $3::timestamptz, NULL, 'active', true, $4::uuid, 'profile_summary', $5, $6::jsonb, $7::jsonb, true)
+          RETURNING id
+        `,
+        [
+          namespaceId,
+          candidate.content,
+          candidate.validFrom,
+          candidate.sourceEpisodicId,
+          candidate.canonicalKey,
+          JSON.stringify({
+            person_name: candidate.personName,
+            profile_kind: candidate.profileKind,
+            note_family: noteFamily,
+            support_episodic_ids: candidate.supportEpisodicIds,
+            support_procedural_ids: candidate.supportProceduralIds,
+            support_state_types: candidate.supportStateTypes,
+            support_state_keys: candidate.supportStateKeys,
+            supersession_lineage: existing?.id ? [existing.id] : []
+          }),
+          JSON.stringify({
+            source: "memory_reconsolidation",
+            run_id: runId,
+            reconsolidation_kind: "derived_profile_snapshot",
+            adjudication_action: existing ? "update" : "add",
+            reconsolidation_decision: existing ? "update" : "add",
+            source_family: "derived_profile_snapshot",
+            person_name: candidate.personName,
+            profile_kind: candidate.profileKind,
+            note_family: noteFamily,
+            support_episodic_ids: candidate.supportEpisodicIds,
+            support_procedural_ids: candidate.supportProceduralIds
+          })
+        ]
+      );
+
+      const semanticMemoryId = insertResult.rows[0]?.id;
+      if (!semanticMemoryId) {
+        throw new Error(`Failed to create derived profile summary for ${candidate.profileKind}:${candidate.personName}.`);
+      }
+
+      await linkDerivedProfileSnapshot(client, {
+        namespaceId,
+        semanticMemoryId,
+        sourceEpisodicId: candidate.sourceEpisodicId,
+        supportProceduralIds: candidate.supportProceduralIds,
+        relationshipMemoryId: candidate.relationshipMemoryId,
+        supersedesSemanticId: existing?.id ?? null,
+        profileKind: candidate.profileKind
+      });
+
+      added += 1;
+      let eventAction: "add" | "supersede" = "add";
+      let reason = `Added ${candidate.profileKind} profile summary for ${candidate.personName}.`;
+
+      if (existing) {
+        await client.query(
+          `
+            UPDATE semantic_memory
+            SET
+              valid_until = $2::timestamptz,
+              status = 'superseded',
+              superseded_by_id = $3::uuid
+            WHERE id = $1
+          `,
+          [existing.id, candidate.validFrom, semanticMemoryId]
+        );
+        superseded += 1;
+        eventAction = "supersede";
+        reason = `Superseded stale ${candidate.profileKind} profile summary for ${candidate.personName}.`;
+      }
+
+      await client.query(
+        `
+          INSERT INTO memory_reconsolidation_events (
+            namespace_id,
+            query_text,
+            trigger_confidence,
+            action,
+            target_memory_kind,
+            semantic_memory_id,
+            source_episodic_id,
+            reason,
+            metadata
+          )
+          VALUES ($1, $2, 'weak', $3, 'profile_summary', $4::uuid, $5::uuid, $6, $7::jsonb)
+        `,
+        [
+          namespaceId,
+          `reconcile profile summary for ${candidate.profileKind}:${candidate.personName}`,
+          eventAction,
+          semanticMemoryId,
+          candidate.sourceEpisodicId,
+          reason,
+          JSON.stringify({
+            run_id: runId,
+            canonical_key: candidate.canonicalKey,
+            person_name: candidate.personName,
+            profile_kind: candidate.profileKind,
+            note_family: noteFamily,
+            adjudication_action: existing ? "update" : "add",
+            reconsolidation_decision: existing ? "update" : "add",
+            support_episodic_ids: candidate.supportEpisodicIds,
+            support_procedural_ids: candidate.supportProceduralIds,
+            support_state_types: candidate.supportStateTypes,
+            support_state_keys: candidate.supportStateKeys,
+            supersession_lineage: existing?.id ? [existing.id] : []
+          })
+        ]
+      );
+    }
+
     for (const existing of existingSummaryRows.rows) {
       if (activeKeys.has(existing.canonical_key)) {
         continue;
@@ -1119,6 +1717,53 @@ export async function runUniversalMutableReconsolidation(namespaceId: string): P
       );
     }
 
+    for (const existing of existingProfileRows.rows) {
+      if (activeProfileKeys.has(existing.canonical_key)) {
+        continue;
+      }
+
+      await client.query(
+        `
+          UPDATE semantic_memory
+          SET
+            valid_until = now(),
+            status = 'superseded'
+          WHERE id = $1
+        `,
+        [existing.id]
+      );
+      retired += 1;
+
+      await client.query(
+        `
+          INSERT INTO memory_reconsolidation_events (
+            namespace_id,
+            query_text,
+            trigger_confidence,
+            action,
+            target_memory_kind,
+            semantic_memory_id,
+            reason,
+            metadata
+          )
+          VALUES ($1, $2, 'weak', 'supersede', 'profile_summary', $3::uuid, $4, $5::jsonb)
+        `,
+        [
+          namespaceId,
+          `retire stale profile summary ${existing.canonical_key}`,
+          existing.id,
+          `Retired profile summary ${existing.canonical_key} because the active state pattern no longer supports it.`,
+          JSON.stringify({
+            run_id: runId,
+            canonical_key: existing.canonical_key,
+            adjudication_action: "supersede",
+            reconsolidation_decision: "supersede",
+            retired_without_active_state: true
+          })
+        ]
+      );
+    }
+
     return {
       runId,
       namespaceId,
@@ -1156,9 +1801,14 @@ export async function runMemoryReconsolidation(
   const priorConfidence = response.meta.answerAssessment?.confidence ?? "missing";
   const inferredTimeStart = response.meta.planner.inferredTimeStart ?? input.timeStart;
   const inferredTimeEnd = response.meta.planner.inferredTimeEnd ?? input.timeEnd;
+  const summaryNeedsReconsolidation =
+    priorConfidence === "confident" &&
+    response.meta.planner.queryClass === "temporal_summary" &&
+    response.meta.planner.leafEvidenceRequired === false &&
+    response.meta.answerAssessment?.directEvidence === false;
 
   if (
-    !isWeakOrMissing(priorConfidence) ||
+    (!isWeakOrMissing(priorConfidence) && !summaryNeedsReconsolidation) ||
     !hasAdequateEvidence(response.results, response.evidence.length, inferredTimeStart, inferredTimeEnd)
   ) {
     await withTransaction(async (client) => {
@@ -1179,9 +1829,12 @@ export async function runMemoryReconsolidation(
           input.namespaceId,
           input.query,
           priorConfidence,
-          "Reconsolidation did not trigger because the query was already confident or lacked adequate day-summary evidence.",
+          summaryNeedsReconsolidation
+            ? "Reconsolidation did not trigger because adequate day-summary evidence was missing."
+            : "Reconsolidation did not trigger because the query was already confident or lacked adequate day-summary evidence.",
           JSON.stringify({
-            run_id: runId
+            run_id: runId,
+            summary_needs_reconsolidation: summaryNeedsReconsolidation
           })
         ]
       );

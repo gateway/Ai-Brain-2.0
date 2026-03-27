@@ -1,4 +1,4 @@
-import type { ArtifactRecord, FragmentRecord, NamespaceId, SourceType } from "../types.js";
+import type { ArtifactRecord, FragmentRecord, NamespaceId, SceneRecord, SourceType } from "../types.js";
 
 export interface IngestRequest {
   readonly sourceType: SourceType;
@@ -7,9 +7,14 @@ export interface IngestRequest {
   readonly capturedAt: string;
   readonly inputUri?: string;
   readonly rawText?: string;
+  readonly artifactId?: string;
+  readonly observationId?: string;
   readonly binaryPath?: string;
   readonly sourceChannel?: string;
   readonly metadata?: Record<string, unknown>;
+  readonly scenes?: readonly SceneRecord[];
+  readonly fragments?: readonly FragmentRecord[];
+  readonly skipNarrativeClaims?: boolean;
 }
 
 export interface EmbeddingRequest {
@@ -34,7 +39,7 @@ export interface CandidateMemoryWrite {
 
 export interface IngestResult {
   readonly artifact: ArtifactRecord;
-  readonly fragments: FragmentRecord[];
-  readonly candidateWrites: CandidateMemoryWrite[];
+  readonly fragments: readonly FragmentRecord[];
+  readonly candidateWrites: readonly CandidateMemoryWrite[];
   readonly episodicInsertCount: number;
 }

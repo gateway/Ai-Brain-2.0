@@ -22,6 +22,11 @@ Research guidance for sequencing:
 
 - integrated ontology/retrieval push is complete and replay-green
 - completed slices in the latest pass:
+  - ASR/transcript ingestion normalization for external speech outputs (JSON or plain transcript text) into replay-safe `artifact_derivations`, `transcript_utterances`, and source-linked fragments
+  - speaker-aware transcript promotion that keeps non-self spoken claims out of the self profile and preserves utterance provenance, timestamps, and speaker hints
+  - transcript-speech query support for prompts like `what did Dan say about karaoke?` and exact-day transcript recall like `what did Dan do on March 22 2026?`
+  - exact-day transcript recall that can supplement day-window answers with utterance-grounded support instead of relying only on temporal summaries
+  - replay-backed MCP smoke coverage for assistant-style `memory.search`, `memory.timeline`, `memory.get_relationships`, and `memory.get_clarifications` calls
   - universal mutable-state reconsolidation across active procedural namespaces into `state_summary` semantic truth with deterministic supersession
   - production runtime derivation worker with ops worker health and manual processing endpoint
   - richer operator visibility for temporal containment audits and causal supersession overlays on the ops timeline view
@@ -39,19 +44,45 @@ Research guidance for sequencing:
   - hierarchy-aware recall for structural `parent_entity_id` chains with exact hierarchy stopping rules
   - generalized heuristic induction from repeated evidence into reusable `constraint` truth
   - conservative hot/warm/cold archival for derived semantic summaries and temporal summaries, with anchor protection and no raw episodic deletion
+  - authoritative episodic storage migration onto `episodic_memory` as the primary time-native query path
+  - compatibility `episodic_timeline` view replacing the required sidecar mirror, with `episodic_timeline_legacy` retained only for compatibility/backfill inspection
+  - Timescale hypertable conversion on authoritative `episodic_memory` after clearing inbound FK blockers and realigning episodic keys to `(occurred_at, id)`
+  - loose-provenance audit view plus replay assertions proving zero blocking FKs and zero orphaned episodic pointers
+  - sequential wipe/replay reset path that avoids hypertable deadlocks during benchmark truncation
+  - conservative per-namespace SQL-first hybrid kernel for core branches (`relationship_memory`, `procedural_memory`, `semantic_memory`, `narrative_event`, `temporal_nodes`, `episodic_memory`, `artifact_derivation`) while leaving specialized enrichers outside SQL
+  - explicit retrieval metadata for `rankingKernel`, so operators can see whether a response came from `app_fused` or `sql_hybrid_core`
 - latest green replay report:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T09-34-18-545Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-21T15-27-06-396Z.json`
 - latest green scale report:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T09-34-33-428Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-21T15-24-05-485Z.json`
+- latest green OMI watched-folder smoke:
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/omi-watch-smoke-2026-03-21T15-26-30-973Z.json`
+- latest green MCP smoke:
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/mcp-smoke-2026-03-21T15-27-06-930Z.json`
 - current replay snapshot:
-  - `60 confident`
-  - `1 weak`
+  - `70 confident`
+  - `0 weak`
   - `1 missing`
+- current MCP smoke snapshot:
+  - `6 / 6` MCP tool checks passing on replayed data
 - current scale snapshot:
   - `86 generated artifacts`
-  - `p50 29.44ms`
-  - `p95 43.93ms`
-  - `Steve focus graph: 54 nodes / 70 edges`
+  - `p50 22.66ms`
+  - `p95 202.57ms`
+  - `Steve focus graph: 62 nodes / 82 edges`
+- current hypertable stabilization notes:
+  - planner pruning is now benchmarked directly, so current-truth queries must stay on the pruned lexical path instead of silently leaking back into expensive temporal branches
+  - bounded event retrieval now uses scene support plus a tiny same-observation episodic neighborhood fan-out, capped to one primary event with at most two support rows on the scale pack
+  - provenance audit is now a real runtime worker and replay assertion, not an ad hoc manual check
+  - replay-safe derivation worker execution is now maintenance-aware so wipe/replay stays deterministic without bypassing production worker health semantics
+  - recurrence-gated operational heuristics now require repeated evidence across distinct weeks and distinct sources before they promote reusable truth
+  - moderate-corpus event queries are still the main latency tail on the hypertable path
+  - the new SQL-first hybrid kernel is production-safe for core per-namespace retrieval, but this runtime still lacks a live authenticated embedding provider so the kernel is not yet exercised in the replay pack
+  - transcript queries stay on the lexical/evidence path and are grounded by `transcript_utterances`, and dual-speaker, transcript-edit, and alias-backed speaker fixtures are now replay-verified
+  - broad exact-day summary questions now count as confident when the planner intentionally accepts temporal-summary evidence, and reconsolidation still upgrades them into semantic day summaries
+- reference:
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/HYPERTABLE_STABILIZATION.md`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/BRAIN_TIGHTENING_BACKLOG.md`
 - the remaining weak/missing cases are intentional:
   - pre-reconsolidation day-summary support is `weak`
   - unresolved kinship queries like `who is Uncle?` return a clarification-driven `missing` abstention
@@ -59,8 +90,9 @@ Research guidance for sequencing:
 - NotebookLM final review agrees this is the conservative right direction.
 - NotebookLM agreed with the conservative order on the latest pass.
 - next highest-value deterministic gap if we do not want to overbuild:
-  - storage-level policy-driven forgetting and archival for derived layers is now in place conservatively
-  - deeper sufficiency-gated TMT descent beyond the current exact day/session coverage is the next single deterministic gap
+  - wire a live authenticated embedding provider into `local-brain` so the new SQL hybrid kernel is exercised under real retrieval, not just kept code-ready behind fallback
+  - authoritative episodic storage is now a real Timescale hypertable in this environment, but moderate-corpus chunk-management overhead still needs careful event-path tuning before larger rollouts
+  - orphan prevention remains shared between application logic and audit jobs because provenance pointers are intentionally loose
 
 ## Phase 1: Substrate Hardening
 
@@ -106,8 +138,11 @@ truth can be replayed safely.
   - `where did Steve go coworking?`
   - `what happened at Yellow co-working space?`
   - `what happened during dinner with Dan?`
+  - `what did Dan say about karaoke?`
+  - `what did Dan say about Sunday night?`
 - current verified broader event-summary query:
   - `what did Steve do on March 20 2026?`
+  - `what did Dan do on March 22 2026?`
 - current verified graph expansion:
   - focusing `Steve Tietze` expands into related event nodes and connected people/projects/places such as `Dinner with Dan at Chiang Mai`, `Yellow co-working space`, `Dan`, and `Two-Way`
 - current remaining gap:

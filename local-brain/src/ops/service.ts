@@ -1247,18 +1247,18 @@ export async function getOpsTimelineView(
     queryRows<TimelineRow>(
       `
       SELECT
-        et.memory_id,
-        et.content,
-        et.occurred_at::text,
-        et.artifact_id,
+        em.id AS memory_id,
+        em.content,
+        em.occurred_at::text,
+        em.artifact_id,
         a.uri AS source_uri,
-        et.metadata
-      FROM episodic_timeline et
-      LEFT JOIN artifacts a ON a.id = et.artifact_id
-      WHERE et.namespace_id = $1
-        AND et.occurred_at >= $2::timestamptz
-        AND et.occurred_at <= $3::timestamptz
-      ORDER BY et.occurred_at ASC
+        em.metadata
+      FROM episodic_memory em
+      LEFT JOIN artifacts a ON a.id = em.artifact_id
+      WHERE em.namespace_id = $1
+        AND em.occurred_at >= $2::timestamptz
+        AND em.occurred_at <= $3::timestamptz
+      ORDER BY em.occurred_at ASC
       LIMIT $4
       `,
       [namespaceId, timeStart, timeEnd, limit]
@@ -1680,7 +1680,7 @@ export async function getOpsRelationshipGraph(
             AND ($3::timestamptz IS NULL OR COALESCE(ne.time_start, ns.occurred_at, ne.created_at) >= $3::timestamptz)
             AND ($4::timestamptz IS NULL OR COALESCE(ne.time_start, ns.occurred_at, ne.created_at) <= $4::timestamptz)
           ORDER BY COALESCE(ne.time_start, ns.occurred_at, ne.created_at) DESC
-          LIMIT 8
+          LIMIT 12
         )
         SELECT *
         FROM (

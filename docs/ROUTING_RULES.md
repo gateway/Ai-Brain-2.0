@@ -73,7 +73,7 @@ Every answer should include:
 
 - `results`: ranked structured rows
 - `evidence`: de-duplicated supporting snippets with source provenance
-- `meta`: retrieval mode, planner, fallback reasons, and counts
+- `meta`: retrieval mode, planner, fallback reasons, counts, and the active ranking kernel when relevant
 
 The LLM or UI may use the top structured row directly, or inspect the evidence
 bundle and source artifact when more certainty is needed.

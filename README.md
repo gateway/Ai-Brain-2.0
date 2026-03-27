@@ -468,7 +468,7 @@ For the section-by-section operator guide, see [docs/OPERATOR_WORKBENCH_GUIDE.md
 
 Important current note:
 
-- `Qwen/Qwen3-Embedding-4B` works on the local provider test path, but full namespace re-embed currently requires a pgvector schema upgrade because the current vector columns are still `1536`-dimension.
+- the local runtime path is now verified with `Qwen/Qwen3-Embedding-4B` requested at `1536` dimensions, which matches the current pgvector schema and keeps namespace re-embed compatible on this repo baseline
 
 Default local URLs:
 

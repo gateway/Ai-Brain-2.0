@@ -2,6 +2,9 @@ import { closePool } from "../db/client.js";
 import { getBootstrapState, resolveRuntimeOperationsSettings } from "../ops/source-service.js";
 import {
   buildRuntimeLoopWorkerId,
+  executeDerivationWorker,
+  executeReconsolidationWorker,
+  executeProvenanceAuditWorker,
   executeOutboxWorker,
   executeSourceMonitorWorker,
   executeTemporalSummaryWorker
@@ -24,8 +27,11 @@ async function runOnce(): Promise<{
   readonly checkedAt: string;
   readonly namespaceId: string;
   readonly sourceMonitor?: unknown;
+  readonly derivation?: unknown;
+  readonly reconsolidation?: unknown;
   readonly outbox?: unknown;
   readonly temporalSummary?: unknown;
+  readonly provenanceAudit?: unknown;
 }> {
   const bootstrap = await getBootstrapState();
   const settings = resolveRuntimeOperationsSettings(bootstrap.metadata);
@@ -38,8 +44,11 @@ async function runOnce(): Promise<{
     checkedAt: string;
     namespaceId: string;
     sourceMonitor?: unknown;
+    derivation?: unknown;
+    reconsolidation?: unknown;
     outbox?: unknown;
     temporalSummary?: unknown;
+    provenanceAudit?: unknown;
   } = {
     checkedAt: new Date().toISOString(),
     namespaceId
@@ -50,6 +59,23 @@ async function runOnce(): Promise<{
       importAfterScan: settings.sourceMonitor.autoImportOnScan,
       triggerType: "loop",
       workerId: buildRuntimeLoopWorkerId("source-monitor")
+    });
+  }
+
+  if (settings.derivation.enabled) {
+    result.derivation = await executeDerivationWorker({
+      namespaceId,
+      limit: settings.derivation.batchLimit,
+      triggerType: "loop",
+      workerId: buildRuntimeLoopWorkerId("derivation")
+    });
+  }
+
+  if (settings.reconsolidation.enabled) {
+    result.reconsolidation = await executeReconsolidationWorker({
+      namespaceId,
+      triggerType: "loop",
+      workerId: buildRuntimeLoopWorkerId("reconsolidation")
     });
   }
 
@@ -71,6 +97,13 @@ async function runOnce(): Promise<{
       systemPrompt: settings.temporalSummary.systemPrompt,
       triggerType: "loop",
       workerId: buildRuntimeLoopWorkerId("temporal-summary")
+    });
+  }
+
+  if (settings.provenanceAudit.enabled) {
+    result.provenanceAudit = await executeProvenanceAuditWorker({
+      triggerType: "loop",
+      workerId: buildRuntimeLoopWorkerId("provenance-audit")
     });
   }
 

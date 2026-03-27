@@ -7,10 +7,34 @@ export interface ToolDescriptor {
 
 export const toolDescriptors: readonly ToolDescriptor[] = [
   {
-    name: "memory.search",
-    description: "Current lexical-first recall over episodic, semantic, procedural, and historical memory with a planned hybrid vector upgrade path.",
+    name: "memory.recap",
+    description: "Return a grouped evidence pack for recap-style questions, with optional local/OpenRouter summary derivation on top of the retrieved evidence.",
     requiredInputs: ["query", "namespace_id"],
-    optionalInputs: ["time_start", "time_end", "limit"]
+    optionalInputs: ["time_start", "time_end", "reference_now", "limit", "participants", "topics", "projects", "provider", "model"]
+  },
+  {
+    name: "memory.extract_tasks",
+    description: "Extract task-like action items from a grounded recap evidence pack, preserving evidence IDs and source links.",
+    requiredInputs: ["query", "namespace_id"],
+    optionalInputs: ["time_start", "time_end", "reference_now", "limit", "participants", "topics", "projects", "provider", "model"]
+  },
+  {
+    name: "memory.extract_calendar",
+    description: "Extract calendar-like commitments from a grounded recap evidence pack, preserving evidence IDs and source links.",
+    requiredInputs: ["query", "namespace_id"],
+    optionalInputs: ["time_start", "time_end", "reference_now", "limit", "participants", "topics", "projects", "provider", "model"]
+  },
+  {
+    name: "memory.explain_recap",
+    description: "Explain why a recap-style answer was returned by exposing the grouped evidence pack and retrieval rationale.",
+    requiredInputs: ["query", "namespace_id"],
+    optionalInputs: ["time_start", "time_end", "reference_now", "limit", "participants", "topics", "projects"]
+  },
+  {
+    name: "memory.search",
+    description: "SQL-first hybrid recall over episodic, semantic, procedural, relationship, temporal, and derived memory with clarification-aware abstention and evidence-backed answers.",
+    requiredInputs: ["query", "namespace_id"],
+    optionalInputs: ["time_start", "time_end", "reference_now", "limit"]
   },
   {
     name: "memory.timeline",
@@ -31,8 +55,26 @@ export const toolDescriptors: readonly ToolDescriptor[] = [
     optionalInputs: ["predicate", "time_start", "time_end", "limit"]
   },
   {
+    name: "memory.get_graph",
+    description: "Return a provenance-backed relationship graph centered on an entity or namespace.",
+    requiredInputs: ["namespace_id"],
+    optionalInputs: ["entity_name", "time_start", "time_end", "limit"]
+  },
+  {
     name: "memory.get_clarifications",
     description: "Read unresolved clarification items and suggested follow-up prompts for weak or unknown answers.",
+    requiredInputs: ["namespace_id"],
+    optionalInputs: ["query", "limit"]
+  },
+  {
+    name: "memory.get_stats",
+    description: "Return read-only brain health, queue, worker, bootstrap, and monitored-source stats for operator-style assistant checks.",
+    requiredInputs: [],
+    optionalInputs: ["source_limit"]
+  },
+  {
+    name: "memory.get_protocols",
+    description: "Return active constraint and style-spec protocol rules that govern assistant behavior and operational workflow.",
     requiredInputs: ["namespace_id"],
     optionalInputs: ["query", "limit"]
   },

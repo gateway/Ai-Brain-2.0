@@ -4,6 +4,7 @@ import { queryRows, withTransaction } from "../db/client.js";
 import { readConfig } from "../config.js";
 import { classifyDerivationTextToCandidates, classifyTextToCandidates } from "../classification/service.js";
 import { attachTextDerivation } from "../derivations/service.js";
+import { ingestTranscriptDerivation } from "../ingest/transcript.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import type { SourceType } from "../types.js";
 import { transcribeAudioFile } from "./model-runtime.js";
@@ -355,6 +356,7 @@ export interface IntakeFileRequest {
   readonly fileName?: string;
   readonly mimeType?: string;
   readonly byteSize?: number;
+  readonly metadata?: Record<string, unknown>;
   readonly runAsr?: boolean;
   readonly runClassification?: boolean;
   readonly asr?: {
@@ -1606,6 +1608,12 @@ export async function ingestSessionFile(request: IntakeFileRequest): Promise<{
       });
 
       const observationId = (await loadLatestObservationId(ingestResult.artifact.artifactId)) ?? ingestResult.artifact.observationId;
+      if (!observationId) {
+        throw new Error(`No observation found for artifact ${ingestResult.artifact.artifactId}`);
+      }
+      if (!observationId) {
+        throw new Error(`Unable to resolve observation id for artifact ${ingestResult.artifact.artifactId}`);
+      }
       const derivation = await attachTextDerivation({
         artifactId: ingestResult.artifact.artifactId,
         artifactObservationId: observationId,
@@ -1620,6 +1628,24 @@ export async function ingestSessionFile(request: IntakeFileRequest): Promise<{
         }
       });
       derivationId = derivation.derivationId;
+
+      await ingestTranscriptDerivation({
+        namespaceId: session.namespaceId,
+        sessionId: session.id,
+        artifactId: ingestResult.artifact.artifactId,
+        observationId,
+        derivationId,
+        capturedAt,
+        transcriptText: transcript.text,
+        metadata: {
+          language: transcript.language ?? null,
+          duration_seconds: transcript.durationSeconds ?? null,
+          segments: transcript.segments,
+          words: transcript.words,
+          source: "model_runtime_asr",
+          source_filename: fileName
+        }
+      });
 
       await recordModelRun({
         sessionId: session.id,
@@ -1999,10 +2025,10 @@ export async function getSessionTimeline(sessionId: string, limit = 40): Promise
     queryRows<{ readonly min_occurred_at: string | null; readonly max_occurred_at: string | null }>(
       `
         SELECT
-          min(et.occurred_at)::text AS min_occurred_at,
-          max(et.occurred_at)::text AS max_occurred_at
+          min(em.occurred_at)::text AS min_occurred_at,
+          max(em.occurred_at)::text AS max_occurred_at
         FROM ops.session_artifacts sa
-        JOIN episodic_timeline et ON et.artifact_id = sa.artifact_id
+        JOIN episodic_memory em ON em.artifact_id = sa.artifact_id
         WHERE sa.session_id = $1::uuid
       `,
       [sessionId]
@@ -2010,17 +2036,17 @@ export async function getSessionTimeline(sessionId: string, limit = 40): Promise
     queryRows<SessionTimelineRow>(
       `
         SELECT
-          et.memory_id::text,
-          et.content,
-          et.occurred_at::text,
-          et.artifact_id::text,
+          em.id::text AS memory_id,
+          em.content,
+          em.occurred_at::text,
+          em.artifact_id::text,
           a.uri AS source_uri,
-          et.metadata
+          em.metadata
         FROM ops.session_artifacts sa
-        JOIN episodic_timeline et ON et.artifact_id = sa.artifact_id
-        LEFT JOIN artifacts a ON a.id = et.artifact_id
+        JOIN episodic_memory em ON em.artifact_id = sa.artifact_id
+        LEFT JOIN artifacts a ON a.id = em.artifact_id
         WHERE sa.session_id = $1::uuid
-        ORDER BY et.occurred_at ASC, et.memory_id ASC
+        ORDER BY em.occurred_at ASC, em.id ASC
         LIMIT $2
       `,
       [sessionId, limit]

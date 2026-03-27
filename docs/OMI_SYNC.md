@@ -343,6 +343,86 @@ On successful import, the normalized markdown files become:
 
 The original raw JSON remains on disk and is not replaced by the database.
 
+## Tool 5: Hourly Launchd Scheduler
+
+**What it does**
+
+This is the local macOS scheduler for Omi sync. It runs:
+
+- `scripts/run_omi_sync.sh`
+
+once every hour through `launchd`.
+
+Because the wrapper already does:
+
+1. Omi API sync
+2. immediate monitored-source scan/import
+
+the hourly scheduler gives you the full archive-and-ingest loop.
+
+**How to use it**
+
+Enable hourly sync:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run omi:schedule:enable
+```
+
+Disable hourly sync:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run omi:schedule:disable
+```
+
+Check status:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain
+npm run omi:schedule:status
+```
+
+**What setup needs to be done**
+
+1. The Omi sync toolchain must already be configured.
+2. `.env` must contain:
+   - `OMI_API_KEY`
+   - `OMI_SYNC_IMPORT_AFTER_SYNC=true`
+   - `OMI_SYNC_SOURCE_ID=<uuid>`
+3. macOS `launchctl` must be available.
+
+**Where it is stored**
+
+The installed launch agent lives at:
+
+```text
+~/Library/LaunchAgents/com.ai-brain.omi-sync.hourly.plist
+```
+
+Logs are written to:
+
+```text
+/Users/evilone/Documents/Development/AI-Brain/ai-brain/data/inbox/omi/logs/hourly-sync.out.log
+/Users/evilone/Documents/Development/AI-Brain/ai-brain/data/inbox/omi/logs/hourly-sync.err.log
+```
+
+**Reminder / disable path**
+
+The disable command is intentionally short:
+
+```bash
+npm run omi:schedule:disable
+```
+
+If you think you might forget, use the status command before you leave the repo:
+
+```bash
+npm run omi:schedule:status
+```
+
+That output always includes the disable command.
+
 ## Current Local Omi Setup
 
 This workspace currently has:
@@ -362,6 +442,20 @@ This Omi toolchain has been smoke tested locally:
 - a later sync picked up a new Omi recording without re-importing the unchanged older payloads
 - the monitored source scan discovered the normalized markdown files
 - the current built import path successfully imported the Omi markdown files into AI Brain
+- the watched-folder smoke benchmark now validates the human setup lane with:
+  - a sandbox namespace self anchor
+  - monitored source creation/update
+  - scan, preview, import, and due-worker recheck
+  - natural-language queries
+  - relationship graph expansion
+  - clarification inbox inspection
+
+Run the watched-folder smoke benchmark:
+
+```bash
+cd /Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain
+npm run benchmark:omi-watch
+```
 
 If the HTTP runtime behaves differently from the current CLI build, restart the runtime so it picks up the latest `local-brain` build.
 

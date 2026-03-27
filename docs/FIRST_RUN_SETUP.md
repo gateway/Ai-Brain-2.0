@@ -236,16 +236,16 @@ Current MCP position:
 - the watcher should stay in the runtime/worker layer
 - MCP can expose monitoring controls or read tools later
 
-## 10. Current known embedding caveat
+## 10. Current embedding posture
 
-`Qwen/Qwen3-Embedding-4B` works on the provider test path and returns valid embeddings, but it returns `2560` dimensions.
+The local runtime path is now verified with `Qwen/Qwen3-Embedding-4B` requested
+at `1536` dimensions, which matches the current pgvector schema.
 
-The current pgvector columns are still `1536`, so:
+That means:
 
 - embedding provider test: works
-- full namespace re-embed: blocked until schema upgrade
-
-Today, the cleanest end-to-end hybrid retrieval path is still a `1536`-dimension provider/model such as OpenRouter with `text-embedding-3-small`.
+- full namespace re-embed: works when the runtime is configured to request `1536`
+- OpenRouter remains a valid hosted fallback, not the only end-to-end hybrid path
 
 ## 11. After setup is complete
 

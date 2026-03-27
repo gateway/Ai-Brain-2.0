@@ -341,7 +341,7 @@ export default async function SettingsPage({
             <p><span className="font-medium text-white">external</span> means your own local or private model runtime endpoint. The backend reads that connection from environment config, so another operator can point the system at their own runtime URL instead of yours.</p>
             <p><span className="font-medium text-white">openrouter</span> uses your OpenRouter API key and the discovered remote model catalog.</p>
             <p><span className="font-medium text-white">gemini</span> is available for future provider routing if Gemini is configured.</p>
-            <p>Recommended setup today: use <span className="font-medium text-white">external</span> for local runtime testing, or use <span className="font-medium text-white">openrouter + text-embedding-3-small</span> if you want a fully working 1536-dimension re-embed path right now.</p>
+            <p>Recommended setup today: use <span className="font-medium text-white">external + Qwen/Qwen3-Embedding-4B</span> when your local runtime can serve <span className="font-medium text-white">1536</span>-dimension embeddings, or use <span className="font-medium text-white">openrouter + text-embedding-3-small</span> as the hosted fallback.</p>
             <div className="pt-2">
               <Link
                 href="/help"

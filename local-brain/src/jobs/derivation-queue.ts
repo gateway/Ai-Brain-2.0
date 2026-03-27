@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
-import { withClient, withTransaction } from "../db/client.js";
+import { queryRows, withClient, withTransaction } from "../db/client.js";
 import { attachTextDerivation, deriveArtifactViaProvider } from "../derivations/service.js";
+import { ingestTranscriptDerivation } from "../ingest/transcript.js";
 import { enqueueTargetVectorSync } from "./vector-sync.js";
 import { ProviderError } from "../providers/types.js";
 import type { ProviderModality } from "../providers/types.js";
@@ -48,6 +49,7 @@ export interface ProcessDerivationJobsResult {
   readonly completed: number;
   readonly failed: number;
   readonly retried: number;
+  readonly failureCategories: Readonly<Record<string, number>>;
 }
 
 interface ArtifactContextRow {
@@ -174,6 +176,10 @@ function inferJobKind(artifactType: string, mimeType?: string | null): Derivatio
 
   if (artifactType === "audio" || mimeType?.startsWith("audio/")) {
     return "transcription";
+  }
+
+  if (artifactType === "video" || mimeType?.startsWith("video/")) {
+    return "caption";
   }
 
   if (artifactType === "chat_turn" || artifactType === "markdown_session") {
@@ -402,6 +408,7 @@ export async function processDerivationJobs(
   let completed = 0;
   let failed = 0;
   let retried = 0;
+  const failureCategories = new Map<string, number>();
 
   for (const job of jobs) {
     try {
@@ -481,6 +488,37 @@ export async function processDerivationJobs(
             }
           });
 
+      let promotedTranscriptText: string | null = manualContentText ?? null;
+      if (!promotedTranscriptText && job.job_kind === "transcription") {
+        const derivationRows = await queryRows<{ readonly content_text: string | null }>(
+          `
+            SELECT content_text
+            FROM artifact_derivations
+            WHERE id = $1::uuid
+            LIMIT 1
+          `,
+          [result.derivationId]
+        );
+        promotedTranscriptText = derivationRows[0]?.content_text ?? null;
+      }
+
+      if (job.job_kind === "transcription" && promotedTranscriptText) {
+        await ingestTranscriptDerivation({
+          namespaceId: job.namespace_id,
+          artifactId: job.artifact_id,
+          observationId: job.artifact_observation_id,
+          derivationId: result.derivationId,
+          capturedAt:
+            (typeof job.metadata?.captured_at === "string" && job.metadata.captured_at) ||
+            new Date().toISOString(),
+          transcriptText: promotedTranscriptText,
+          metadata: {
+            ...(job.metadata ?? {}),
+            derivation_job_id: job.id
+          }
+        });
+      }
+
       await withClient(async (client) => {
         await client.query(
           `
@@ -518,6 +556,21 @@ export async function processDerivationJobs(
       const nextRetryCount = job.retry_count + 1;
       const terminal = nextRetryCount >= job.max_retries || (error instanceof ProviderError && !error.retryable);
       const nextAttemptAt = new Date(Date.now() + retryDelayMs(nextRetryCount)).toISOString();
+      const failureCategory =
+        error instanceof ProviderError && error.code === "PROVIDER_UNSUPPORTED"
+          ? "provider_unsupported"
+          : error instanceof ProviderError && error.code === "PROVIDER_AUTH"
+            ? "provider_auth"
+            : error instanceof ProviderError && error.code === "PROVIDER_TIMEOUT"
+              ? "provider_timeout"
+              : error instanceof ProviderError && error.code === "PROVIDER_RATE_LIMIT"
+                ? "provider_rate_limit"
+                : error instanceof ProviderError && error.code === "PROVIDER_INVALID_REQUEST"
+                  ? "provider_invalid_request"
+                  : error instanceof ProviderError && error.code === "PROVIDER_UNAVAILABLE"
+                    ? "provider_unavailable"
+                    : "unknown";
+      failureCategories.set(failureCategory, (failureCategories.get(failureCategory) ?? 0) + 1);
 
       await withClient(async (client) => {
         await client.query(
@@ -550,6 +603,7 @@ export async function processDerivationJobs(
     claimed: jobs.length,
     completed,
     failed,
-    retried
+    retried,
+    failureCategories: Object.fromEntries(failureCategories.entries())
   };
 }

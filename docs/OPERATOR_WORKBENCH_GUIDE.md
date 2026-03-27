@@ -374,16 +374,17 @@ The operating model is:
 - session scope matters
 - graph and memory inspection should always preserve provenance
 
-## Current known caveat
+## Current embedding posture
 
-`Qwen/Qwen3-Embedding-4B` works on the provider test path and returns valid vectors, but it returns `2560` dimensions.
+`Qwen/Qwen3-Embedding-4B` is now verified on the local runtime path when the
+request explicitly asks for `1536` dimensions.
 
-The current pgvector columns are still fixed at `1536`, so:
+That means:
 
 - provider test: works
-- full namespace re-embed: blocked until schema upgrade
-
-Today, the most complete end-to-end hybrid retrieval path is still a `1536`-dimension model such as OpenRouter with `text-embedding-3-small`.
+- full namespace re-embed: works on the current schema when the runtime keeps
+  the request at `1536`
+- OpenRouter remains a valid hosted fallback, not the only complete hybrid path
 
 ## Related docs
 

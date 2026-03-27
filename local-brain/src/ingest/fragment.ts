@@ -20,6 +20,64 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
+function splitOversizedFragment(
+  text: string,
+  maxChars = 1200
+): ReadonlyArray<{
+  readonly text: string;
+  readonly relativeStart: number;
+  readonly relativeEnd: number;
+}> {
+  const normalized = text.trim();
+  if (!normalized) {
+    return [];
+  }
+
+  if (normalized.length <= maxChars) {
+    return [{ text: normalized, relativeStart: 0, relativeEnd: normalized.length }];
+  }
+
+  const parts: Array<{
+    readonly text: string;
+    readonly relativeStart: number;
+    readonly relativeEnd: number;
+  }> = [];
+  let cursor = 0;
+
+  while (cursor < normalized.length) {
+    let sliceEnd = Math.min(normalized.length, cursor + maxChars);
+    if (sliceEnd < normalized.length) {
+      const boundary = normalized.lastIndexOf(" ", sliceEnd);
+      if (boundary > cursor + Math.floor(maxChars * 0.6)) {
+        sliceEnd = boundary;
+      }
+    }
+
+    const rawSlice = normalized.slice(cursor, sliceEnd);
+    const trimmedSlice = rawSlice.trim();
+    if (!trimmedSlice) {
+      cursor = sliceEnd + 1;
+      continue;
+    }
+
+    const leadingOffset = rawSlice.indexOf(trimmedSlice);
+    const relativeStart = cursor + Math.max(0, leadingOffset);
+    const relativeEnd = relativeStart + trimmedSlice.length;
+    parts.push({
+      text: trimmedSlice,
+      relativeStart,
+      relativeEnd
+    });
+    cursor = relativeEnd;
+
+    while (cursor < normalized.length && /\s/u.test(normalized[cursor] ?? "")) {
+      cursor += 1;
+    }
+  }
+
+  return parts;
+}
+
 function clampPositiveInteger(value: string): number | null {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) {
@@ -201,6 +259,50 @@ function weekdayBoundsFromAnchor(anchor: Date, weekdayIndex: number, modifier: "
   };
 }
 
+function seasonBounds(year: number, season: "spring" | "summer" | "fall" | "autumn" | "winter"): {
+  readonly occurredAt: string;
+  readonly timeStart: string;
+  readonly timeEnd: string;
+} {
+  if (season === "spring") {
+    const timeStart = new Date(Date.UTC(year, 2, 1));
+    const timeEnd = new Date(Date.UTC(year, 5, 1));
+    return {
+      occurredAt: timeStart.toISOString(),
+      timeStart: timeStart.toISOString(),
+      timeEnd: timeEnd.toISOString()
+    };
+  }
+
+  if (season === "summer") {
+    const timeStart = new Date(Date.UTC(year, 5, 1));
+    const timeEnd = new Date(Date.UTC(year, 8, 1));
+    return {
+      occurredAt: timeStart.toISOString(),
+      timeStart: timeStart.toISOString(),
+      timeEnd: timeEnd.toISOString()
+    };
+  }
+
+  if (season === "fall" || season === "autumn") {
+    const timeStart = new Date(Date.UTC(year, 8, 1));
+    const timeEnd = new Date(Date.UTC(year, 11, 1));
+    return {
+      occurredAt: timeStart.toISOString(),
+      timeStart: timeStart.toISOString(),
+      timeEnd: timeEnd.toISOString()
+    };
+  }
+
+  const timeStart = new Date(Date.UTC(year, 11, 1));
+  const timeEnd = new Date(Date.UTC(year + 1, 2, 1));
+  return {
+    occurredAt: timeStart.toISOString(),
+    timeStart: timeStart.toISOString(),
+    timeEnd: timeEnd.toISOString()
+  };
+}
+
 function inferTimeAnchor(
   text: string,
   fallbackOccurredAt: string,
@@ -299,6 +401,70 @@ function inferTimeAnchor(
         anchorConfidence: 0.88
       };
     }
+  }
+
+  const directRelativeDayMatch = text.match(/\b(yesterday|today|tonight|last night|this morning|this afternoon|this evening)\b/iu);
+  if (directRelativeDayMatch && capturedAnchorDate) {
+    const normalized = directRelativeDayMatch[1].toLowerCase();
+    const targetStart =
+      normalized === "yesterday" || normalized === "last night"
+        ? startOfUtcDay(addUtcDays(capturedAnchorDate, -1))
+        : startOfUtcDay(capturedAnchorDate);
+    const targetEnd = addUtcDays(targetStart, 1);
+    return {
+      occurredAt: targetStart.toISOString(),
+      timeExpressionText: directRelativeDayMatch[0],
+      timeStart: targetStart.toISOString(),
+      timeEnd: targetEnd.toISOString(),
+      timeGranularity: "day",
+      timeConfidence: normalized === "today" || normalized === "yesterday" ? 0.9 : 0.82,
+      isRelativeTime: true,
+      anchorBasis: "captured_at",
+      anchorConfidence: normalized === "today" || normalized === "yesterday" ? 0.9 : 0.82
+    };
+  }
+
+  const seasonalMatch = text.match(/\b(last|next|this|that)\s+(spring|summer|fall|autumn|winter)\b/iu);
+  if (seasonalMatch && (priorAnchorDate || capturedAnchorDate)) {
+    const modifier = seasonalMatch[1].toLowerCase();
+    const season = seasonalMatch[2].toLowerCase() as "spring" | "summer" | "fall" | "autumn" | "winter";
+    const anchor = modifier === "that" && priorAnchorDate ? priorAnchorDate : (capturedAnchorDate ?? priorAnchorDate)!;
+    const offset =
+      modifier === "last" ? -1 :
+      modifier === "next" ? 1 :
+      0;
+    const bounds = seasonBounds(anchor.getUTCFullYear() + offset, season);
+    return {
+      occurredAt: bounds.occurredAt,
+      timeExpressionText: seasonalMatch[0],
+      timeStart: bounds.timeStart,
+      timeEnd: bounds.timeEnd,
+      timeGranularity: "month",
+      timeConfidence: modifier === "that" && priorAnchorDate ? 0.72 : 0.8,
+      isRelativeTime: true,
+      anchorBasis: modifier === "that" && priorAnchorDate ? "prior_scene" : "captured_at",
+      anchorSceneIndex: modifier === "that" && priorScene ? priorScene.sceneIndex : undefined,
+      anchorConfidence: modifier === "that" && priorAnchorDate ? 0.76 : 0.82
+    };
+  }
+
+  const seasonBeforeAfterMatch = text.match(/\bthe\s+(spring|summer|fall|autumn|winter)\s+(before|after)\b/iu);
+  if (seasonBeforeAfterMatch && priorAnchorDate) {
+    const season = seasonBeforeAfterMatch[1].toLowerCase() as "spring" | "summer" | "fall" | "autumn" | "winter";
+    const offset = seasonBeforeAfterMatch[2].toLowerCase() === "before" ? -1 : 1;
+    const bounds = seasonBounds(priorAnchorDate.getUTCFullYear() + offset, season);
+    return {
+      occurredAt: bounds.occurredAt,
+      timeExpressionText: seasonBeforeAfterMatch[0],
+      timeStart: bounds.timeStart,
+      timeEnd: bounds.timeEnd,
+      timeGranularity: "month",
+      timeConfidence: 0.68,
+      isRelativeTime: true,
+      anchorBasis: "prior_scene",
+      anchorSceneIndex: priorScene?.sceneIndex,
+      anchorConfidence: 0.72
+    };
   }
 
   const relativeShiftMatch = text.match(
@@ -480,21 +646,33 @@ export function splitIntoFragments(text: string, occurredAt: string, capturedAt 
 
       const charStart = text.indexOf(fragmentText, cursor);
       const safeStart = charStart >= 0 ? charStart : cursor;
-      const charEnd = safeStart + fragmentText.length;
+      const sizedFragments = splitOversizedFragment(fragmentText);
+      for (const sizedFragment of sizedFragments) {
+        const sizedCharStart = safeStart + sizedFragment.relativeStart;
+        const sizedCharEnd = safeStart + sizedFragment.relativeEnd;
+        const fragmentTimeAnchor = inferTimeAnchor(sizedFragment.text, scene.occurredAt, capturedAt);
 
-      fragments.push({
-        fragmentIndex,
-        sceneIndex: scene.sceneIndex,
-        text: fragmentText,
-        charStart: safeStart,
-        charEnd,
-        occurredAt: inferTimeAnchor(fragmentText, scene.occurredAt, capturedAt).occurredAt,
-        importanceScore: inferImportance(fragmentText),
-        tags: inferTags(fragmentText)
-      });
+        fragments.push({
+          fragmentIndex,
+          sceneIndex: scene.sceneIndex,
+          text: sizedFragment.text,
+          charStart: sizedCharStart,
+          charEnd: sizedCharEnd,
+          occurredAt: fragmentTimeAnchor.occurredAt,
+          importanceScore: inferImportance(sizedFragment.text),
+          tags: inferTags(sizedFragment.text),
+          metadata: {
+            time_expression_text: fragmentTimeAnchor.timeExpressionText ?? null,
+            time_granularity: fragmentTimeAnchor.timeGranularity,
+            is_relative_time: fragmentTimeAnchor.isRelativeTime,
+            anchor_basis: fragmentTimeAnchor.anchorBasis
+          }
+        });
 
-      fragmentIndex += 1;
-      cursor = charEnd;
+        fragmentIndex += 1;
+      }
+
+      cursor = safeStart + fragmentText.length;
     }
   }
 

@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { processBrainOutboxEvents, type BrainOutboxProcessResult } from "../clarifications/service.js";
-import { queryRows } from "../db/client.js";
+import { isMaintenanceLockActive, queryRows } from "../db/client.js";
 import { processDerivationJobs, type ProcessDerivationJobsResult } from "../jobs/derivation-queue.js";
+import { runLooseProvenanceAudit, type ProvenanceAuditSummary } from "../jobs/provenance-audit.js";
 import {
   runSemanticTemporalSummaryOverlay,
   runTemporalSummaryScaffold,
   type TemporalLayer,
   type TemporalSummaryRunSummary
 } from "../jobs/temporal-summary.js";
+import { runUniversalMutableReconsolidation, type UniversalMutableReconsolidationSummary } from "../jobs/memory-reconsolidation.js";
 import {
   getBootstrapState,
   processScheduledMonitoredSources,
@@ -16,7 +18,7 @@ import {
   type ProcessScheduledMonitoredSourcesResult
 } from "./source-service.js";
 
-export type WorkerKey = "source_monitor" | "derivation" | "outbox" | "temporal_summary";
+export type WorkerKey = "source_monitor" | "derivation" | "outbox" | "reconsolidation" | "temporal_summary" | "provenance_audit";
 type WorkerRunStatus = "running" | "succeeded" | "partial" | "failed" | "skipped";
 type WorkerTriggerType = "manual" | "scheduled" | "loop" | "onboarding" | "repair";
 
@@ -140,12 +142,34 @@ function classifyWorkerFailure(error: unknown): {
       message
     };
   }
+  if (normalized.includes("maintenance mode")) {
+    return {
+      errorClass,
+      category: "maintenance_mode",
+      retryGuidance: "A replay or scale benchmark is holding the maintenance lock. Wait for it to finish, then rerun the worker.",
+      message
+    };
+  }
+  if (normalized.includes("unsupported") || normalized.includes("not wired") || normalized.includes("intentionally deferred")) {
+    return {
+      errorClass,
+      category: "provider_unsupported",
+      retryGuidance: "The selected provider does not support this modality in Brain 1.0. Switch the derivation worker to a multimodal-capable provider, then rerun.",
+      message
+    };
+  }
   return {
     errorClass,
     category: "unknown",
     retryGuidance: "Inspect the latest failure details and retry after correcting the underlying runtime issue.",
     message
   };
+}
+
+async function assertMaintenanceModeInactive(workerKey: WorkerKey): Promise<void> {
+  if (await isMaintenanceLockActive()) {
+    throw new Error(`Maintenance mode is active. ${workerKey} cannot mutate the runtime while a replay or scale benchmark owns the database lock.`);
+  }
 }
 
 function intervalSecondsForWorker(workerKey: WorkerKey, settings: OpsRuntimeOperationsSettings): number | undefined {
@@ -158,6 +182,12 @@ function intervalSecondsForWorker(workerKey: WorkerKey, settings: OpsRuntimeOper
   if (workerKey === "outbox") {
     return settings.outbox.workerIntervalSeconds;
   }
+  if (workerKey === "reconsolidation") {
+    return settings.reconsolidation.workerIntervalSeconds;
+  }
+  if (workerKey === "provenance_audit") {
+    return settings.provenanceAudit.workerIntervalSeconds;
+  }
   return settings.temporalSummary.workerIntervalSeconds;
 }
 
@@ -167,6 +197,12 @@ function enabledForWorker(workerKey: WorkerKey, settings: OpsRuntimeOperationsSe
   }
   if (workerKey === "derivation") {
     return settings.derivation.enabled;
+  }
+  if (workerKey === "reconsolidation") {
+    return settings.reconsolidation.enabled;
+  }
+  if (workerKey === "provenance_audit") {
+    return settings.provenanceAudit.enabled;
   }
   if (workerKey === "temporal_summary") {
     return settings.temporalSummary.enabled;
@@ -279,6 +315,7 @@ export async function executeSourceMonitorWorker(input?: {
   readonly triggerType?: WorkerTriggerType;
   readonly workerId?: string;
 }): Promise<ProcessScheduledMonitoredSourcesResult> {
+  await assertMaintenanceModeInactive("source_monitor");
   const bootstrap = await getBootstrapState();
   const settings = resolveRuntimeOperationsSettings(bootstrap.metadata);
   const runId = await createWorkerRun({
@@ -328,7 +365,11 @@ export async function executeDerivationWorker(input?: {
   readonly limit?: number;
   readonly triggerType?: WorkerTriggerType;
   readonly workerId?: string;
+  readonly allowDuringMaintenance?: boolean;
 }): Promise<ProcessDerivationJobsResult> {
+  if (!input?.allowDuringMaintenance) {
+    await assertMaintenanceModeInactive("derivation");
+  }
   const bootstrap = await getBootstrapState();
   const settings = resolveRuntimeOperationsSettings(bootstrap.metadata);
   const runId = await createWorkerRun({
@@ -352,7 +393,8 @@ export async function executeDerivationWorker(input?: {
       claimed: 0,
       completed: 0,
       failed: 0,
-      retried: 0
+      retried: 0,
+      failureCategories: {}
     };
   }
 
@@ -374,7 +416,8 @@ export async function executeDerivationWorker(input?: {
       summary: {
         provider: input?.provider ?? settings.derivation.provider ?? null,
         model: settings.derivation.model ?? null,
-        retried: result.retried
+        retried: result.retried,
+        failure_categories: result.failureCategories
       }
     });
 
@@ -401,6 +444,7 @@ export async function executeOutboxWorker(input?: {
   readonly triggerType?: WorkerTriggerType;
   readonly workerId?: string;
 }): Promise<BrainOutboxProcessResult> {
+  await assertMaintenanceModeInactive("outbox");
   const bootstrap = await getBootstrapState();
   const settings = resolveRuntimeOperationsSettings(bootstrap.metadata);
   const namespaceId =
@@ -443,6 +487,75 @@ export async function executeOutboxWorker(input?: {
   }
 }
 
+export async function executeReconsolidationWorker(input?: {
+  readonly namespaceId?: string;
+  readonly triggerType?: WorkerTriggerType;
+  readonly workerId?: string;
+}): Promise<UniversalMutableReconsolidationSummary> {
+  await assertMaintenanceModeInactive("reconsolidation");
+  const bootstrap = await getBootstrapState();
+  const settings = resolveRuntimeOperationsSettings(bootstrap.metadata);
+  const namespaceId =
+    input?.namespaceId ??
+    (typeof bootstrap.metadata.defaultNamespaceId === "string" && bootstrap.metadata.defaultNamespaceId.trim()
+      ? bootstrap.metadata.defaultNamespaceId
+      : "personal");
+  const runId = await createWorkerRun({
+    workerKey: "reconsolidation",
+    triggerType: input?.triggerType ?? "manual",
+    namespaceId,
+    workerId: input?.workerId
+  });
+
+  if (!settings.reconsolidation.enabled) {
+    const summary = {
+      runId: input?.workerId ?? "reconsolidation:disabled",
+      namespaceId,
+      added: 0,
+      superseded: 0,
+      retired: 0,
+      abstained: 0,
+      processedKeys: []
+    } satisfies UniversalMutableReconsolidationSummary;
+    await finishWorkerRun(runId, {
+      status: "skipped",
+      nextDueAt: null,
+      summary: {
+        reason: "reconsolidation worker disabled in bootstrap operations settings",
+        ...summary
+      }
+    });
+    return summary;
+  }
+
+  try {
+    const result = await runUniversalMutableReconsolidation(namespaceId);
+    await finishWorkerRun(runId, {
+      status: result.abstained > 0 ? "partial" : "succeeded",
+      attemptedCount: result.processedKeys.length,
+      processedCount: result.added + result.superseded + result.retired,
+      failedCount: 0,
+      skippedCount: result.abstained,
+      nextDueAt: computeNextDueAt(settings.reconsolidation.workerIntervalSeconds),
+      summary: result as unknown as Record<string, unknown>
+    });
+    return result;
+  } catch (error) {
+    const failure = classifyWorkerFailure(error);
+    await finishWorkerRun(runId, {
+      status: "failed",
+      nextDueAt: computeNextDueAt(settings.reconsolidation.workerIntervalSeconds),
+      errorClass: failure.errorClass,
+      errorMessage: failure.message,
+      summary: {
+        failure_category: failure.category,
+        retry_guidance: failure.retryGuidance
+      }
+    });
+    throw error;
+  }
+}
+
 export async function executeTemporalSummaryWorker(input: {
   readonly namespaceId: string;
   readonly lookbackDays?: number;
@@ -458,6 +571,7 @@ export async function executeTemporalSummaryWorker(input: {
   readonly summaries: readonly TemporalSummaryRunSummary[];
   readonly semanticOverlayUpdatedNodes: number;
 }> {
+  await assertMaintenanceModeInactive("temporal_summary");
   const bootstrap = await getBootstrapState();
   const settings = resolveRuntimeOperationsSettings(bootstrap.metadata);
   const runId = await createWorkerRun({
@@ -527,6 +641,66 @@ export async function executeTemporalSummaryWorker(input: {
       summary: {
         failure_category: classifyWorkerFailure(error).category,
         retry_guidance: classifyWorkerFailure(error).retryGuidance
+      }
+    });
+    throw error;
+  }
+}
+
+export async function executeProvenanceAuditWorker(input?: {
+  readonly triggerType?: WorkerTriggerType;
+  readonly workerId?: string;
+}): Promise<ProvenanceAuditSummary> {
+  const bootstrap = await getBootstrapState();
+  const settings = resolveRuntimeOperationsSettings(bootstrap.metadata);
+  const namespaceId =
+    typeof bootstrap.metadata.defaultNamespaceId === "string" ? bootstrap.metadata.defaultNamespaceId : undefined;
+  const runId = await createWorkerRun({
+    workerKey: "provenance_audit",
+    triggerType: input?.triggerType ?? "manual",
+    namespaceId,
+    workerId: input?.workerId
+  });
+
+  if (!settings.provenanceAudit.enabled) {
+    const summary = {
+      checkedAt: new Date().toISOString(),
+      totalOrphans: 0,
+      references: [],
+      status: "clean"
+    } satisfies ProvenanceAuditSummary;
+    await finishWorkerRun(runId, {
+      status: "skipped",
+      nextDueAt: null,
+      summary: {
+        reason: "provenance audit worker disabled in bootstrap operations settings",
+        ...summary
+      }
+    });
+    return summary;
+  }
+
+  try {
+    const result = await runLooseProvenanceAudit();
+    await finishWorkerRun(runId, {
+      status: result.totalOrphans > 0 ? "partial" : "succeeded",
+      attemptedCount: result.references.length,
+      processedCount: result.references.filter((item) => item.orphanCount === 0).length,
+      failedCount: result.references.filter((item) => item.orphanCount > 0).length,
+      nextDueAt: computeNextDueAt(settings.provenanceAudit.workerIntervalSeconds),
+      summary: result as unknown as Record<string, unknown>
+    });
+    return result;
+  } catch (error) {
+    const failure = classifyWorkerFailure(error);
+    await finishWorkerRun(runId, {
+      status: "failed",
+      nextDueAt: computeNextDueAt(settings.provenanceAudit.workerIntervalSeconds),
+      errorClass: failure.errorClass,
+      errorMessage: failure.message,
+      summary: {
+        failure_category: failure.category,
+        retry_guidance: failure.retryGuidance
       }
     });
     throw error;
@@ -604,7 +778,7 @@ export async function getRuntimeWorkerStatus(): Promise<OpsRuntimeWorkerStatus> 
   }
 
   const nowMs = Date.now();
-  const workers: OpsWorkerHealth[] = (["source_monitor", "derivation", "outbox", "temporal_summary"] as const).map((workerKey) => {
+  const workers: OpsWorkerHealth[] = (["source_monitor", "derivation", "outbox", "reconsolidation", "temporal_summary", "provenance_audit"] as const).map((workerKey) => {
     const enabled = enabledForWorker(workerKey, settings);
     const intervalSeconds = intervalSecondsForWorker(workerKey, settings);
     const latestRun = latestByKey.get(workerKey);

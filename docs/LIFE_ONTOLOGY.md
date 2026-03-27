@@ -19,6 +19,7 @@ same substrate instead of adding one-off extractors for every domain.
 - `style_spec`: durable response-style or workflow rules grounded in explicit directive-style evidence
 - `belief`: durable stance or opinion truth that evolves through superseded historical versions
 - `artifact`: source files, transcripts, documents, contracts, media
+- `transcript_utterance`: replay-safe spoken evidence derived from transcript/ASR artifacts with speaker hints, timestamps, confidence, and source-artifact provenance
 - `concept`: preferences, interests, styles, topics, abstract ideas that do not need stable identity yet
 
 ## Predicate Families
@@ -72,14 +73,16 @@ same substrate instead of adding one-off extractors for every domain.
 
 ## Memory Layers
 
-- `episodic_memory`: immutable physical evidence
+- `episodic_memory`: immutable physical evidence and authoritative time-native episodic store
 - `relationship_memory`: durable accepted graph edges
 - `procedural_memory`: active truth and mutable state
 - `semantic_memory`: compacted patterns and stable abstractions
 - `state_summary` semantic rows: reconsolidated summaries of active procedural truth, always supersedable and evidence-backed
 - `temporal_nodes`: TMT rollups for day/week/month/year summaries
 - `artifact_derivations`: durable text derived from binary artifacts like images and PDFs, always linked back to the source artifact observation
+- `transcript_utterances`: normalized spoken evidence derived from ASR/transcript artifacts before higher-level claim routing
 - `ambiguity_inbox` / identity conflicts: unresolved operator work
+- `episodic_timeline`: compatibility view over authoritative episodic storage during the migration off the legacy sidecar mirror
 - derived semantic and temporal layers may move through deterministic `hot`, `warm`, and `cold` archival tiers without deleting raw episodic evidence
 
 ## Active Truth Rules
@@ -95,14 +98,17 @@ same substrate instead of adding one-off extractors for every domain.
 - `skill` entities anchor durable capability while specific uses stay in episodic evidence.
 - `decision` entities anchor explicit choices and should remain evidence-backed.
 - `constraint` entities anchor durable rules and should be queryable as active operational truth.
-- recurrence-gated operational heuristics may also promote reusable `constraint` truth when the same machine-enforceable rule survives repeated evidence across distinct days or weeks.
+- recurrence-gated operational heuristics may also promote reusable `constraint` truth when the same machine-enforceable rule survives repeated evidence across distinct weeks and distinct sources.
 - `routine` entities anchor repeated habits only after deterministic promotion from multiple weeks of event evidence.
 - `style_spec` entities anchor durable response-style or workflow truth such as concise response preferences and ontology-work protocols.
-- recurrence-gated operational heuristics may also land in `style_spec` when they survive repeated evidence across distinct sessions or days.
+- recurrence-gated operational heuristics may also land in `style_spec` only when they survive repeated evidence across distinct weeks and distinct sources.
 - `belief` entities anchor explicit stances or opinions while older versions remain historically queryable through supersession.
 - active romantic relationship truth can be mirrored into `procedural_memory` as `current_relationship` while ended tenures remain historical in `relationship_memory`.
 - current relationship queries may return a confident `Unknown.` when ended or paused-contact tenure evidence proves there is no active partner.
 - reconnect evidence should only reopen a romantic tenure when it is temporally separable from the prior ended tenure; collapsed same-timestamp autobiography should remain historical evidence instead of forcing fake active truth.
+- raw episodic evidence remains immutable even when Timescale-native compression is available; storage policy must never supersede or archive authoritative episodic rows.
+- authoritative `episodic_memory` is now the real Timescale hypertable in this environment.
+- when provenance pointers are intentionally loose to keep the hypertable path viable, orphan prevention becomes a shared responsibility: the application and replay/audit jobs must verify `source_episodic_id` existence explicitly instead of relying on FK enforcement.
 
 ## Hierarchy Rules
 
@@ -111,6 +117,9 @@ same substrate instead of adding one-off extractors for every domain.
 - Query zoom-out should traverse the parent chain, not duplicate current truth.
 - exact hierarchy questions may stop on structural parent-chain facts when those rows are sufficient, instead of forcing episodic drill-down.
 - archived temporal summaries should disappear from active recall, but their member links must still preserve the path back to the original evidence.
+- authoritative episodic queries should read from `episodic_memory`; any remaining `episodic_timeline` use is compatibility-only and should not require write mirroring.
+- on moderate corpora, hypertable chunk-management overhead may raise p95 query latency before the dataset is large enough for partition-pruning wins to dominate; that is acceptable if query quality and provenance remain stable and scale audits stay green.
+- event-bounded recall should stay capped and sufficiency-gated so hypertable chunk scans remain concentrated on the small set of queries that genuinely need temporal/event context.
 
 ## Event Rules
 
@@ -122,6 +131,10 @@ same substrate instead of adding one-off extractors for every domain.
   - activity kind
   - links back to source fragments
 - binary artifacts may also generate `artifact_derivations` first, then become queryable evidence through the same duality contract as text-native memory.
+- ASR/transcript artifacts should normalize into `artifact_derivations` plus `transcript_utterances` before claim routing.
+- transcript utterances should preserve `speaker_label`, optional `speaker_hint`, utterance timing, and source-artifact provenance even when downstream claims are not promoted.
+- speech-derived first-person claims must resolve relative to the speaker hint instead of assuming the namespace self anchor.
+- low-confidence proper nouns, uncertain speaker identity, or vague spoken places should route to clarification rather than silently promoting graph truth.
 - replay-safe multimodal fixtures should prove the derivation pipeline before live OCR / STT workers are trusted in production.
 - live multimodal worker execution should stay deterministic at the queue/state-machine layer even when the provider-backed OCR / ASR / caption step is model-driven.
 - episodic and narrative rows may also carry salience annotation such as `salience_labels`, `sentiment_score`, and `surprise_magnitude` without promoting emotion into current truth.

@@ -377,9 +377,15 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
   );
   const [episodicTimelineCountRow] = await queryRows<{ count: string }>(
     `
-      SELECT count(*)::text AS count
-      FROM episodic_timeline
-      WHERE namespace_id = $1
+      SELECT
+        CASE
+          WHEN to_regclass('public.episodic_timeline') IS NULL THEN '0'
+          ELSE (
+            SELECT count(*)::text
+            FROM episodic_timeline
+            WHERE namespace_id = $1
+          )
+        END AS count
     `,
     [namespaceId]
   );
@@ -447,9 +453,9 @@ export async function runLocalEvaluation(): Promise<EvalReport> {
       "Expected temporal recall to include temporal summary or ancestor context for a Chiang Mai 2026 query."
     ),
     assert(
-      "timescale.timeline_parity",
-      Number(episodicCountRow?.count ?? "0") === Number(episodicTimelineCountRow?.count ?? "0"),
-      `Expected episodic_timeline to mirror episodic_memory row counts, got episodic=${episodicCountRow?.count ?? "0"}, timeline=${episodicTimelineCountRow?.count ?? "0"}.`
+      "episodic.authoritative_storage",
+      Number(episodicCountRow?.count ?? "0") >= 1,
+      `Expected authoritative episodic_memory rows, got episodic=${episodicCountRow?.count ?? "0"}.`
     ),
     assert(
       "semantic.decay",

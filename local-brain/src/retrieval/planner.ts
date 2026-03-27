@@ -7,7 +7,7 @@ import type {
   TemporalLayerBudgetMap,
   TemporalQueryLayer
 } from "./types.js";
-import { isHierarchyTraversalQuery } from "./query-signals.js";
+import { isConstraintQuery, isHierarchyTraversalQuery } from "./query-signals.js";
 
 const MONTH_LOOKUP = new Map<string, number>([
   ["january", 0],
@@ -32,14 +32,21 @@ const PLANNER_STOP_WORDS = new Set([
   "around",
   "as",
   "at",
+  "after",
   "back",
   "be",
+  "both",
   "by",
   "did",
+  "decide",
+  "decided",
   "do",
   "does",
   "doing",
+  "done",
   "during",
+  "end",
+  "each",
   "find",
   "for",
   "from",
@@ -49,11 +56,14 @@ const PLANNER_STOP_WORDS = new Set([
   "he",
   "her",
   "his",
+  "how",
   "i",
   "in",
   "is",
   "it",
   "its",
+  "like",
+  "likely",
   "me",
   "my",
   "of",
@@ -71,14 +81,18 @@ const PLANNER_STOP_WORDS = new Set([
   "they",
   "this",
   "to",
+  "use",
+  "uses",
   "was",
   "we",
   "were",
   "what",
   "when",
   "where",
+  "which",
   "who",
   "with",
+  "why",
   "you",
   "your"
 ]);
@@ -95,6 +109,22 @@ function expandLexicalVariants(term: string): readonly string[] {
 
   if (normalized === "movies" || normalized === "movie") {
     return ["movie", "film"];
+  }
+
+  if (normalized === "watch" || normalized === "watched" || normalized === "watching" || normalized === "saw" || normalized === "seen") {
+    return ["watch", "watched", "saw", "seen"];
+  }
+
+  if (normalized === "leave" || normalized === "left" || normalized === "leaving" || normalized === "departed" || normalized === "returned") {
+    return ["leave", "left", "departed", "returned"];
+  }
+
+  if (normalized === "stored" || normalized === "storage" || normalized === "store" || normalized === "stored_at") {
+    return ["stored", "storage", "store"];
+  }
+
+  if (normalized === "things" || normalized === "stuff" || normalized === "belongings" || normalized === "possessions") {
+    return ["things", "stuff", "possessions"];
   }
 
   if (normalized === "skills" || normalized === "skill") {
@@ -149,6 +179,14 @@ function expandLexicalVariants(term: string): readonly string[] {
     return ["plan", "plans", "planning", "going to", "will"];
   }
 
+  if (normalized === "destress" || normalized === "de-stress" || normalized === "distress") {
+    return ["stress"];
+  }
+
+  if (normalized === "identity" || normalized === "identities") {
+    return ["identity"];
+  }
+
   return [term];
 }
 
@@ -183,8 +221,37 @@ function expandDayHint(year: string, monthIndex: number, day: number): { readonl
   };
 }
 
-function expandRelativeLocalDay(offsetDays: number): { readonly start: string; readonly end: string } {
-  const now = new Date();
+type InferredTemporalWindow = {
+  readonly start?: string;
+  readonly end?: string;
+  readonly granularity: "none" | "day" | "month" | "year" | "broad";
+};
+
+function normalizeReferenceNow(referenceNow?: string): Date {
+  const parsed = referenceNow ? new Date(referenceNow) : new Date();
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function shiftTemporalWindow(
+  window: InferredTemporalWindow,
+  quantity: number,
+  unit: string
+): InferredTemporalWindow | null {
+  if (!window.start || !window.end) {
+    return null;
+  }
+
+  const shiftedStart = shiftDate(new Date(window.start), quantity, unit);
+  const shiftedEnd = shiftDate(new Date(window.end), quantity, unit);
+  return {
+    start: shiftedStart.toISOString(),
+    end: shiftedEnd.toISOString(),
+    granularity: window.granularity
+  };
+}
+
+function expandRelativeLocalDay(offsetDays: number, referenceNow?: string): { readonly start: string; readonly end: string } {
+  const now = normalizeReferenceNow(referenceNow);
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
   start.setDate(start.getDate() + offsetDays);
@@ -198,26 +265,378 @@ function expandRelativeLocalDay(offsetDays: number): { readonly start: string; r
   };
 }
 
+function expandRelativeLocalWeek(offsetWeeks: number, referenceNow?: string): { readonly start: string; readonly end: string } {
+  const now = normalizeReferenceNow(referenceNow);
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const dayOfWeek = start.getDay();
+  start.setDate(start.getDate() - dayOfWeek + offsetWeeks * 7);
+
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString()
+  };
+}
+
+function expandRelativeLocalMonth(offsetMonths: number, referenceNow?: string): { readonly start: string; readonly end: string } {
+  const now = normalizeReferenceNow(referenceNow);
+  const start = new Date(now.getFullYear(), now.getMonth() + offsetMonths, 1, 0, 0, 0, 0);
+  const end = new Date(now.getFullYear(), now.getMonth() + offsetMonths + 1, 0, 23, 59, 59, 999);
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString()
+  };
+}
+
+function expandRelativeLocalYear(offsetYears: number, referenceNow?: string): { readonly start: string; readonly end: string } {
+  const now = normalizeReferenceNow(referenceNow);
+  const start = new Date(now.getFullYear() + offsetYears, 0, 1, 0, 0, 0, 0);
+  const end = new Date(now.getFullYear() + offsetYears, 11, 31, 23, 59, 59, 999);
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString()
+  };
+}
+
 function parseMonthName(monthName: string): number | undefined {
   return MONTH_LOOKUP.get(monthName.toLowerCase());
 }
 
-function inferTemporalWindow(queryText: string, yearHints: readonly string[]): {
-  readonly start?: string;
-  readonly end?: string;
-  readonly granularity: "none" | "day" | "month" | "year" | "broad";
-} {
+function expandRelativeLocalWeekend(offsetWeeks: number, referenceNow?: string): { readonly start: string; readonly end: string } {
+  const now = normalizeReferenceNow(referenceNow);
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const dayOfWeek = start.getDay();
+  const saturdayOffset = dayOfWeek === 6 ? 0 : 6 - dayOfWeek;
+  start.setDate(start.getDate() + saturdayOffset + offsetWeeks * 7);
+
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  end.setHours(23, 59, 59, 999);
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString()
+  };
+}
+
+function expandCurrentPeriodToReference(
+  unit: "week" | "month" | "year",
+  referenceNow?: string
+): { readonly start: string; readonly end: string } {
+  const now = normalizeReferenceNow(referenceNow);
+  const end = new Date(now);
+
+  if (unit === "week") {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - start.getDay());
+    return {
+      start: start.toISOString(),
+      end: end.toISOString()
+    };
+  }
+
+  if (unit === "month") {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    return {
+      start: start.toISOString(),
+      end: end.toISOString()
+    };
+  }
+
+  const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0);
+  return {
+    start: start.toISOString(),
+    end: end.toISOString()
+  };
+}
+
+function expandEarlierCurrentPeriodToReference(
+  unit: "week" | "month" | "year",
+  referenceNow?: string
+): { readonly start: string; readonly end: string } {
+  const fullWindow = expandCurrentPeriodToReference(unit, referenceNow);
+  const startMs = Date.parse(fullWindow.start);
+  const endMs = Date.parse(fullWindow.end);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    return fullWindow;
+  }
+
+  const midpointMs = startMs + Math.max(1, Math.floor((endMs - startMs) / 2));
+  return {
+    start: fullWindow.start,
+    end: new Date(midpointMs).toISOString()
+  };
+}
+
+function seasonWindow(
+  season: "spring" | "summer" | "fall" | "autumn" | "winter",
+  year: number
+): { readonly start: string; readonly end: string } {
+  switch (season) {
+    case "spring":
+      return {
+        start: new Date(Date.UTC(year, 2, 1, 0, 0, 0, 0)).toISOString(),
+        end: new Date(Date.UTC(year, 4, 31, 23, 59, 59, 999)).toISOString()
+      };
+    case "summer":
+      return {
+        start: new Date(Date.UTC(year, 5, 1, 0, 0, 0, 0)).toISOString(),
+        end: new Date(Date.UTC(year, 7, 31, 23, 59, 59, 999)).toISOString()
+      };
+    case "fall":
+    case "autumn":
+      return {
+        start: new Date(Date.UTC(year, 8, 1, 0, 0, 0, 0)).toISOString(),
+        end: new Date(Date.UTC(year, 10, 30, 23, 59, 59, 999)).toISOString()
+      };
+    case "winter":
+    default:
+      return {
+        start: new Date(Date.UTC(year, 11, 1, 0, 0, 0, 0)).toISOString(),
+        end: new Date(Date.UTC(year + 1, 1, 28, 23, 59, 59, 999)).toISOString()
+      };
+  }
+}
+
+function parseNumericWord(value: string): number | null {
+  const normalized = value.toLowerCase();
+  if (/^\d+$/.test(normalized)) {
+    return Number(normalized);
+  }
+
+  switch (normalized) {
+    case "one":
+      return 1;
+    case "two":
+      return 2;
+    case "three":
+      return 3;
+    case "four":
+      return 4;
+    case "five":
+      return 5;
+    default:
+      return null;
+  }
+}
+
+function shiftDate(base: Date, quantity: number, unit: string): Date {
+  const shifted = new Date(base);
+  switch (unit) {
+    case "day":
+    case "days":
+      shifted.setDate(shifted.getDate() + quantity);
+      break;
+    case "week":
+    case "weeks":
+      shifted.setDate(shifted.getDate() + quantity * 7);
+      break;
+    case "month":
+    case "months":
+      shifted.setMonth(shifted.getMonth() + quantity);
+      break;
+    case "year":
+    case "years":
+      shifted.setFullYear(shifted.getFullYear() + quantity);
+      break;
+    default:
+      break;
+  }
+  return shifted;
+}
+
+function inferBaseTemporalWindow(queryText: string, yearHints: readonly string[], referenceNow?: string): InferredTemporalWindow {
+  const sinceDayMonthYearMatch = queryText.match(
+    /\bsince\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+(19\d{2}|20\d{2})\b/i
+  );
+  if (sinceDayMonthYearMatch) {
+    const monthIndex = parseMonthName(sinceDayMonthYearMatch[1]);
+    if (monthIndex !== undefined) {
+      const start = expandDayHint(sinceDayMonthYearMatch[3], monthIndex, Number(sinceDayMonthYearMatch[2]));
+      return {
+        start: start.start,
+        end: normalizeReferenceNow(referenceNow).toISOString(),
+        granularity: "broad"
+      };
+    }
+  }
+
+  const sinceMonthYearMatch = queryText.match(
+    /\bsince\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(19\d{2}|20\d{2})\b/i
+  );
+  if (sinceMonthYearMatch) {
+    const monthIndex = parseMonthName(sinceMonthYearMatch[1]);
+    if (monthIndex !== undefined) {
+      const start = expandMonthHint(sinceMonthYearMatch[2], monthIndex);
+      return {
+        start: start.start,
+        end: normalizeReferenceNow(referenceNow).toISOString(),
+        granularity: "broad"
+      };
+    }
+  }
+
+  const sinceYearMatch = queryText.match(/\bsince\s+(19\d{2}|20\d{2})\b/i);
+  if (sinceYearMatch) {
+    const start = expandYearHint(sinceYearMatch[1]);
+    return {
+      start: start.start,
+      end: normalizeReferenceNow(referenceNow).toISOString(),
+      granularity: "broad"
+    };
+  }
+
   if (/\byesterday\b/i.test(queryText)) {
     return {
-      ...expandRelativeLocalDay(-1),
+      ...expandRelativeLocalDay(-1, referenceNow),
       granularity: "day"
     };
   }
 
   if (/\b(?:today|tonight)\b/i.test(queryText)) {
     return {
-      ...expandRelativeLocalDay(0),
+      ...expandRelativeLocalDay(0, referenceNow),
       granularity: "day"
+    };
+  }
+
+  if (/\blast\s+night\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalDay(-1, referenceNow),
+      granularity: "day"
+    };
+  }
+
+  if (/\bthis\s+weekend\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalWeekend(0, referenceNow),
+      granularity: "broad"
+    };
+  }
+
+  if (/\blast\s+weekend\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalWeekend(-1, referenceNow),
+      granularity: "broad"
+    };
+  }
+
+  if (/\b(?:the\s+)?weekend\s+before\s+last\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalWeekend(-2, referenceNow),
+      granularity: "broad"
+    };
+  }
+
+  const weekendsAgoMatch = queryText.match(/\b(one|two|three|four|five|\d+)\s+weekends?\s+ago\b/i);
+  if (weekendsAgoMatch) {
+    const quantity = parseNumericWord(weekendsAgoMatch[1] ?? "");
+    if (quantity !== null && quantity > 0) {
+      return {
+        ...expandRelativeLocalWeekend(-quantity, referenceNow),
+        granularity: "broad"
+      };
+    }
+  }
+
+  if (/\bearlier\s+this\s+week\b/i.test(queryText)) {
+    return {
+      ...expandEarlierCurrentPeriodToReference("week", referenceNow),
+      granularity: "broad"
+    };
+  }
+
+  if (/\bearlier\s+this\s+month\b/i.test(queryText)) {
+    return {
+      ...expandEarlierCurrentPeriodToReference("month", referenceNow),
+      granularity: "month"
+    };
+  }
+
+  if (/\bearlier\s+this\s+year\b/i.test(queryText)) {
+    return {
+      ...expandEarlierCurrentPeriodToReference("year", referenceNow),
+      granularity: "year"
+    };
+  }
+
+  if (/\bthis\s+week\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalWeek(0, referenceNow),
+      granularity: "broad"
+    };
+  }
+
+  if (/\blast\s+week\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalWeek(-1, referenceNow),
+      granularity: "broad"
+    };
+  }
+
+  if (/\bthis\s+month\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalMonth(0, referenceNow),
+      granularity: "month"
+    };
+  }
+
+  if (/\blast\s+month\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalMonth(-1, referenceNow),
+      granularity: "month"
+    };
+  }
+
+  if (/\bthis\s+year\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalYear(0, referenceNow),
+      granularity: "year"
+    };
+  }
+
+  if (/\blast\s+year\b/i.test(queryText)) {
+    return {
+      ...expandRelativeLocalYear(-1, referenceNow),
+      granularity: "year"
+    };
+  }
+
+  const agoMatch = queryText.match(/\b(\d+)\s+(day|days|week|weeks|month|months|year|years)\s+ago\b/i);
+  if (agoMatch) {
+    const quantity = Number(agoMatch[1]);
+    const unit = agoMatch[2].toLowerCase();
+    const now = normalizeReferenceNow(referenceNow);
+    const anchor = shiftDate(now, -quantity, unit);
+    if (unit.startsWith("day")) {
+      return {
+        ...expandDayHint(String(anchor.getUTCFullYear()), anchor.getUTCMonth(), anchor.getUTCDate()),
+        granularity: "day"
+      };
+    }
+    if (unit.startsWith("week")) {
+      return {
+        ...expandRelativeLocalWeek(-quantity, referenceNow),
+        granularity: "broad"
+      };
+    }
+    if (unit.startsWith("month")) {
+      return {
+        ...expandMonthHint(String(anchor.getUTCFullYear()), anchor.getUTCMonth()),
+        granularity: "month"
+      };
+    }
+    return {
+      ...expandYearHint(String(anchor.getUTCFullYear())),
+      granularity: "year"
     };
   }
 
@@ -247,6 +666,24 @@ function inferTemporalWindow(queryText: string, yearHints: readonly string[]): {
     }
   }
 
+  const explicitSeasonMatch = queryText.match(/\b(spring|summer|fall|autumn|winter)\s+(19\d{2}|20\d{2})\b/i);
+  if (explicitSeasonMatch) {
+    return {
+      ...seasonWindow(explicitSeasonMatch[1].toLowerCase() as "spring" | "summer" | "fall" | "autumn" | "winter", Number(explicitSeasonMatch[2])),
+      granularity: "broad"
+    };
+  }
+
+  const relativeSeasonMatch = queryText.match(/\b(this|last)\s+(spring|summer|fall|autumn|winter)\b/i);
+  if (relativeSeasonMatch) {
+    const now = normalizeReferenceNow(referenceNow);
+    const year = relativeSeasonMatch[1].toLowerCase() === "last" ? now.getUTCFullYear() - 1 : now.getUTCFullYear();
+    return {
+      ...seasonWindow(relativeSeasonMatch[2].toLowerCase() as "spring" | "summer" | "fall" | "autumn" | "winter", year),
+      granularity: "broad"
+    };
+  }
+
   if (yearHints.length > 0) {
     const year = yearHints[0];
     return {
@@ -260,11 +697,65 @@ function inferTemporalWindow(queryText: string, yearHints: readonly string[]): {
   };
 }
 
+function inferComplexRelativeTemporalWindow(
+  queryText: string,
+  yearHints: readonly string[],
+  referenceNow?: string
+): InferredTemporalWindow | null {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const beforeAfterMatch = normalized.match(
+    /\b(one|two|three|four|five|\d+)\s+(day|days|week|weeks|month|months|year|years)\s+(after|before)\s+(.+?)\??$/i
+  );
+  if (beforeAfterMatch) {
+    const quantity = parseNumericWord(beforeAfterMatch[1] ?? "");
+    const unit = (beforeAfterMatch[2] ?? "").toLowerCase();
+    const direction = (beforeAfterMatch[3] ?? "").toLowerCase() === "after" ? 1 : -1;
+    const anchorText = (beforeAfterMatch[4] ?? "").trim();
+    const anchorWindow = inferBaseTemporalWindow(anchorText, yearHints, referenceNow);
+    if (quantity !== null && quantity > 0 && anchorWindow.start && anchorWindow.end) {
+      return shiftTemporalWindow(anchorWindow, direction * quantity, unit);
+    }
+  }
+
+  const anchoredSamePeriodMatch = normalized.match(/\b(?:later|earlier)\s+that\s+(night|morning|afternoon|evening|day|week|month|year|weekend)\b/i);
+  if (anchoredSamePeriodMatch) {
+    const stripped = normalized.replace(/\b(?:later|earlier)\s+that\s+(night|morning|afternoon|evening|day|week|month|year|weekend)\b/iu, " ");
+    const anchorWindow = inferBaseTemporalWindow(stripped, yearHints, referenceNow);
+    if (anchorWindow.start && anchorWindow.end) {
+      return anchorWindow;
+    }
+  }
+
+  return null;
+}
+
+function inferTemporalWindow(queryText: string, yearHints: readonly string[], referenceNow?: string): InferredTemporalWindow {
+  const complexWindow = inferComplexRelativeTemporalWindow(queryText, yearHints, referenceNow);
+  if (complexWindow) {
+    return complexWindow;
+  }
+
+  return inferBaseTemporalWindow(queryText, yearHints, referenceNow);
+}
+
 function containsTemporalQuestion(queryText: string): boolean {
   return (
     /\b(what was i doing|who was i with|where was i|when was i|back in|at that time)\b/i.test(queryText) ||
     /\bwhat\s+did\s+.+\s+do\s+(?:today|yesterday|tonight)\b/i.test(queryText) ||
     /\bwhat\s+happened\s+(?:today|yesterday|that\s+day)\b/i.test(queryText) ||
+    /\b(?:last|this)\s+(?:week|month|year|night|weekend|spring|summer|fall|autumn|winter)\b/i.test(queryText) ||
+    /\bearlier\s+this\s+(?:week|month|year)\b/i.test(queryText) ||
+    /\b(?:one|two|three|four|five|\d+)\s+weekends?\s+ago\b/i.test(queryText) ||
+    /\bweekend\s+before\s+last\b/i.test(queryText) ||
+    /\b(?:one|two|three|four|five|\d+)\s+(?:day|days|week|weeks|month|months|year|years)\s+(?:after|before)\b/i.test(queryText) ||
+    /\b(?:that|later\s+that)\s+(?:night|morning|afternoon|evening)\b/i.test(queryText) ||
+    /\b(?:later|earlier)\s+that\s+(?:day|week|month|year|weekend)\b/i.test(queryText) ||
+    /\bwho\s+was\s+.+\s+with\s+on\b/i.test(queryText) ||
+    /\bwhere\s+did\s+.+\s+go\s+on\b/i.test(queryText) ||
     /\b(during|around)\b/i.test(queryText)
   );
 }
@@ -287,9 +778,12 @@ function isTemporalDetailQueryText(queryText: string): boolean {
   }
 
   const hasTemporalCue =
+    /^\s*when\b/i.test(normalized) ||
+    /\bwhen\s+(?:did|was|were|has|have)\b/i.test(normalized) ||
     /\bon\s+[A-Z][a-z]+\s+\d{1,2}(?:,\s*|\s+)\d{4}\b/.test(normalized) ||
     /\bon\s+\d{4}-\d{2}-\d{2}\b/.test(normalized) ||
-    /\b(today|yesterday|tonight|this\s+(?:day|week|month|year)|that\s+day|last\s+(?:day|week|month|year))\b/i.test(normalized) ||
+    /\b(today|yesterday|tonight|this\s+(?:day|week|month|year|weekend)|that\s+(?:day|night|morning|afternoon|evening)|last\s+(?:day|week|month|year|weekend|night))\b/i.test(normalized) ||
+    /\b(?:one|two|three|four|five|\d+)\s+(?:day|days|week|weeks|month|months|year|years)\s+(?:after|before)\b/i.test(normalized) ||
     /\b(19\d{2}|20\d{2})\b/.test(normalized);
 
   if (!hasTemporalCue) {
@@ -301,6 +795,13 @@ function isTemporalDetailQueryText(queryText: string): boolean {
     /\bhow\s+many\b/i.test(normalized) ||
     /\bwhat\s+time\b/i.test(normalized) ||
     /\bwhen\s+exactly\b/i.test(normalized) ||
+    /^\s*when\b/i.test(normalized) ||
+    /\bwhen\s+(?:did|was|were|has|have)\b/i.test(normalized) ||
+    /\bwho\s+was\s+.+\s+with\b/i.test(normalized) ||
+    /\bwhere\s+did\s+.+\s+go\b/i.test(normalized) ||
+    /\bwhere\s+was\s+.+\b/i.test(normalized) ||
+    /\b(?:after|before)\b.+\bon\b/i.test(normalized) ||
+    /\b(?:later\s+that|that)\s+(?:night|morning|afternoon|evening)\b/i.test(normalized) ||
     /\bwhich\s+\w+\b/i.test(normalized) ||
     /\bexact\b/i.test(normalized) ||
     /\b(?:cost|price|amount|paid|pay|spent|spend|invoice|receipt|fee|fees)\b/i.test(normalized)
@@ -318,6 +819,8 @@ function isGraphMultiHopQuery(queryText: string): boolean {
     /\bconnected\s+to\b/i.test(queryText) ||
     /\bexpand\b/i.test(queryText) ||
     /\bgraph\b/i.test(queryText) ||
+    /\bin\s+common\b/i.test(queryText) ||
+    /\b(?:what|how)\s+do\s+.+\s+and\s+.+\s+both\b/i.test(queryText) ||
     /\bwhich\s+places?\b.*\bhas\b/i.test(queryText) ||
     /\bpartner\b/i.test(queryText)
   );
@@ -338,6 +841,10 @@ function inferQueryClass(
 
   if (isTemporalDetailQueryText(queryText)) {
     return "temporal_detail";
+  }
+
+  if (isConstraintQuery(queryText)) {
+    return "direct_fact";
   }
 
   if (temporalFocus || temporalGranularity !== "none") {
@@ -530,6 +1037,30 @@ function descendantExpansionOrderForGranularity(
   return [];
 }
 
+function inferExplicitWindowGranularity(timeStart?: string, timeEnd?: string): "none" | "day" | "month" | "year" | "broad" {
+  if (!timeStart || !timeEnd) {
+    return "none";
+  }
+
+  const start = Date.parse(timeStart);
+  const end = Date.parse(timeEnd);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return "broad";
+  }
+
+  const durationDays = (end - start) / (1000 * 60 * 60 * 24);
+  if (durationDays <= 1.1) {
+    return "day";
+  }
+  if (durationDays <= 45) {
+    return "month";
+  }
+  if (durationDays <= 370) {
+    return "year";
+  }
+  return "broad";
+}
+
 export function planRecallQuery(query: RecallQuery): RecallPlan {
   const queryText = query.query.trim();
   const tokenizedQuery = tokenizeQuery(queryText);
@@ -542,7 +1073,13 @@ export function planRecallQuery(query: RecallQuery): RecallPlan {
     yearHints.length > 0 ||
     hasExplicitWindow;
 
-  const inferredWindow = !hasExplicitWindow ? inferTemporalWindow(queryText, yearHints) : { granularity: "broad" as const };
+  const inferredWindow = !hasExplicitWindow
+    ? inferTemporalWindow(queryText, yearHints, query.referenceNow)
+    : {
+        start: query.timeStart,
+        end: query.timeEnd,
+        granularity: inferExplicitWindowGranularity(query.timeStart, query.timeEnd)
+      };
   const temporalGranularity = inferredWindow.granularity;
   const hasSpecificTimeWindow = temporalGranularity === "day" || temporalGranularity === "month" || temporalGranularity === "year" || temporalGranularity === "broad";
   const queryClass = inferQueryClass(queryText, hasTemporalCue, temporalGranularity);

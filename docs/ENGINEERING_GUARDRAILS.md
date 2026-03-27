@@ -16,6 +16,9 @@ The operator workbench is one app operationally, even though the UI and runtime 
 - PDF and image ingestion must stay explicitly adapter-gated until OCR/vision is real.
 - Read-only query/debug capability must stay read-only.
 - Raw artifacts remain authoritative over derived graph state.
+- Replay and scale benchmarks must hold the maintenance advisory lock before destructive reset/rebuild work.
+- Runtime worker entry points must honor maintenance mode before mutating the database.
+- Source retry actions must still flow through the monitored-source ingestion path, not a side-channel patch to stored graph state.
 
 ## Root Commands
 
@@ -30,3 +33,10 @@ The operator workbench is one app operationally, even though the UI and runtime 
 - prevent UI state from implying background work that cannot happen
 - keep graph interactions stable under zoom, selection, and re-rooting
 - harden upload validation beyond extension-only checks
+
+## Audit Notes
+
+### 2026-03-21
+
+- Added maintenance-mode enforcement for direct runtime worker entry points after the master audit found the HTTP layer was protected but direct CLI worker calls could still mutate during replay benchmarks.
+- Validation: `npm run check --workspace local-brain`, `npm run quality:gates`, and live maintenance smoke returning `503` on mutating routes.

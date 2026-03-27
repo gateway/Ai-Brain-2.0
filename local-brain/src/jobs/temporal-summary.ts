@@ -43,6 +43,7 @@ interface TemporalArchivalCandidateRow {
   readonly layer: TemporalLayer;
   readonly period_start: string;
   readonly period_end: string;
+  readonly source_count: number;
   readonly status: "active" | "archived";
   readonly archival_tier: "hot" | "warm" | "cold";
   readonly is_anchor: boolean;
@@ -59,6 +60,11 @@ interface PriorSummaryRow {
 interface SampleEvidenceRow {
   readonly content: string;
   readonly occurred_at: string;
+}
+
+interface TemporalPressureStatsRow {
+  readonly transcript_count: string;
+  readonly distinct_source_channels: string;
 }
 
 export interface TemporalSummaryRunSummary {
@@ -108,15 +114,15 @@ function intervalForLayer(layer: TemporalLayer): string {
 
 function buildBucketExpression(layer: TemporalLayer): string {
   if (layer === "day") {
-    return "date_trunc('day', et.occurred_at)";
+    return "date_trunc('day', em.occurred_at)";
   }
   if (layer === "week") {
-    return "date_trunc('week', et.occurred_at)";
+    return "date_trunc('week', em.occurred_at)";
   }
   if (layer === "month") {
-    return "date_trunc('month', et.occurred_at)";
+    return "date_trunc('month', em.occurred_at)";
   }
-  return "date_trunc('year', et.occurred_at)";
+  return "date_trunc('year', em.occurred_at)";
 }
 
 function depthForLayer(layer: TemporalLayer): number {
@@ -162,6 +168,98 @@ function coldDaysForLayer(layer: TemporalLayer): number {
     default:
       return 90;
   }
+}
+
+function numericMetadataValue(metadata: Record<string, unknown>, key: string): number {
+  const value = metadata[key];
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function archivalWarmDaysForRow(row: TemporalArchivalCandidateRow): number {
+  let value = warmDaysForLayer(row.layer);
+  const transcriptCount = numericMetadataValue(row.metadata ?? {}, "transcript_count");
+  const sourceChannelDiversity = numericMetadataValue(row.metadata ?? {}, "source_channel_diversity");
+  if (row.source_count >= 25) {
+    value += 14;
+  }
+  if (row.source_count >= 75) {
+    value += 21;
+  }
+  if (row.access_count >= 20) {
+    value += 14;
+  }
+  if (row.layer === "month" || row.layer === "year") {
+    value += 21;
+  }
+  if (transcriptCount >= 8) {
+    value += 14;
+  }
+  if (sourceChannelDiversity >= 3) {
+    value += 7;
+  }
+  return value;
+}
+
+function archivalColdDaysForRow(row: TemporalArchivalCandidateRow): number {
+  let value = coldDaysForLayer(row.layer);
+  const transcriptCount = numericMetadataValue(row.metadata ?? {}, "transcript_count");
+  const sourceChannelDiversity = numericMetadataValue(row.metadata ?? {}, "source_channel_diversity");
+  if (row.source_count >= 25) {
+    value += 30;
+  }
+  if (row.source_count >= 75) {
+    value += 45;
+  }
+  if (row.access_count >= 20) {
+    value += 30;
+  }
+  if (row.layer === "month" || row.layer === "year") {
+    value += 45;
+  }
+  if (transcriptCount >= 8) {
+    value += 30;
+  }
+  if (sourceChannelDiversity >= 3) {
+    value += 14;
+  }
+  return value;
+}
+
+async function loadTemporalPressureStats(
+  client: PoolClient,
+  namespaceId: string,
+  periodStart: string,
+  periodEnd: string
+): Promise<{ readonly transcriptCount: number; readonly sourceChannelDiversity: number }> {
+  const result = await client.query<TemporalPressureStatsRow>(
+    `
+      SELECT
+        count(*) FILTER (
+          WHERE coalesce(em.metadata->>'transcript_speaker_name', em.metadata->>'speaker_name', '') <> ''
+        )::text AS transcript_count,
+        count(DISTINCT coalesce(a.source_channel, '')) FILTER (
+          WHERE coalesce(a.source_channel, '') <> ''
+        )::text AS distinct_source_channels
+      FROM episodic_memory em
+      LEFT JOIN artifacts a ON a.id = em.artifact_id
+      WHERE em.namespace_id = $1
+        AND em.occurred_at >= $2::timestamptz
+        AND em.occurred_at < $3::timestamptz
+    `,
+    [namespaceId, periodStart, periodEnd]
+  );
+
+  return {
+    transcriptCount: Number(result.rows[0]?.transcript_count ?? 0),
+    sourceChannelDiversity: Number(result.rows[0]?.distinct_source_channels ?? 0)
+  };
 }
 
 async function linkTemporalHierarchy(client: PoolClient, namespaceId: string): Promise<void> {
@@ -222,7 +320,7 @@ async function loadRoleCounts(
   const roleCounts = await client.query<RoleCountRow>(
     `
       SELECT role, count(*)::text AS count
-      FROM episodic_timeline
+      FROM episodic_memory
       WHERE namespace_id = $1
         AND occurred_at >= $2::timestamptz
         AND occurred_at < $3::timestamptz
@@ -286,6 +384,7 @@ async function loadTopEvents(
         LIMIT 1
       ) AS source_memory ON TRUE
       WHERE ne.namespace_id = $1
+        AND coalesce(ne.event_kind, '') <> 'story_scene'
         AND COALESCE(ne.time_start, source_memory.occurred_at, ne.created_at) >= $2::timestamptz
         AND COALESCE(ne.time_start, source_memory.occurred_at, ne.created_at) < $3::timestamptz
       GROUP BY ne.event_label
@@ -390,10 +489,10 @@ export async function runTemporalSummaryScaffold(
           ${bucketExpression} AS bucket_start,
           (${bucketExpression} + $2::interval) AS bucket_end,
           count(*)::text AS event_count,
-          array_agg(et.memory_id ORDER BY et.occurred_at ASC) AS memory_ids
-        FROM episodic_timeline et
-        WHERE et.namespace_id = $1
-          AND et.occurred_at >= (now() - ($3::int * interval '1 day'))
+          array_agg(em.id ORDER BY em.occurred_at ASC) AS memory_ids
+        FROM episodic_memory em
+        WHERE em.namespace_id = $1
+          AND em.occurred_at >= (now() - ($3::int * interval '1 day'))
         GROUP BY ${bucketExpression}
         ORDER BY ${bucketExpression} ASC
       `,
@@ -410,6 +509,7 @@ export async function runTemporalSummaryScaffold(
       const roleSummary = await loadRoleCounts(client, namespaceId, periodStart, periodEnd);
       const topEntitySummary = await loadTopEntities(client, namespaceId, periodStart, periodEnd);
       const topEventSummary = await loadTopEvents(client, namespaceId, periodStart, periodEnd);
+      const pressureStats = await loadTemporalPressureStats(client, namespaceId, periodStart, periodEnd);
       const summaryText = summarizeBucket(options.layer, periodStart, periodEnd, eventCount, roleSummary, topEntitySummary, topEventSummary);
 
       const nodeResult = await client.query<{ id: string }>(
@@ -455,7 +555,9 @@ export async function runTemporalSummaryScaffold(
           JSON.stringify({
             role_summary: roleSummary,
             top_entities: topEntitySummary,
-            top_events: topEventSummary
+            top_events: topEventSummary,
+            transcript_count: pressureStats.transcriptCount,
+            source_channel_diversity: pressureStats.sourceChannelDiversity
           })
         ]
       );
@@ -561,6 +663,7 @@ export async function runTemporalNodeArchival(
           tn.layer,
           tn.period_start::text,
           tn.period_end::text,
+          tn.source_count,
           tn.status,
           tn.archival_tier,
           tn.is_anchor,
@@ -586,10 +689,12 @@ export async function runTemporalNodeArchival(
       const effectiveTouchedAt = row.access_count > 0 ? (row.last_accessed_at || row.period_end) : row.period_end;
       const inactivityMs = Math.max(0, Date.now() - Date.parse(effectiveTouchedAt));
       const inactivityDays = inactivityMs / (1000 * 60 * 60 * 24);
+      const warmThresholdDays = archivalWarmDaysForRow(row);
+      const coldThresholdDays = archivalColdDaysForRow(row);
       const nextTier =
-        inactivityDays >= coldDaysForLayer(row.layer)
+        inactivityDays >= coldThresholdDays
           ? "cold"
-          : inactivityDays >= warmDaysForLayer(row.layer) && row.access_count < hotAccessThreshold
+          : inactivityDays >= warmThresholdDays && row.access_count < hotAccessThreshold
             ? "warm"
             : "hot";
 
@@ -605,12 +710,15 @@ export async function runTemporalNodeArchival(
             : "Temporal summary remains hot due to recency or access.";
       const nextMetadata = {
         ...(row.metadata ?? {}),
-        archival_policy: "hot_warm_cold_v1",
+        archival_policy: "hot_warm_cold_v3",
         archival_tier: nextTier,
         archival_reason: reason,
         archival_state_updated_at: new Date().toISOString(),
         inactivity_days: Number(inactivityDays.toFixed(2)),
-        access_count: row.access_count
+        access_count: row.access_count,
+        source_count: row.source_count,
+        warm_threshold_days: warmThresholdDays,
+        cold_threshold_days: coldThresholdDays
       };
 
       if (nextTier === "cold") {
@@ -740,14 +848,14 @@ export async function runSemanticTemporalSummaryOverlay(
       const evidenceRows = await client.query<SampleEvidenceRow & { readonly memory_id: string }>(
         `
           SELECT
-            et.memory_id::text,
-            et.content,
-            et.occurred_at::text
+            em.id::text AS memory_id,
+            em.content,
+            em.occurred_at::text
           FROM temporal_node_members tnm
-          JOIN episodic_timeline et ON et.memory_id = tnm.source_memory_id
+          JOIN episodic_memory em ON em.id = tnm.source_memory_id
           WHERE tnm.temporal_node_id = $1::uuid
             AND tnm.member_role = 'summary_input'
-          ORDER BY et.occurred_at ASC
+          ORDER BY em.occurred_at ASC
           LIMIT 8
         `,
         [node.id]

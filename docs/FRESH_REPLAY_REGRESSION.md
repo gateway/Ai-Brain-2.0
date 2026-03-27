@@ -14,6 +14,7 @@ source corpus reconstructs the same life graph and active truth.
 7. Execute graph/current-truth assertions.
 8. Grade every natural-language query as `confident`, `weak`, or `missing`.
 9. Verify every query returns evidence with source provenance.
+10. Verify transcript-derived evidence can be queried without polluting self truth or bypassing clarification gates.
 
 ## Confidence Contract
 
@@ -69,6 +70,9 @@ source corpus reconstructs the same life graph and active truth.
 - `what was written on the whiteboard photo from the March redesign packet?`
 - `what did the March redesign packet say about the Steve graph?`
 - `what did the Chiang Mai graph voice memo say?`
+- `what did Dan say about karaoke?`
+- `what did Dan say about Sunday night?`
+- `what did Dan do on March 22 2026?`
 - `what country is Chiang Mai in?`
 - `where in the hierarchy is Tahoe City?`
 - `what constraint should the brain follow when identity is unclear?`
@@ -84,8 +88,10 @@ source corpus reconstructs the same life graph and active truth.
 - identity merges survive replay
 - evidence bundle is present on query responses
 - claim-plus-evidence duality object is present on evidence-backed query responses
+- retrieval metadata should expose whether ranking came from `app_fused` or `sql_hybrid_core`
 - event-bounded answers preserve source-evidence bundles
 - recurrence-gated operational heuristics survive replay with induction metadata
+- recurrence-gated operational heuristics require promotion evidence across distinct weeks and distinct sources, not only repeated notes on nearby days
 - focused graph expansion for the self anchor includes connected event nodes and related people/projects/places
 - direct breakup or paused-contact evidence can justify a confident current-state abstention as `Unknown.`
 - stale relationship profile summaries are superseded by reconsolidation when active tenure state changes
@@ -93,6 +99,9 @@ source corpus reconstructs the same life graph and active truth.
 - unresolved vague-place placeholders route to clarifications instead of returning guessed grounding
 - belief-summary reconsolidation supersedes stale summaries after explicit state changes
 - deterministic multimodal derivation jobs complete and persist replay-safe `artifact_derivations`
+- transcript/ASR fixtures ingest into `transcript_utterances` with preserved speaker/timing/source provenance
+- transcript speech queries can surface utterance-grounded evidence without promoting non-self spoken claims into the self profile
+- exact-day transcript questions can return day-window answers backed by transcript utterances when the transcript is the strongest evidence
 - hierarchy lookup queries can stop at structural `parent_entity_id` facts without forcing noisy episodic descent
 - generalized heuristic induction can promote reusable `constraint` truth, not just `style_spec`
 - the runtime derivation worker can process queued multimodal jobs and record healthy worker runs in `ops.worker_runs`
@@ -101,6 +110,10 @@ source corpus reconstructs the same life graph and active truth.
 - non-anchor derived semantic summaries can archive to `cold` without deleting source episodic evidence
 - old temporal summaries can archive to `cold` while temporal node members still preserve the evidence trail
 - anchor-backed current summaries remain active while archival only demotes or archives derived non-anchor layers
+- authoritative episodic reads come from `episodic_memory` without requiring app-side mirroring into a sidecar table
+- compatibility reads through `episodic_timeline` remain functional even after deprecating the mirror writer
+- authoritative episodic storage can clear the Timescale path only after inbound FKs are zero and episodic provenance pointers pass the orphan audit
+- benchmark reset must wipe hypertable-backed storage sequentially rather than via one giant truncate statement
 
 ## Output
 
@@ -114,9 +127,9 @@ Each run should write:
 Current green reference run:
 
 - clean replay:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-20T09-34-18-545Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-replay-2026-03-21T11-14-47-559Z.json`
 - scale replay:
-  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-20T09-34-33-428Z.json`
+  - `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-results/life-scale-2026-03-21T11-15-18-453Z.json`
 
 ## Scale Replay Addendum
 
@@ -137,3 +150,7 @@ Current scale assertions:
 - `who is Uncle?` routes to clarifications instead of hallucinating
 - `where was the summer cabin?` routes to clarifications instead of hallucinating
 - Steve-focused scale graph remains provenance-backed and does not collapse under the noisier corpus
+- current hypertable-tail latency remains concentrated in bounded event queries rather than current-truth or clarification queries
+- direct current-truth scale queries should remain on the pruned lexical path with `planner:branch_pruned`
+- bounded event scale queries should stay capped on candidate breadth and neighborhood support instead of regressing into broad overfetch
+- when a live embedding provider is available, replay inspection should confirm that safe query classes can report `rankingKernel=sql_hybrid_core` without changing confidence outcomes

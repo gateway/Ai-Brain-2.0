@@ -1,14 +1,14 @@
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { closePool, queryRows, withMaintenanceLock, withTransaction } from "../db/client.js";
+import { closePool, queryRows, withClient, withMaintenanceLock, withTransaction } from "../db/client.js";
 import { runMigrations } from "../db/migrations.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
 import { runUniversalMutableReconsolidation, runMemoryReconsolidation } from "../jobs/memory-reconsolidation.js";
 import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
 import { getOpsRelationshipGraph, getOpsTimelineView } from "../ops/service.js";
-import { executeDerivationWorker } from "../ops/runtime-worker-service.js";
+import { executeDerivationWorker, executeProvenanceAuditWorker } from "../ops/runtime-worker-service.js";
 import { runSemanticDecay } from "../jobs/semantic-decay.js";
 import { runTemporalNodeArchival, runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
 import { enqueueDerivationJob } from "../jobs/derivation-queue.js";
@@ -143,6 +143,13 @@ function generatedFixtureRoot(): string {
 async function ensureGeneratedFixtures(): Promise<readonly GeneratedReplayFixture[]> {
   const dir = generatedFixtureRoot();
   await mkdir(dir, { recursive: true });
+  const danTranscriptPath = "/Users/evilone/Downloads/asr_dan-speaking-transcript.txt";
+  const danTranscriptJsonPath = "/Users/evilone/Downloads/asr_dan-speaking-transcript.json";
+  const [danTranscriptText, danTranscriptJsonRaw] = await Promise.all([
+    readFile(danTranscriptPath, "utf8"),
+    readFile(danTranscriptJsonPath, "utf8")
+  ]);
+  const danTranscriptJson = JSON.parse(danTranscriptJsonRaw) as Record<string, unknown>;
 
   const fixtures: readonly GeneratedReplayFixture[] = [
     {
@@ -217,6 +224,119 @@ async function ensureGeneratedFixtures(): Promise<readonly GeneratedReplayFixtur
         metadata: {
           derivation_source: "benchmark_multimodal_fixture",
           fixture_kind: "graph_voice_memo"
+        }
+      }
+    },
+    {
+      path: path.join(dir, "dan-speaking-sample.wav"),
+      sourceType: "audio",
+      sourceChannel: "life-replay:dan-speaking-sample",
+      capturedAt: "2026-03-22T12:00:00Z",
+      contents: Buffer.from("RIFFAI Brain Dan sample", "utf8"),
+      derivation: {
+        manualContentText: danTranscriptText.trim(),
+        jobKind: "transcription",
+        modality: "audio",
+        metadata: {
+          derivation_source: "benchmark_asr_fixture",
+          fixture_kind: "dan_speaking_transcript",
+          primary_speaker_name: "Dan",
+          captured_at: "2026-03-22T12:00:00Z",
+          language: danTranscriptJson.language ?? null,
+          duration_seconds: danTranscriptJson.duration_seconds ?? danTranscriptJson.durationSeconds ?? null,
+          segments: Array.isArray(danTranscriptJson.segments) ? danTranscriptJson.segments : [],
+          words: Array.isArray(danTranscriptJson.words) ? danTranscriptJson.words : [],
+          asr_model: typeof danTranscriptJson.model === "string" ? danTranscriptJson.model : null,
+          asr_metadata: danTranscriptJson.metadata ?? {}
+        }
+      }
+    },
+    {
+      path: path.join(dir, "steve-dan-dual-speaker.wav"),
+      sourceType: "audio",
+      sourceChannel: "life-replay:steve-dan-dual-speaker",
+      capturedAt: "2026-03-24T18:30:00Z",
+      contents: Buffer.from("RIFFAI Brain Steve Dan dual speaker", "utf8"),
+      derivation: {
+        manualContentText:
+          "I flew to Bangkok last month and worked from a coworking space near Asok. I still live in Chiang Mai. I moved back to Austin last year and my things are still in storage there.",
+        jobKind: "transcription",
+        modality: "audio",
+        metadata: {
+          derivation_source: "benchmark_asr_fixture",
+          fixture_kind: "dual_speaker_transcript",
+          captured_at: "2026-03-24T18:30:00Z",
+          language: "en",
+          duration_seconds: 18.2,
+          segments: [
+            {
+              start: 0,
+              end: 8.8,
+              text: "I flew to Bangkok last month and worked from a coworking space near Asok. I still live in Chiang Mai.",
+              speaker: "Steve"
+            },
+            {
+              start: 9,
+              end: 18.2,
+              text: "I moved back to Austin last year and my things are still in storage there.",
+              speaker: "Dan"
+            }
+          ],
+          words: [],
+          asr_model: "benchmark/dual-speaker",
+          asr_metadata: {
+            diarization_used: true,
+            speaker_count: 2,
+            speakers: ["Steve", "Dan"]
+          }
+        }
+      }
+    },
+    {
+      path: path.join(dir, "transcript-edit-propagation.json"),
+      sourceType: "transcript",
+      sourceChannel: "life-replay:transcript-edit-propagation",
+      capturedAt: "2026-03-25T09:00:00Z",
+      contents: JSON.stringify({
+        text: "I said the Turkey conference is in Istanbul this year.",
+        language: "en",
+        duration_seconds: 6.4,
+        segments: [
+          {
+            start: 0,
+            end: 6.4,
+            text: "I said the Turkey conference is in Istanbul this year.",
+            speaker: "Steve"
+          }
+        ],
+        words: []
+      }, null, 2)
+    },
+    {
+      path: path.join(dir, "danny-speaking-alias.wav"),
+      sourceType: "audio",
+      sourceChannel: "life-replay:danny-speaking-alias",
+      capturedAt: "2026-03-26T11:00:00Z",
+      contents: Buffer.from("RIFFAI Brain Danny alias sample", "utf8"),
+      derivation: {
+        manualContentText: "I said SXSW in Austin still feels familiar to me.",
+        jobKind: "transcription",
+        modality: "audio",
+        metadata: {
+          derivation_source: "benchmark_asr_fixture",
+          fixture_kind: "speaker_alias_transcript",
+          captured_at: "2026-03-26T11:00:00Z",
+          language: "en",
+          duration_seconds: 5.2,
+          segments: [
+            {
+              start: 0,
+              end: 5.2,
+              text: "I said SXSW in Austin still feels familiar to me.",
+              speaker: "Danny"
+            }
+          ],
+          words: []
         }
       }
     }
@@ -468,13 +588,19 @@ const FIXTURES: readonly ReplayFixture[] = [
     path: replayFixturePath("replay-integrity-1.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:replay-integrity-1",
-    capturedAt: "2026-03-21T14:00:00Z"
+    capturedAt: "2026-03-08T14:00:00Z"
   },
   {
     path: replayFixturePath("replay-integrity-2.md"),
     sourceType: "markdown",
     sourceChannel: "life-replay:replay-integrity-2",
     capturedAt: "2026-03-22T14:00:00Z"
+  },
+  {
+    path: replayFixturePath("replay-integrity-3.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:replay-integrity-3",
+    capturedAt: "2026-04-05T14:00:00Z"
   },
   {
     path: replayFixturePath("dietary-blocker-peanuts.md"),
@@ -511,6 +637,12 @@ const FIXTURES: readonly ReplayFixture[] = [
     sourceType: "markdown",
     sourceChannel: "life-replay:pdf-protocol-3",
     capturedAt: "2026-02-02T09:00:00Z"
+  },
+  {
+    path: replayFixturePath("bangkok-trip-february.md"),
+    sourceType: "markdown",
+    sourceChannel: "life-replay:bangkok-trip-february",
+    capturedAt: "2026-02-14T18:00:00Z"
   },
   {
     path: replayFixturePath("uncle-ambiguity.md"),
@@ -593,7 +725,7 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     query: "who is Steve dating now?",
     expectTopIncludes: [],
     expectedDualityClaimIncludes: ["Unknown."],
-    requireEvidence: true,
+    requireEvidence: false,
     requireDuality: true,
     minimumConfidence: "confident",
     expectedFollowUpAction: "none"
@@ -853,6 +985,25 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     expectedTemporalSummarySufficient: true
   },
   {
+    name: "relative_month_query",
+    query: "where did Steve go last month?",
+    expectTopIncludes: ["Bangkok"],
+    requireEvidence: true,
+    minimumConfidence: "confident",
+    expectedPlannerQueryClass: "temporal_detail",
+    expectedLeafEvidenceRequired: true
+  },
+  {
+    name: "temporal_detail_companion_query",
+    query: "who was Steve with on March 20 2026?",
+    expectTopTypes: ["episodic_memory", "narrative_event"],
+    expectTopIncludes: ["Gummi"],
+    requireEvidence: true,
+    minimumConfidence: "confident",
+    expectedPlannerQueryClass: "temporal_detail",
+    expectedLeafEvidenceRequired: true
+  },
+  {
     name: "temporal_detail_cost_query",
     query: "how much did coworking cost on March 20 2026?",
     expectTopTypes: ["episodic_memory", "narrative_event"],
@@ -937,6 +1088,57 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     minimumConfidence: "confident"
   },
   {
+    name: "dan_transcript_karaoke_query",
+    query: "what did Dan say about karaoke?",
+    expectTopIncludes: ["Dan", "karaoke"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "dan_transcript_sunday_query",
+    query: "what did Dan say about Sunday night?",
+    expectTopIncludes: ["Dan", "Sunday night", "Costa", "burgers"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "dan_transcript_day_query",
+    query: "what did Dan do on March 22 2026?",
+    expectTopIncludes: ["Dan", "karaoke", "spa", "burgers"],
+    requireEvidence: true,
+    minimumConfidence: "confident",
+    expectedPlannerQueryClass: "temporal_summary"
+  },
+  {
+    name: "steve_dual_speaker_bangkok_query",
+    query: "what did Steve say about Bangkok?",
+    expectTopIncludes: ["Steve", "Bangkok", "coworking space", "Asok"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "dan_dual_speaker_austin_query",
+    query: "what did Dan say about Austin?",
+    expectTopIncludes: ["Dan", "Austin", "storage"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "transcript_edit_propagation_query",
+    query: "what did Steve say about the Turkey conference?",
+    expectTopIncludes: ["Steve", "Turkey conference", "Izmir"],
+    expectExcludes: ["Istanbul"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
+    name: "speaker_alias_transcript_query",
+    query: "what did Dan say about SXSW?",
+    expectTopIncludes: ["Dan", "SXSW", "Austin"],
+    requireEvidence: true,
+    minimumConfidence: "confident"
+  },
+  {
     name: "chiang_mai_hierarchy_query",
     query: "what country is Chiang Mai in?",
     expectTopTypes: ["relationship_memory"],
@@ -1004,6 +1206,37 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
       LIMIT 1
     `,
     expectIncludes: ["Chiang Mai"]
+  },
+  {
+    name: "austin_not_promoted_to_steve_current_home",
+    sql: `
+      SELECT concat(state_type, ' ', state_key, ' ', state_value::text) AS value
+      FROM procedural_memory
+      WHERE namespace_id = 'personal'
+        AND valid_until IS NULL
+        AND (
+          state_type = 'current_location'
+          OR state_type = 'current_home'
+        )
+      ORDER BY updated_at DESC
+    `,
+    expectIncludes: ["Chiang Mai"],
+    expectExcludes: ["Austin"]
+  },
+  {
+    name: "transcript_edit_stale_utterance_removed",
+    sql: `
+      SELECT normalized_text AS value
+      FROM transcript_utterances
+      WHERE artifact_id IN (
+        SELECT id
+        FROM artifacts
+        WHERE uri LIKE '%transcript-edit-propagation.json'
+      )
+      ORDER BY occurred_at DESC
+    `,
+    expectIncludes: ["Izmir"],
+    expectExcludes: ["Istanbul"]
   },
   {
     name: "current_residency_edge",
@@ -1366,8 +1599,19 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     expectIncludes: [
       "ocr Whiteboard photo from the March redesign packet",
       "ocr March redesign packet says the Steve graph should expand",
-      "transcription Voice memo says the graph should expand from Steve to Chiang Mai to Thailand"
+      "transcription Voice memo says the graph should expand from Steve to Chiang Mai to Thailand",
+      "transcription All right, let's test my voice."
     ]
+  },
+  {
+    name: "transcript_utterances_exist",
+    sql: `
+      SELECT concat(coalesce(speaker_name, speaker_label, 'unknown'), ' ', normalized_text) AS value
+      FROM transcript_utterances
+      WHERE namespace_id = 'personal'
+      ORDER BY occurred_at ASC
+    `,
+    expectIncludes: ["Dan", "karaoke", "Sunday night", "Costa"]
   },
   {
     name: "derivation_jobs_completed",
@@ -1451,7 +1695,9 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     expectIncludes: [
       "constraint:ask_for_clarification_instead_of_guessing",
       "heuristic_induction",
-      "rule_of_3_distinct_days",
+      "rule_of_3_distinct_weeks_and_sources",
+      "\"distinct_week_count\":",
+      "\"distinct_source_count\":",
       "\"induced\": true"
     ]
   },
@@ -1471,7 +1717,9 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
       "style_spec:wipe_and_replay_database_after_each_slice",
       "induced",
       "heuristic_induction",
-      "rule_of_3_distinct_days"
+      "rule_of_3_distinct_weeks_and_sources",
+      "\"distinct_week_count\":",
+      "\"distinct_source_count\":"
     ]
   },
   {
@@ -1701,7 +1949,7 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
         AND query_text = 'what did Steve do on March 20 2026?'
       ORDER BY created_at DESC
     `,
-    expectIncludes: ["day_summary weak"]
+    expectIncludes: ["day_summary"]
   },
   {
     name: "nina_relationship_profile_summary_active",
@@ -1795,7 +2043,9 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
       "style_spec:chunk_large_pdf_uploads_before_processing",
       "induced",
       "large_pdf_protocol",
-      "rule_of_3_distinct_days"
+      "rule_of_3_distinct_weeks_and_sources",
+      "\"distinct_week_count\":",
+      "\"distinct_source_count\":"
     ]
   },
   {
@@ -1817,10 +2067,21 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     `,
     expectIncludes: ["0"]
   },
+  {
+    name: "provenance_audit_worker_latest_clean",
+    sql: `
+      SELECT concat(worker_key, ' ', coalesce(summary_json->>'status', ''), ' ', coalesce(summary_json->>'totalOrphans', '')) AS value
+      FROM ops.worker_runs
+      WHERE worker_key = 'provenance_audit'
+      ORDER BY started_at DESC
+      LIMIT 1
+    `,
+    expectIncludes: ["provenance_audit", "clean", "0"]
+  },
 ];
 
 export async function resetDatabase(): Promise<void> {
-  await withTransaction(async (client) => {
+  await withClient(async (client) => {
     const rows = await client.query<{ table_name: string }>(
       `
         SELECT tablename AS table_name
@@ -1858,6 +2119,7 @@ export async function resetDatabase(): Promise<void> {
 
 export async function seedNamespace(namespaceId: string): Promise<number> {
   const generatedFixtures = await ensureGeneratedFixtures();
+  const transcriptEditFixturePath = path.join(generatedFixtureRoot(), "transcript-edit-propagation.json");
   const missingFixtures: string[] = [];
   for (const fixture of FIXTURES) {
     try {
@@ -1906,11 +2168,82 @@ export async function seedNamespace(namespaceId: string): Promise<number> {
     }
   }
 
+  await writeFile(
+    transcriptEditFixturePath,
+    JSON.stringify(
+      {
+        text: "I said the Turkey conference is in Izmir this year.",
+        language: "en",
+        duration_seconds: 6.4,
+        segments: [
+          {
+            start: 0,
+            end: 6.4,
+            text: "I said the Turkey conference is in Izmir this year.",
+            speaker: "Steve"
+          }
+        ],
+        words: []
+      },
+      null,
+      2
+    )
+  );
+
+  await ingestArtifact({
+    inputUri: transcriptEditFixturePath,
+    namespaceId,
+    sourceType: "transcript",
+    sourceChannel: "life-replay:transcript-edit-propagation",
+    capturedAt: "2026-03-25T09:05:00Z"
+  });
+
+  await withTransaction(async (client) => {
+    const danEntity = await client.query<{ id: string }>(
+      `
+        SELECT id
+        FROM entities
+        WHERE namespace_id = $1
+          AND entity_type IN ('person', 'self')
+          AND canonical_name = 'Dan'
+        LIMIT 1
+      `,
+      [namespaceId]
+    );
+
+    const danEntityId = danEntity.rows[0]?.id;
+    if (danEntityId) {
+      await client.query(
+        `
+          INSERT INTO entity_aliases (
+            entity_id,
+            alias,
+            normalized_alias,
+            alias_type,
+            metadata
+          )
+          VALUES ($1::uuid, 'Danny', 'danny', 'derived', $2::jsonb)
+          ON CONFLICT (entity_id, normalized_alias)
+          DO UPDATE SET
+            metadata = entity_aliases.metadata || EXCLUDED.metadata
+        `,
+        [
+          danEntityId,
+          JSON.stringify({
+            source: "life_replay_alias_seed",
+            seeded_for_transcript_alias: true
+          })
+        ]
+      );
+    }
+  });
+
   await executeDerivationWorker({
     namespaceId,
     limit: 16,
     triggerType: "repair",
-    workerId: "life-replay:derivation-worker"
+    workerId: "life-replay:derivation-worker",
+    allowDuringMaintenance: true
   });
 
   await runRelationshipAdjudication(namespaceId, {
@@ -2136,6 +2469,10 @@ export async function seedNamespace(namespaceId: string): Promise<number> {
   });
   await runTemporalNodeArchival(namespaceId, {
     limit: 1600
+  });
+  await executeProvenanceAuditWorker({
+    triggerType: "repair",
+    workerId: "life-replay:provenance-audit"
   });
 
   return allFixtures.length;

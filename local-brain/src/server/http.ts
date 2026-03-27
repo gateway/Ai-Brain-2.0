@@ -34,6 +34,7 @@ import {
 import {
   executeDerivationWorker,
   executeOutboxWorker,
+  executeProvenanceAuditWorker,
   executeSourceMonitorWorker,
   executeTemporalSummaryWorker,
   getRuntimeWorkerStatus
@@ -212,6 +213,7 @@ function mergeSearchResponses(responses: readonly SearchResponse[], limit: numbe
   const queryEmbeddingProvider = responses.find((response) => response.meta.queryEmbeddingProvider)?.meta.queryEmbeddingProvider;
   const queryEmbeddingModel = responses.find((response) => response.meta.queryEmbeddingModel)?.meta.queryEmbeddingModel;
   const vectorFallbackReason = responses.find((response) => response.meta.vectorFallbackReason)?.meta.vectorFallbackReason;
+  const rankingKernel = responses.find((response) => response.meta.rankingKernel)?.meta.rankingKernel;
   const lexicalFallbackReason = responses.find((response) => response.meta.lexicalFallbackReason)?.meta.lexicalFallbackReason;
   const activeRelationshipFocus = queryText ? isActiveRelationshipQuery(queryText) : false;
   const predicatePriority = new Map(
@@ -328,6 +330,7 @@ function mergeSearchResponses(responses: readonly SearchResponse[], limit: numbe
       queryEmbeddingProvider,
       queryEmbeddingModel,
       vectorFallbackReason,
+      rankingKernel,
       lexicalCandidateCount: responses.reduce((sum, response) => sum + response.meta.lexicalCandidateCount, 0),
       vectorCandidateCount: responses.reduce((sum, response) => sum + response.meta.vectorCandidateCount, 0),
       fusedResultCount: results.length,
@@ -917,6 +920,20 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
       body: {
         ok: true,
         derivationRun
+      }
+    };
+  }
+
+  if (request.method === "POST" && url.pathname === "/ops/provenance-audit/process") {
+    const audit = await executeProvenanceAuditWorker({
+      triggerType: "manual"
+    });
+
+    return {
+      statusCode: 200,
+      body: {
+        ok: true,
+        audit
       }
     };
   }

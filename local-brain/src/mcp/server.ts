@@ -1,7 +1,18 @@
 import { stdin, stdout } from "node:process";
-import { withTransaction } from "../db/client.js";
-import { getOpsClarificationInbox } from "../ops/service.js";
-import { getArtifactDetail, getRelationships, searchMemory, timelineMemory } from "../retrieval/service.js";
+import { queryRows, withTransaction } from "../db/client.js";
+import { getOpsClarificationInbox, getOpsOverview, getOpsRelationshipGraph } from "../ops/service.js";
+import { getBootstrapState, listMonitoredSources } from "../ops/source-service.js";
+import { getRuntimeWorkerStatus } from "../ops/runtime-worker-service.js";
+import {
+  explainRecap,
+  extractCalendarMemory,
+  extractTaskMemory,
+  getArtifactDetail,
+  getRelationships,
+  recapMemory,
+  searchMemory,
+  timelineMemory
+} from "../retrieval/service.js";
 import { toolDescriptors } from "./tool-contracts.js";
 
 type JsonRpcId = string | number | null;
@@ -75,6 +86,15 @@ function optionalObject(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
+function optionalStringArray(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const normalized = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function jsonText(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
@@ -106,6 +126,28 @@ function fail(id: JsonRpcId, code: number, message: string, data?: unknown): Jso
 
 function toolSchema(name: string): Record<string, unknown> {
   switch (name) {
+    case "memory.recap":
+    case "memory.extract_tasks":
+    case "memory.extract_calendar":
+    case "memory.explain_recap":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          query: { type: "string" },
+          namespace_id: { type: "string" },
+          time_start: { type: "string" },
+          time_end: { type: "string" },
+          reference_now: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 50 },
+          participants: { type: "array", items: { type: "string" } },
+          topics: { type: "array", items: { type: "string" } },
+          projects: { type: "array", items: { type: "string" } },
+          provider: { type: "string", enum: ["none", "local", "openrouter"] },
+          model: { type: "string" }
+        },
+        required: ["query", "namespace_id"]
+      };
     case "memory.search":
       return {
         type: "object",
@@ -115,6 +157,7 @@ function toolSchema(name: string): Record<string, unknown> {
           namespace_id: { type: "string" },
           time_start: { type: "string" },
           time_end: { type: "string" },
+          reference_now: { type: "string" },
           limit: { type: "integer", minimum: 1, maximum: 50 }
         },
         required: ["query", "namespace_id"]
@@ -154,7 +197,40 @@ function toolSchema(name: string): Record<string, unknown> {
         },
         required: ["entity_name", "namespace_id"]
       };
+    case "memory.get_graph":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          entity_name: { type: "string" },
+          namespace_id: { type: "string" },
+          time_start: { type: "string" },
+          time_end: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 100 }
+        },
+        required: ["namespace_id"]
+      };
     case "memory.get_clarifications":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          namespace_id: { type: "string" },
+          query: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 50 }
+        },
+        required: ["namespace_id"]
+      };
+    case "memory.get_stats":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          source_limit: { type: "integer", minimum: 1, maximum: 100 }
+        },
+        required: []
+      };
+    case "memory.get_protocols":
       return {
         type: "object",
         additionalProperties: false,
@@ -361,8 +437,172 @@ async function upsertState(args: ToolCallArgs): Promise<unknown> {
   };
 }
 
-async function callTool(name: string, args: ToolCallArgs): Promise<unknown> {
+async function getStats(args: ToolCallArgs): Promise<unknown> {
+  const sourceLimit = optionalNumber(args.source_limit) ?? 12;
+  const [overview, runtimeWorkers, bootstrap, monitoredSources] = await Promise.all([
+    getOpsOverview(),
+    getRuntimeWorkerStatus(),
+    getBootstrapState(),
+    listMonitoredSources(sourceLimit)
+  ]);
+
+  return wrapResult({
+    overview,
+    runtimeWorkers,
+    bootstrap,
+    monitoredSources
+  });
+}
+
+async function getProtocols(args: ToolCallArgs): Promise<unknown> {
+  const namespaceId = requireString(args.namespace_id, "namespace_id");
+  const query = optionalString(args.query)?.toLowerCase();
+  const queryTokens = query ? query.split(/\s+/u).filter((token) => token.length >= 3) : [];
+  const limit = optionalNumber(args.limit) ?? 20;
+  const rows = await queryRows<{
+    readonly id: string;
+    readonly state_type: string;
+    readonly state_key: string;
+    readonly state_value: Record<string, unknown>;
+    readonly valid_from: string;
+    readonly metadata: Record<string, unknown>;
+  }>(
+    `
+      SELECT
+        id::text,
+        state_type,
+        state_key,
+        state_value,
+        valid_from::text,
+        metadata
+      FROM procedural_memory
+      WHERE namespace_id = $1
+        AND valid_until IS NULL
+        AND state_type IN ('constraint', 'style_spec')
+      ORDER BY
+        CASE state_type WHEN 'constraint' THEN 0 ELSE 1 END,
+        valid_from DESC
+      LIMIT 200
+    `,
+    [namespaceId]
+  );
+
+  const scoredRows = rows
+    .map((row) => {
+      const haystack = [
+        row.state_type,
+        row.state_key,
+        JSON.stringify(row.state_value ?? {}),
+        JSON.stringify(row.metadata ?? {})
+      ].join(" ").toLowerCase();
+      const matchedTokens = queryTokens.filter((token) => haystack.includes(token));
+      return {
+        row,
+        haystack,
+        matchedTokens,
+        matchedCount: matchedTokens.length
+      };
+    })
+    .filter((entry) => (queryTokens.length === 0 ? true : entry.matchedCount > 0))
+    .sort((left, right) => {
+      if (right.matchedCount !== left.matchedCount) {
+        return right.matchedCount - left.matchedCount;
+      }
+
+      if (left.row.state_type !== right.row.state_type) {
+        return left.row.state_type.localeCompare(right.row.state_type);
+      }
+
+      return right.row.valid_from.localeCompare(left.row.valid_from);
+    });
+
+  const returnedRows = scoredRows.slice(0, limit);
+  const matchedTokens = Array.from(new Set(returnedRows.flatMap((entry) => entry.matchedTokens))).sort();
+
+  return wrapResult({
+    namespaceId,
+    query: query ?? null,
+    matchedTokens,
+    total: scoredRows.length,
+    items: returnedRows.map(({ row, matchedTokens: rowMatchedTokens, matchedCount }) => ({
+      id: row.id,
+      stateType: row.state_type,
+      stateKey: row.state_key,
+      stateValue: row.state_value,
+      validFrom: row.valid_from,
+      metadata: row.metadata,
+      match: {
+        matchedTokens: rowMatchedTokens,
+        matchedCount
+      }
+    }))
+  });
+}
+
+export async function executeMcpTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
+    case "memory.recap":
+      return wrapResult(
+        await recapMemory({
+          query: requireString(args.query, "query"),
+          namespaceId: requireString(args.namespace_id, "namespace_id"),
+          timeStart: optionalString(args.time_start),
+          timeEnd: optionalString(args.time_end),
+          referenceNow: optionalString(args.reference_now),
+          limit: optionalNumber(args.limit),
+          participants: optionalStringArray(args.participants),
+          topics: optionalStringArray(args.topics),
+          projects: optionalStringArray(args.projects),
+          provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
+          model: optionalString(args.model)
+        })
+      );
+    case "memory.extract_tasks":
+      return wrapResult(
+        await extractTaskMemory({
+          query: requireString(args.query, "query"),
+          namespaceId: requireString(args.namespace_id, "namespace_id"),
+          timeStart: optionalString(args.time_start),
+          timeEnd: optionalString(args.time_end),
+          referenceNow: optionalString(args.reference_now),
+          limit: optionalNumber(args.limit),
+          participants: optionalStringArray(args.participants),
+          topics: optionalStringArray(args.topics),
+          projects: optionalStringArray(args.projects),
+          provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
+          model: optionalString(args.model)
+        })
+      );
+    case "memory.extract_calendar":
+      return wrapResult(
+        await extractCalendarMemory({
+          query: requireString(args.query, "query"),
+          namespaceId: requireString(args.namespace_id, "namespace_id"),
+          timeStart: optionalString(args.time_start),
+          timeEnd: optionalString(args.time_end),
+          referenceNow: optionalString(args.reference_now),
+          limit: optionalNumber(args.limit),
+          participants: optionalStringArray(args.participants),
+          topics: optionalStringArray(args.topics),
+          projects: optionalStringArray(args.projects),
+          provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
+          model: optionalString(args.model)
+        })
+      );
+    case "memory.explain_recap":
+      return wrapResult(
+        await explainRecap({
+          query: requireString(args.query, "query"),
+          namespaceId: requireString(args.namespace_id, "namespace_id"),
+          timeStart: optionalString(args.time_start),
+          timeEnd: optionalString(args.time_end),
+          referenceNow: optionalString(args.reference_now),
+          limit: optionalNumber(args.limit),
+          participants: optionalStringArray(args.participants),
+          topics: optionalStringArray(args.topics),
+          projects: optionalStringArray(args.projects)
+        })
+      );
     case "memory.search":
       return wrapResult(
         await searchMemory({
@@ -370,6 +610,7 @@ async function callTool(name: string, args: ToolCallArgs): Promise<unknown> {
           namespaceId: requireString(args.namespace_id, "namespace_id"),
           timeStart: optionalString(args.time_start),
           timeEnd: optionalString(args.time_end),
+          referenceNow: optionalString(args.reference_now),
           limit: optionalNumber(args.limit)
         })
       );
@@ -390,6 +631,15 @@ async function callTool(name: string, args: ToolCallArgs): Promise<unknown> {
           namespaceId: requireString(args.namespace_id, "namespace_id"),
           entityName: requireString(args.entity_name, "entity_name"),
           predicate: optionalString(args.predicate),
+          timeStart: optionalString(args.time_start),
+          timeEnd: optionalString(args.time_end),
+          limit: optionalNumber(args.limit)
+        })
+      );
+    case "memory.get_graph":
+      return wrapResult(
+        await getOpsRelationshipGraph(requireString(args.namespace_id, "namespace_id"), {
+          entityName: optionalString(args.entity_name),
           timeStart: optionalString(args.time_start),
           timeEnd: optionalString(args.time_end),
           limit: optionalNumber(args.limit)
@@ -425,6 +675,10 @@ async function callTool(name: string, args: ToolCallArgs): Promise<unknown> {
         }
       });
     }
+    case "memory.get_stats":
+      return getStats(args);
+    case "memory.get_protocols":
+      return getProtocols(args);
     case "memory.save_candidate":
       return saveCandidate(args);
     case "memory.upsert_state":
@@ -474,7 +728,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<JsonRpcSuccessRes
     const params = optionalObject(request.params) ?? {};
     const toolName = requireString(params.name, "name");
     const toolArgs = parseToolArgs(params);
-    const result = await callTool(toolName, toolArgs);
+    const result = await executeMcpTool(toolName, toolArgs);
     return ok(request.id ?? null, result);
   }
 

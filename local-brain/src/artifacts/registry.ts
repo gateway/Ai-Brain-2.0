@@ -42,6 +42,10 @@ function inferMimeType(sourceType: SourceType, uri: string): string {
     return ext === ".wav" ? "audio/wav" : ext === ".aac" ? "audio/aac" : ext === ".mp3" ? "audio/mpeg" : "audio/mp4";
   }
 
+  if (sourceType === "video" || [".mp4", ".mov", ".m4v", ".webm"].includes(ext)) {
+    return ext === ".mov" ? "video/quicktime" : ext === ".webm" ? "video/webm" : "video/mp4";
+  }
+
   return "application/octet-stream";
 }
 
@@ -52,7 +56,7 @@ function sha256(value: Buffer): string {
 function isTextLike(sourceType: SourceType, mimeType: string, uri: string): boolean {
   const ext = path.extname(uri).toLowerCase();
 
-  if (sourceType === "image" || sourceType === "audio" || sourceType === "pdf") {
+  if (sourceType === "image" || sourceType === "audio" || sourceType === "video" || sourceType === "pdf") {
     return false;
   }
 
@@ -99,6 +103,7 @@ export async function registerArtifactObservation(
     readonly namespaceId: string;
     readonly sourceType: SourceType;
     readonly inputUri: string;
+    readonly capturedAt?: string;
     readonly sourceChannel?: string;
     readonly metadata?: Record<string, unknown>;
   }
@@ -118,6 +123,7 @@ export async function registerArtifactObservation(
   };
   const metadata = {
     ...(options.metadata ?? {}),
+    captured_at: options.capturedAt ?? null,
     byte_size: source.byteSize,
     modified_at: source.modifiedAt,
     has_text_content: source.hasTextContent
@@ -216,10 +222,17 @@ export async function registerArtifactObservation(
         observed_at,
         metadata
       )
-      VALUES ($1, $2, $3, $4, now(), $5::jsonb)
+      VALUES ($1, $2, $3, $4, $5::timestamptz, $6::jsonb)
       RETURNING id
     `,
-    [artifactId, nextVersion, checksumSha256, source.byteSize, JSON.stringify(metadata)]
+    [
+      artifactId,
+      nextVersion,
+      checksumSha256,
+      source.byteSize,
+      options.capturedAt ?? new Date().toISOString(),
+      JSON.stringify(metadata)
+    ]
   );
 
   const observationId = observationResult.rows[0]?.id;
