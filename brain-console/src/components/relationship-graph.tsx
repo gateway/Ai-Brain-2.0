@@ -103,6 +103,17 @@ function formatConfidence(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
+function relationshipStatusLabel(edge: OpsRelationshipGraphEdge): string {
+  const normalized = edge.status?.trim().toLowerCase() ?? "";
+  if (normalized === "historical" || normalized === "superseded" || Boolean(edge.validUntil)) {
+    return "historical";
+  }
+  if (normalized === "reopened") {
+    return "reopened";
+  }
+  return "active";
+}
+
 function buildAdjacency(graph: OpsRelationshipGraph): Map<string, Set<string>> {
   const adjacency = new Map<string, Set<string>>();
 
@@ -802,11 +813,19 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
                     confidence {formatConfidence(selectedEdge.confidence)}
                   </span>
                   <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-200">
-                    {new Date(selectedEdge.validFrom).toLocaleDateString()}
+                    {relationshipStatusLabel(selectedEdge)}
                   </span>
+                  <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-200">
+                    from {new Date(selectedEdge.validFrom).toLocaleDateString()}
+                  </span>
+                  {selectedEdge.validUntil ? (
+                    <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-200">
+                      until {new Date(selectedEdge.validUntil).toLocaleDateString()}
+                    </span>
+                  ) : null}
                 </div>
                 <p className="text-sm leading-7 text-slate-300">
-                  This edge is active relationship memory in the current graph window, not a speculative visualization edge.
+                  This edge is relationship memory in the current graph window, with canonical cleanup and temporal status applied before it reaches the atlas.
                 </p>
               </div>
             ) : (

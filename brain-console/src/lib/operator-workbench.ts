@@ -475,6 +475,12 @@ export interface WorkbenchSearchEvidence {
 export interface WorkbenchSearchResponse {
   readonly results: readonly WorkbenchSearchResult[];
   readonly evidence: readonly WorkbenchSearchEvidence[];
+  readonly duality?: {
+    readonly claim?: {
+      readonly text?: string | null;
+    };
+    readonly confidence?: string | null;
+  };
   readonly meta: Record<string, unknown>;
 }
 
@@ -493,6 +499,7 @@ export interface WorkbenchClarificationItem {
   readonly predicate: string;
   readonly targetRole: string;
   readonly rawText: string;
+  readonly ambiguityClass: string;
   readonly subjectText?: string;
   readonly objectText?: string;
   readonly confidence?: number;
@@ -518,6 +525,21 @@ export interface WorkbenchClarifications {
   };
   readonly items: readonly WorkbenchClarificationItem[];
   readonly available_actions: Record<string, string>;
+}
+
+export interface WorkbenchClarificationCommandResult {
+  readonly namespaceId: string;
+  readonly candidateId: string;
+  readonly action: "resolve" | "ignore";
+  readonly resolutionId?: string;
+  readonly outboxEventId: string;
+  readonly affectedCandidates: number;
+  readonly outbox?: {
+    readonly scanned: number;
+    readonly processed: number;
+    readonly failed: number;
+    readonly touchedNamespaces: readonly string[];
+  };
 }
 
 interface WorkbenchClarificationWorkbenchEnvelope {
@@ -1264,8 +1286,8 @@ export async function resolveWorkbenchClarification(input: {
   readonly entityType: string;
   readonly aliases?: readonly string[];
   readonly note?: string;
-}): Promise<void> {
-  await fetchJson("/ops/inbox/resolve", {
+}): Promise<WorkbenchClarificationCommandResult> {
+  return fetchJson<WorkbenchClarificationCommandResult>("/ops/inbox/resolve", {
     method: "POST",
     body: JSON.stringify({
       namespace_id: input.namespaceId,
@@ -1283,8 +1305,8 @@ export async function ignoreWorkbenchClarification(input: {
   readonly namespaceId: string;
   readonly candidateId: string;
   readonly note?: string;
-}): Promise<void> {
-  await fetchJson("/ops/inbox/ignore", {
+}): Promise<WorkbenchClarificationCommandResult> {
+  return fetchJson<WorkbenchClarificationCommandResult>("/ops/inbox/ignore", {
     method: "POST",
     body: JSON.stringify({
       namespace_id: input.namespaceId,

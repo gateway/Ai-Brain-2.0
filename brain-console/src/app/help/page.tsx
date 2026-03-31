@@ -94,8 +94,9 @@ BRAIN_OPENROUTER_EMBEDDING_MODEL=text-embedding-3-small`}</code></pre>
               <p><span className="font-medium text-white">Dashboard</span>: the daily operator loop, the current state, and the advanced controls you only open when needed.</p>
               <p><span className="font-medium text-white">Start Here</span>: first-run checklist.</p>
               <p><span className="font-medium text-white">Guided Setup</span>: owner bootstrap, sources, verification.</p>
+              <p><span className="font-medium text-white">Clarifications</span>: ranked queue/list for ambiguous people, places, aliases, and relation fixes.</p>
               <p><span className="font-medium text-white">Sessions</span>: intake, review, artifacts, clarifications.</p>
-              <p><span className="font-medium text-white">Legacy Console</span>: advanced query, graph, timeline, benchmark.</p>
+              <p><span className="font-medium text-white">Legacy Console</span>: advanced query, graph, timeline, benchmark, and the current derived atlas.</p>
             </CardContent>
           </Card>
 

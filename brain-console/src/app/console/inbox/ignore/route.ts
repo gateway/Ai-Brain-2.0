@@ -5,7 +5,7 @@ export async function POST(request: Request) {
   const formData = await request.formData();
   const namespaceId = String(formData.get("namespace_id") ?? "");
 
-  await fetch(new URL("/ops/inbox/ignore", getRuntimeBaseUrl()), {
+  const response = await fetch(new URL("/ops/inbox/ignore", getRuntimeBaseUrl()), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -18,5 +18,11 @@ export async function POST(request: Request) {
     cache: "no-store"
   });
 
-  return NextResponse.redirect(new URL(`/console/inbox?namespace_id=${encodeURIComponent(namespaceId)}`, request.url));
+  const payload = (await response.json()) as { readonly outbox?: { readonly failed?: number; readonly processed?: number } };
+  const rebuildState =
+    (payload.outbox?.failed ?? 0) > 0 ? "partial" : (payload.outbox?.processed ?? 0) > 0 ? "done" : "queued";
+
+  return NextResponse.redirect(
+    new URL(`/console/inbox?namespace_id=${encodeURIComponent(namespaceId)}&clarification=ignored&rebuild=${rebuildState}`, request.url)
+  );
 }

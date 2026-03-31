@@ -74,8 +74,8 @@ export default async function BootstrapVerifyPage({
           step="Step 5"
           title="Confirm the brain can actually answer from what you loaded"
           statusLabel={bootstrap.verificationCompleted ? "complete" : "final check"}
-          whatToDo="Run the smoke pack, inspect the supporting evidence, and use the ad hoc query only as a secondary tool if you want more context."
-          whyItMatters="This is where setup stops being a form flow and becomes a real system check. You only want to treat setup as done once the brain can actually recall useful information with evidence."
+          whatToDo="Run the smoke pack, inspect the supporting evidence, and use the ad hoc query only as a secondary tool if you want more context. Continuity-first startup and private recall should already be visible here."
+          whyItMatters="This is where setup stops being a form flow and becomes a real system check. You only want to treat setup as done once the brain can actually recall useful information with evidence, while the graph contract is still clearly marked as legacy and clarifications remain visible as a real queue/list."
           nextHref={bootstrap.verificationCompleted ? "/sessions" : "/"}
           nextLabel={bootstrap.verificationCompleted ? "Start using sessions" : "Back to dashboard"}
         />
@@ -93,6 +93,17 @@ export default async function BootstrapVerifyPage({
               <CardTitle>Fixed verification questions</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="outline" className="border-emerald-300/20 bg-emerald-300/10 text-emerald-50">
+                  Continuity-first startup
+                </Badge>
+                <Badge variant="outline" className="border-cyan-300/20 bg-cyan-300/10 text-cyan-50">
+                  Personal recall green
+                </Badge>
+                <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-200">
+                  Graph stays legacy
+                </Badge>
+              </div>
               <div className="rounded-[18px] border border-cyan-300/16 bg-cyan-300/10 px-4 py-3 text-sm leading-7 text-cyan-50">
                 Good result: the brain answers simply and shows evidence.
               </div>
@@ -148,15 +159,21 @@ export default async function BootstrapVerifyPage({
                   >
                     Back to owner bootstrap
                   </Link>
-                  <Link
-                    href="/console/relationships"
-                    className="inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white hover:bg-white/10"
-                  >
-                    Open graph
-                  </Link>
-                </div>
-              </CardContent>
-            </Card>
+                <Link
+                  href="/console/relationships"
+                  className="inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white hover:bg-white/10"
+                >
+                  Open relationship atlas
+                </Link>
+                <Link
+                  href="/clarifications"
+                  className="inline-flex items-center rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-white hover:bg-white/10"
+                >
+                  Open clarifications
+                </Link>
+              </div>
+            </CardContent>
+          </Card>
 
             <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
               <CardHeader>

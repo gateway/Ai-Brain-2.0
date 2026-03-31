@@ -57,6 +57,18 @@ function searchValue(value: string | readonly string[] | undefined): string | un
   return typeof value === "string" ? value : Array.isArray(value) ? value[0] : undefined;
 }
 
+function shortSourceLabel(value?: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const segments = trimmed.split("/").filter(Boolean);
+  return segments.slice(-2).join("/") || trimmed;
+}
+
 export default async function ClarificationsPage({
   searchParams
 }: {
@@ -65,6 +77,8 @@ export default async function ClarificationsPage({
   const params = await searchParams;
   const namespaceFilter = searchValue(params.namespace) ?? "all";
   const [bootstrap, catalog, gate] = await Promise.all([getBootstrapState(), getNamespaceCatalog(), getSetupGateState()]);
+  const clarificationStatus = searchValue(params.clarification);
+  const clarificationRebuild = searchValue(params.rebuild);
   const durableNamespaces = catalog.namespaces.filter((item) => item.category === "durable");
   const defaultNamespaceId = bootstrap.metadata.defaultNamespaceId ?? catalog.defaultNamespaceId ?? durableNamespaces[0]?.namespaceId ?? "personal";
   const selectedNamespaces =
@@ -118,20 +132,20 @@ export default async function ClarificationsPage({
     <OperatorShell
       currentPath="/clarifications"
       title="Clarifications"
-      subtitle="Work from the top down and fix what the brain does not know well enough yet."
+      subtitle="Work from the top down and fix what the brain does not know well enough yet. This is the ranked clarification queue/list used by bootstrap, sessions, and the dashboard to ground names, aliases, places, and kinship roles before they become canonical entities or graph edges."
     >
       <div className="space-y-6">
         <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
           <Card className="border-white/8 bg-[radial-gradient(circle_at_top_right,_rgba(103,232,249,0.08),_transparent_28%),linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
             <CardHeader>
-              <CardDescription>Operator queue</CardDescription>
-              <CardTitle>Unknowns worth fixing first</CardTitle>
+              <CardDescription>Operator queue / list</CardDescription>
+              <CardTitle>Canonicalization work worth fixing first</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm leading-7 text-slate-300">
               <p>These are already ranked by the backend, so the top of the queue is the right place to start.</p>
               {!gate.onboardingComplete ? (
                 <div className="rounded-[18px] border border-cyan-300/20 bg-cyan-300/10 px-3 py-2 text-xs leading-6 text-cyan-50">
-                  Setup is still underway, but clarifications are visible here on purpose so you can fix identity or place grounding before the graph learns bad habits.
+                  Setup is still underway, but clarifications are visible here on purpose so you can fix identity or place grounding before the atlas learns bad habits.
                 </div>
               ) : null}
               <div className="flex flex-wrap gap-2">
@@ -178,6 +192,19 @@ export default async function ClarificationsPage({
           </div>
         </div>
 
+        {clarificationStatus ? (
+          <div className="rounded-[22px] border border-emerald-300/25 bg-emerald-300/12 px-4 py-3 text-sm text-emerald-50">
+            Clarification {clarificationStatus === "resolved" ? "resolved" : "ignored"}.
+            {clarificationRebuild === "done"
+              ? " Rebuild completed."
+              : clarificationRebuild === "partial"
+                ? " Rebuild partially completed; inspect runtime and conflicts."
+                : clarificationRebuild === "queued"
+                  ? " Rebuild queued."
+                  : ""}
+          </div>
+        ) : null}
+
         {rankedItems.length === 0 ? (
           <Card className="border-white/8 bg-[linear-gradient(180deg,_rgba(18,24,34,0.96)_0%,_rgba(8,11,20,0.98)_100%)]">
             <CardContent className="p-6 text-sm leading-7 text-slate-300">
@@ -199,6 +226,9 @@ export default async function ClarificationsPage({
                     {ambiguityLabel(item.ambiguityType)}
                   </Badge>
                   <Badge variant="outline" className="border-white/10 bg-white/5 text-stone-200">
+                    {ambiguityLabel(item.ambiguityClass)}
+                  </Badge>
+                  <Badge variant="outline" className="border-white/10 bg-white/5 text-stone-200">
                     {item.targetRole}
                   </Badge>
                   <Badge variant="outline" className={confidenceTone(item.confidence)}>
@@ -217,6 +247,20 @@ export default async function ClarificationsPage({
                 <div className="mt-4 space-y-2">
                   <h3 className="text-lg font-semibold text-white">{item.rawText}</h3>
                   {item.ambiguityReason ? <p className="text-[15px] leading-7 text-slate-300">{item.ambiguityReason}</p> : null}
+                  {item.subjectText || item.objectText ? (
+                    <div className="flex flex-wrap gap-2">
+                      {item.subjectText ? (
+                        <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-100">
+                          subject {item.subjectText}
+                        </Badge>
+                      ) : null}
+                      {item.objectText ? (
+                        <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-100">
+                          object {item.objectText}
+                        </Badge>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {item.priorityReasons.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
                       {item.priorityReasons.map((reason) => (
@@ -233,7 +277,7 @@ export default async function ClarificationsPage({
                   ) : null}
                   <div className="flex flex-wrap gap-2 text-xs text-slate-400">
                     <span>{formatDateTime(item.occurredAt)}</span>
-                    {item.sourceUri ? <span>{item.sourceUri}</span> : null}
+                    {shortSourceLabel(item.sourceUri) ? <span>{shortSourceLabel(item.sourceUri)}</span> : null}
                     <span>{item.claimType}</span>
                     <span>{item.predicate}</span>
                   </div>

@@ -240,14 +240,24 @@ export interface OpsRelationshipGraphEdge {
   readonly objectName: string;
   readonly predicate: string;
   readonly confidence: number;
+  readonly status?: string | null;
   readonly validFrom: string;
+  readonly validUntil?: string | null;
   readonly sourceCandidateId?: string | null;
+  readonly sourceMemoryId?: string | null;
+  readonly sourceUri?: string | null;
   readonly metadata: Record<string, unknown>;
 }
 
 export interface OpsRelationshipGraph {
   readonly namespaceId: string;
   readonly selectedEntity?: string;
+  readonly requestedEntity?: string;
+  readonly ambiguityState?: "clear" | "ambiguous" | "unknown";
+  readonly ambiguityType?: string | null;
+  readonly ambiguityReason?: string | null;
+  readonly clarificationCount?: number;
+  readonly suggestedMatches?: readonly string[];
   readonly nodes: readonly OpsRelationshipGraphNode[];
   readonly edges: readonly OpsRelationshipGraphEdge[];
 }
@@ -261,6 +271,7 @@ export interface OpsClarificationInboxItem {
   readonly confidence: number;
   readonly priorScore: number;
   readonly ambiguityType: string;
+  readonly ambiguityClass: string;
   readonly ambiguityReason?: string | null;
   readonly suggestedMatches: readonly string[];
   readonly occurredAt: string;

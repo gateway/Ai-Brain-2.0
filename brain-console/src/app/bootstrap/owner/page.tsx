@@ -121,6 +121,7 @@ export default async function BootstrapOwnerPage({
   const saved = searchValue(params.saved);
   const smokeStatus = searchValue(params.smoke);
   const clarificationStatus = searchValue(params.clarification);
+  const clarificationRebuild = searchValue(params.rebuild);
   const locationSmoke = smokePack.find((item) => item.query === "where do I live?");
   const friendsSmoke = smokePack.find((item) => item.query === "who are my friends?");
   const projectsSmoke = smokePack.find((item) => item.query === "what am I working on?");
@@ -188,6 +189,13 @@ export default async function BootstrapOwnerPage({
         {clarificationStatus ? (
           <div className="rounded-[22px] border border-emerald-300/25 bg-emerald-300/12 px-4 py-3 text-sm text-emerald-50">
             Clarification {clarificationStatus === "resolved" ? "resolved" : "ignored"} and sent to the brain.
+            {clarificationRebuild === "done"
+              ? " Rebuild completed."
+              : clarificationRebuild === "partial"
+                ? " Rebuild partially completed; inspect runtime and clarifications."
+                : clarificationRebuild === "queued"
+                  ? " Rebuild queued."
+                  : ""}
           </div>
         ) : null}
 

@@ -347,7 +347,7 @@ export async function resolveOwnerClarificationAction(formData: FormData): Promi
     .filter(Boolean);
   const note = readString(formData, "note");
 
-  await resolveWorkbenchClarification({
+  const result = await resolveWorkbenchClarification({
     namespaceId,
     candidateId,
     targetRole,
@@ -358,7 +358,8 @@ export async function resolveOwnerClarificationAction(formData: FormData): Promi
   });
 
   refreshBootstrapPaths();
-  redirect(`${redirectPath}?clarification=resolved`);
+  const rebuildState = result.outbox?.failed ? "partial" : result.outbox?.processed ? "done" : "queued";
+  redirect(`${redirectPath}?clarification=resolved&rebuild=${encodeURIComponent(rebuildState)}`);
 }
 
 export async function ignoreOwnerClarificationAction(formData: FormData): Promise<void> {
@@ -367,14 +368,15 @@ export async function ignoreOwnerClarificationAction(formData: FormData): Promis
   const candidateId = readString(formData, "candidate_id");
   const note = readString(formData, "note");
 
-  await ignoreWorkbenchClarification({
+  const result = await ignoreWorkbenchClarification({
     namespaceId,
     candidateId,
     note: note || undefined
   });
 
   refreshBootstrapPaths();
-  redirect(`${redirectPath}?clarification=ignored`);
+  const rebuildState = result.outbox?.failed ? "partial" : result.outbox?.processed ? "done" : "queued";
+  redirect(`${redirectPath}?clarification=ignored&rebuild=${encodeURIComponent(rebuildState)}`);
 }
 
 export async function saveOpenRouterDefaultsAction(formData: FormData): Promise<void> {

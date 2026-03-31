@@ -45,13 +45,37 @@ export default async function ConsoleInboxPage({
   const inbox = workbench.inbox;
   const identityConflicts = workbench.identityConflicts;
   const identityHistory = workbench.identityHistory;
+  const clarificationState = typeof params.clarification === "string" ? params.clarification : undefined;
+  const rebuildState = typeof params.rebuild === "string" ? params.rebuild : undefined;
+  const rebuildMessage =
+    rebuildState === "done"
+      ? "Rebuild completed."
+      : rebuildState === "partial"
+        ? "Rebuild partially completed; inspect runtime and clarifications."
+        : rebuildState === "queued"
+          ? "Rebuild queued."
+          : null;
 
   return (
     <ConsoleShell
       currentPath="/console/inbox"
       title="Clarification Inbox"
-      subtitle="Resolve misspellings, undefined kinship roles, vague places, and alias collisions without touching the raw evidence layer."
+      subtitle="Resolve misspellings, undefined kinship roles, vague places, and alias collisions without touching the raw evidence layer. This is the console-facing clarification queue/list that keeps canonical entities and the atlas grounded."
     >
+      {clarificationState ? (
+        <Card className="border-emerald-400/20 bg-emerald-400/10 text-emerald-50">
+          <CardHeader>
+            <CardDescription className="text-emerald-200/80">Clarification update</CardDescription>
+            <CardTitle className="text-emerald-50">
+              Clarification {clarificationState === "ignored" ? "ignored" : "resolved"}.
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-emerald-100">
+            {rebuildMessage ?? "Clarification state updated."}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card className="border-white/10 bg-white/5 text-white">
           <CardHeader className="pb-2">
@@ -89,8 +113,8 @@ export default async function ConsoleInboxPage({
 
       <Card className="border-white/10 bg-white/5 text-white">
         <CardHeader>
-          <CardDescription>Review queue</CardDescription>
-          <CardTitle>Manual clarification keeps the graph honest</CardTitle>
+          <CardDescription>Review queue / list</CardDescription>
+          <CardTitle>Manual clarification keeps canonical entities honest</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {inbox.items.length === 0 ? (
@@ -102,6 +126,9 @@ export default async function ConsoleInboxPage({
               <section key={item.candidateId} className="rounded-[28px] border border-white/10 bg-white/5 p-5 shadow-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="outline">{ambiguityLabel(item.ambiguityType)}</Badge>
+                  <Badge variant="outline" className="border-cyan-300/20 bg-cyan-300/10 text-cyan-100">
+                    {ambiguityLabel(item.ambiguityClass)}
+                  </Badge>
                   <Badge variant="outline">{item.targetRole}</Badge>
                   <StatusBadge value={`confidence ${item.confidence.toFixed(2)}`} />
                   <StatusBadge value={`prior ${item.priorScore.toFixed(2)}`} />

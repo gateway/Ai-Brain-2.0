@@ -81,7 +81,7 @@ export default async function WorkbenchDashboardPage() {
     <OperatorShell
       currentPath="/"
       title="Dashboard"
-      subtitle="Start sessions, inspect believed state, and fix uncertainty without digging through the plumbing."
+      subtitle="Start sessions, inspect canonical state, and fix uncertainty before it turns into graph edges."
       actions={
         <div className="flex flex-wrap gap-2">
           {!bootstrap.progress.onboardingComplete ? (
@@ -121,25 +121,36 @@ export default async function WorkbenchDashboardPage() {
                     Turn a fresh install into a grounded, trusted AI brain.
                   </h3>
                   <p className="max-w-2xl text-[15px] leading-8 text-slate-200 sm:text-base">
-                    This setup flow walks through purpose, identity, trusted source intake, model connection, and verification in the order that makes the rest of the product feel clear instead of fragile.
+                    This setup flow walks through purpose, identity, trusted source intake, model connection, and verification in the order that keeps canonical entities, clarifications, and the derived atlas grounded instead of fragile.
                   </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="outline" className="border-emerald-300/20 bg-emerald-300/10 text-emerald-50">
+                      Continuity-first startup live
+                    </Badge>
+                    <Badge variant="outline" className="border-cyan-300/20 bg-cyan-300/10 text-cyan-50">
+                      Personal recall green
+                    </Badge>
+                    <Badge variant="outline" className="border-white/10 bg-white/5 text-slate-200">
+                      Canonical entities attached
+                    </Badge>
+                  </div>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-3">
                   {[
                     {
                       step: "1",
                       title: "Define the brain",
-                      detail: "Choose purpose and default operating lane."
+                      detail: "Choose purpose and default operating lane before the workbench starts serving recall."
                     },
                     {
                       step: "2",
                       title: "Ground it in evidence",
-                      detail: "Add owner context, trusted files, and source truth."
+                      detail: "Add owner context, trusted files, and source truth so canonical entities and personal recall stay stable."
                     },
                     {
                       step: "3",
                       title: "Verify it works",
-                      detail: "Test providers, retrieval, and smoke-check results."
+                      detail: "Test providers, retrieval, clarifications, and smoke-check results before calling setup done."
                     }
                   ].map((item) => (
                     <div
@@ -171,7 +182,7 @@ export default async function WorkbenchDashboardPage() {
                 {[
                   { label: "Setup progress", value: `${bootstrap.progress.completedSteps}/${bootstrap.progress.totalSteps}`, detail: "required steps completed" },
                   { label: "Trusted sources", value: String(sources.length), detail: `${importedSources} imported so far` },
-                  { label: "Brain runtime", value: health.ok ? "ready" : "offline", detail: "reachability and orchestration state" }
+                  { label: "Brain runtime", value: health.ok ? "ready" : "offline", detail: "continuity-first startup and recall checks stay green when the runtime is reachable" }
                 ].map((item) => (
                   <div key={item.label} className="rounded-[24px] border border-white/10 bg-white/7 p-5 backdrop-blur">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-300">{item.label}</p>
@@ -207,14 +218,14 @@ export default async function WorkbenchDashboardPage() {
                       href: "/knowledge",
                       eyebrow: "2. Inspect believed state",
                       title: "Open What It Knows when you want the current answer, not a tour of the plumbing.",
-                      detail: "That page is for identity, projects, people, routines, and beliefs with visible evidence.",
+                      detail: "That page is for canonical identity, projects, people, routines, and beliefs with visible evidence.",
                       cta: "Open knowledge"
                     },
                     {
                       href: "/clarifications",
                       eyebrow: "3. Fix uncertainty before it multiplies",
                       title: "Resolve clarifications when the brain is unsure, conflicted, or being suspiciously poetic.",
-                      detail: "That queue is where you stop weak grounding from turning into weird memory.",
+                      detail: "That queue is where you stop weak grounding from turning into weird memory or bad entity merges.",
                       cta: "Open clarifications"
                     }
                   ].map((item) => (
@@ -310,7 +321,7 @@ export default async function WorkbenchDashboardPage() {
                     title="Clarifications"
                     value={clarifications?.summary.total ?? 0}
                     tone={(clarifications?.summary.total ?? 0) > 0 ? "warning" : "success"}
-                    detail={`${priorityOneClarifications} urgent blockers in ${defaultNamespaceId}.`}
+                    detail={`${priorityOneClarifications} urgent items in the ranked queue/list for ${defaultNamespaceId}.`}
                   />
                   <MetricCard
                     title="Trusted sources"
@@ -325,7 +336,7 @@ export default async function WorkbenchDashboardPage() {
                       <Badge variant="outline" className="border-rose-300/20 bg-rose-300/10 text-rose-100">
                         {priorityOneClarifications} Priority 1
                       </Badge>
-                      <span>Clarifications are visible here on purpose. Bad grounding compounds.</span>
+                      <span>Clarifications are visible here on purpose. The ranked queue/list is where ambiguous names, places, aliases, and kinship roles get resolved before they contaminate canonical entities or graph edges.</span>
                     </div>
                     <div className="mt-3 space-y-2">
                       {clarifications.items.slice(0, 3).map((item) => (
@@ -335,7 +346,9 @@ export default async function WorkbenchDashboardPage() {
                           className="block rounded-[18px] border border-white/10 bg-black/15 p-3 text-slate-100 hover:bg-black/25"
                         >
                           <p className="font-medium text-white">{item.rawText}</p>
-                          <p className="mt-1 text-xs leading-6 text-slate-300">{item.ambiguityReason ?? "Needs operator grounding before the graph should trust it."}</p>
+                          <p className="mt-1 text-xs leading-6 text-slate-300">
+                            {item.ambiguityReason ?? "Needs operator grounding before the graph should trust it."}
+                          </p>
                         </Link>
                       ))}
                     </div>
@@ -405,7 +418,7 @@ export default async function WorkbenchDashboardPage() {
                       </Link>
                       <Link href="/clarifications" className="rounded-[18px] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300 hover:bg-white/8">
                         <p className="font-medium text-white">Clarifications</p>
-                        <p className="mt-1">Resolve unknowns in a ranked queue instead of guessing.</p>
+                        <p className="mt-1">Open the ranked clarification queue/list and resolve unknowns before they get baked into canonical entities, relationships, or graph edges.</p>
                       </Link>
                     </div>
                   </div>
