@@ -104,12 +104,21 @@ test("extractMediaMentions can carry a media title across adjacent truncated chu
   assert.equal(carriedFavorite.carryForwardSignal, true);
 });
 
-test("getTypedMediaResults recovers a trailing unmatched quoted title", async () => {
-  const results = await getTypedMediaResults({
-    namespaceId: "debug_locomo_conv42_focus",
-    query: 'When did Joanna first watch "Eternal Sunshine of the Spotless Mind?',
-    referenceNow: "2026-03-30T00:00:00.000Z"
-  });
+test("getTypedMediaResults recovers a trailing unmatched quoted title", async (t) => {
+  let results;
+  try {
+    results = await getTypedMediaResults({
+      namespaceId: "debug_locomo_conv42_focus",
+      query: 'When did Joanna first watch "Eternal Sunshine of the Spotless Mind?',
+      referenceNow: "2026-03-30T00:00:00.000Z"
+    });
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ECONNREFUSED") {
+      t.skip("Database-backed typed media query requires a live Postgres instance");
+      return;
+    }
+    throw error;
+  }
 
   assert.ok(results.some((row) => row.provenance.media_title === "Eternal Sunshine of the Spotless Mind"));
 });
