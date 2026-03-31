@@ -26,8 +26,8 @@ jobs:
             local-brain/package-lock.json
             brain-console/package-lock.json
 
-      - name: Install workspace dependencies
-        run: npm ci
+      - name: Install local-brain dependencies
+        run: npm install
 
       - name: Build local-brain
         run: npm run build
@@ -68,8 +68,8 @@ jobs:
             local-brain/package-lock.json
             brain-console/package-lock.json
 
-      - name: Install workspace dependencies
-        run: npm ci
+      - name: Install brain-console dependencies
+        run: npm install
 
       - name: Lint brain-console
         run: npm run lint
