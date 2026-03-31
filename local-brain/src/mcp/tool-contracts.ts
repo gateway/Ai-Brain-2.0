@@ -52,7 +52,7 @@ export const toolDescriptors: readonly ToolDescriptor[] = [
     name: "memory.get_relationships",
     description: "Look up relationship edges and supporting evidence.",
     requiredInputs: ["entity_name", "namespace_id"],
-    optionalInputs: ["predicate", "time_start", "time_end", "limit"]
+    optionalInputs: ["predicate", "time_start", "time_end", "include_historical", "limit"]
   },
   {
     name: "memory.get_graph",

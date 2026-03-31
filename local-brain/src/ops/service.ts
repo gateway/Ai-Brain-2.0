@@ -1,5 +1,6 @@
 import { queryRows } from "../db/client.js";
 import { readConfig } from "../config.js";
+import { resolveCanonicalEntityReference } from "../identity/service.js";
 
 interface CountRow {
   readonly total: string;
@@ -61,6 +62,7 @@ interface RelationshipGraphRow {
   readonly object_name: string;
   readonly object_type: string;
   readonly predicate: string;
+  readonly status: string | null;
   readonly confidence: number | string | null;
   readonly valid_from: string;
   readonly valid_until: string | null;
@@ -108,6 +110,14 @@ interface ClarificationInboxItemRow {
   readonly occurred_at: string;
   readonly scene_text: string | null;
   readonly source_uri: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+interface GraphAmbiguityRow {
+  readonly candidate_id: string;
+  readonly ambiguity_type: string;
+  readonly ambiguity_reason: string | null;
+  readonly total_count: string;
   readonly metadata: Record<string, unknown>;
 }
 
@@ -203,6 +213,7 @@ export interface OpsRelationshipGraphEdge {
   readonly subjectName: string;
   readonly objectName: string;
   readonly predicate: string;
+  readonly status?: string | null;
   readonly confidence: number;
   readonly validFrom: string;
   readonly validUntil?: string | null;
@@ -215,6 +226,12 @@ export interface OpsRelationshipGraphEdge {
 export interface OpsRelationshipGraph {
   readonly namespaceId: string;
   readonly selectedEntity?: string;
+  readonly requestedEntity?: string;
+  readonly ambiguityState?: "clear" | "ambiguous" | "unknown";
+  readonly ambiguityType?: string | null;
+  readonly ambiguityReason?: string | null;
+  readonly clarificationCount?: number;
+  readonly suggestedMatches?: readonly string[];
   readonly nodes: readonly OpsRelationshipGraphNode[];
   readonly edges: readonly OpsRelationshipGraphEdge[];
 }
@@ -228,6 +245,7 @@ export interface OpsClarificationInboxItem {
   readonly confidence: number;
   readonly priorScore: number;
   readonly ambiguityType: string;
+  readonly ambiguityClass: string;
   readonly ambiguityReason?: string | null;
   readonly suggestedMatches: readonly string[];
   readonly occurredAt: string;
@@ -452,6 +470,23 @@ function canonicalChoice(left: string, right: string): string {
     return left.length >= right.length ? left : right;
   }
   return left.localeCompare(right) <= 0 ? left : right;
+}
+
+function isLowSignalAtlasEntity(name: string, entityType: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  if (["and", "of", "you", "where", "when", "what", "we", "they", "so"].includes(normalized)) {
+    return true;
+  }
+
+  if (entityType === "project" && /^(right now is|and\b|of\b|where\b)/iu.test(normalized)) {
+    return true;
+  }
+
+  return false;
 }
 
 function lexicalConflictScore(leftNames: readonly string[], rightNames: readonly string[]): {
@@ -755,6 +790,36 @@ function parseSuggestedMatches(metadata: Record<string, unknown>): string[] {
     .filter((value) => typeof value === "string" && value.trim().length > 0);
 }
 
+function classifyClarificationClass(
+  ambiguityType: string | null,
+  targetRole: "subject" | "object",
+  rawText: string,
+  metadata: Record<string, unknown>
+): string {
+  switch (ambiguityType) {
+    case "kinship_resolution":
+    case "undefined_kinship":
+      return "kinship_person";
+    case "place_grounding":
+    case "vague_place":
+      return "vague_place";
+    case "alias_collision":
+    case "possible_misspelling":
+    case "asr_correction":
+      return "alias_collision";
+    case "unknown_reference": {
+      const normalized = rawText.trim().toLowerCase().replace(/^the\s+/u, "");
+      const sourceKind = typeof metadata.source_kind === "string" ? metadata.source_kind : "";
+      if (targetRole === "subject" && (["doctor", "therapist", "trainer", "teacher"].includes(normalized) || sourceKind.includes("speaker"))) {
+        return "speaker_subject_conflict";
+      }
+      return "nickname_person";
+    }
+    default:
+      return "alias_collision";
+  }
+}
+
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -932,6 +997,7 @@ export async function getOpsClarificationInbox(namespaceId: string, limit = 40):
         confidence: row.confidence,
         priorScore: row.prior_score,
         ambiguityType: row.ambiguity_type,
+        ambiguityClass: classifyClarificationClass(row.ambiguity_type, targetRole, rawText, row.metadata),
         ambiguityReason: row.ambiguity_reason,
         suggestedMatches:
           row.ambiguity_type === "possible_misspelling" || row.ambiguity_type === "alias_collision"
@@ -1461,86 +1527,145 @@ export async function getOpsRelationshipGraph(
   }
 ): Promise<OpsRelationshipGraph> {
   const entityName = options?.entityName?.trim();
-  const limit = options?.limit ?? 36;
-  const selectedEntityId = entityName
-    ? (
-        await queryRows<{ readonly entity_id: string }>(
-          `
-            SELECT id::text AS entity_id
-            FROM entities
-            WHERE namespace_id = $1
-              AND merged_into_entity_id IS NULL
-              AND lower(canonical_name) = lower($2)
-            LIMIT 1
-          `,
-          [namespaceId, entityName]
-        )
-      )[0]?.entity_id ?? null
+  const resolvedEntity = entityName
+    ? await resolveCanonicalEntityReference(namespaceId, entityName, {
+        entityTypes: ["self", "person", "place", "project", "concept", "unknown"]
+      })
     : null;
+  const graphAmbiguity =
+    entityName && !resolvedEntity
+      ? (
+          await queryRows<GraphAmbiguityRow>(
+            `
+              SELECT
+                candidate_id,
+                ambiguity_type,
+                ambiguity_reason,
+                total_count,
+                metadata
+              FROM (
+                SELECT
+                  cc.id::text AS candidate_id,
+                  cc.ambiguity_type,
+                  cc.ambiguity_reason,
+                  cc.metadata,
+                  row_number() OVER (
+                    ORDER BY cc.prior_score DESC, cc.occurred_at DESC, cc.created_at DESC
+                  ) AS rank_order,
+                  count(*) OVER ()::text AS total_count
+                FROM claim_candidates cc
+                WHERE cc.namespace_id = $1
+                  AND cc.ambiguity_state = 'requires_clarification'
+                  AND (
+                    lower(coalesce(cc.subject_text, '')) = lower($2)
+                    OR lower(coalesce(cc.object_text, '')) = lower($2)
+                    OR lower(coalesce(cc.metadata->>'raw_ambiguous_text', '')) = lower($2)
+                  )
+              ) ranked
+              WHERE rank_order = 1
+            `,
+            [namespaceId, entityName]
+          )
+        )[0] ?? null
+      : null;
+  const limit = options?.limit ?? 36;
+  const selectedEntityId = resolvedEntity?.entityId ?? null;
   const graphLimit = selectedEntityId ? Math.max(limit * 4, 96) : limit;
   const rows = await queryRows<RelationshipGraphRow>(
     `
     SELECT
-      rm.id AS relationship_id,
-      rm.subject_entity_id::text,
+      rel.relationship_id,
+      rel.subject_entity_id::text,
       subject.canonical_name AS subject_name,
       subject.entity_type AS subject_type,
-      rm.object_entity_id::text,
+      rel.object_entity_id::text,
       object_entity.canonical_name AS object_name,
       object_entity.entity_type AS object_type,
-      rm.predicate,
-      rm.confidence,
-      rm.valid_from::text,
-      rm.valid_until::text,
-      rm.source_candidate_id::text,
-      rc.source_memory_id::text,
-      a.uri AS source_uri,
-      rm.metadata
-    FROM relationship_memory rm
-    JOIN entities subject ON subject.id = rm.subject_entity_id
-    JOIN entities object_entity ON object_entity.id = rm.object_entity_id
-    LEFT JOIN relationship_candidates rc ON rc.id = rm.source_candidate_id
-    LEFT JOIN episodic_memory em ON em.id = rc.source_memory_id
-    LEFT JOIN artifacts a ON a.id = em.artifact_id
-    WHERE rm.namespace_id = $1
-      AND subject.merged_into_entity_id IS NULL
+      rel.predicate,
+      rel.confidence,
+      rel.valid_from::text,
+      rel.valid_until::text,
+      rel.source_candidate_id::text,
+      rel.source_memory_id::text,
+      rel.source_uri,
+      rel.metadata
+    FROM (
+      SELECT
+        rm.id AS relationship_id,
+        rm.subject_entity_id,
+        rm.predicate,
+        rm.object_entity_id,
+        rm.status,
+        rm.confidence,
+        rm.valid_from,
+        rm.valid_until,
+        rm.source_candidate_id,
+        rc.source_memory_id,
+        a.uri AS source_uri,
+        rm.metadata || jsonb_build_object('tier', 'relationship_memory') AS metadata
+      FROM relationship_memory rm
+      LEFT JOIN relationship_candidates rc ON rc.id = rm.source_candidate_id
+      LEFT JOIN episodic_memory em ON em.id = rc.source_memory_id
+      LEFT JOIN artifacts a ON a.id = em.artifact_id
+      WHERE rm.namespace_id = $1
+        AND (
+          ($7::boolean = false AND rm.status = 'active' AND rm.valid_until IS NULL)
+          OR ($7::boolean = true AND rm.status <> 'invalid')
+        )
+
+      UNION ALL
+
+      SELECT
+        rc.id AS relationship_id,
+        rc.subject_entity_id,
+        rc.predicate,
+        rc.object_entity_id,
+        rc.status,
+        rc.confidence,
+        COALESCE(rc.valid_from, em.occurred_at, rc.created_at) AS valid_from,
+        rc.valid_until,
+        rc.id AS source_candidate_id,
+        rc.source_memory_id,
+        a.uri AS source_uri,
+        rc.metadata || jsonb_build_object('tier', 'relationship_candidate') AS metadata
+      FROM relationship_candidates rc
+      LEFT JOIN episodic_memory em ON em.id = rc.source_memory_id
+      LEFT JOIN artifacts a ON a.id = em.artifact_id
+      WHERE rc.namespace_id = $1
+        AND rc.status = 'accepted'
+    ) rel
+    JOIN entities subject ON subject.id = rel.subject_entity_id
+    JOIN entities object_entity ON object_entity.id = rel.object_entity_id
+    WHERE subject.merged_into_entity_id IS NULL
       AND object_entity.merged_into_entity_id IS NULL
-      AND (
-        (
-          $4::uuid IS NULL
-          AND rm.status = 'active'
-          AND rm.valid_until IS NULL
-        )
-        OR
-        (
-          $4::uuid IS NOT NULL
-          AND (
-            (rm.status = 'active' AND rm.valid_until IS NULL)
-            OR rm.subject_entity_id = $4::uuid
-            OR rm.object_entity_id = $4::uuid
-          )
-        )
-      )
-      AND ($2::timestamptz IS NULL OR coalesce(rm.valid_until, rm.valid_from) >= $2::timestamptz)
-      AND ($3::timestamptz IS NULL OR rm.valid_from <= $3::timestamptz)
+      AND ($2::timestamptz IS NULL OR coalesce(rel.valid_until, rel.valid_from) >= $2::timestamptz)
+      AND ($3::timestamptz IS NULL OR rel.valid_from <= $3::timestamptz)
       AND (
         $5::text IS NULL
         OR lower(subject.canonical_name) = lower($5::text)
         OR lower(object_entity.canonical_name) = lower($5::text)
-        OR rm.subject_entity_id = $4::uuid
-        OR rm.object_entity_id = $4::uuid
+        OR rel.subject_entity_id = $4::uuid
+        OR rel.object_entity_id = $4::uuid
       )
     ORDER BY
       CASE
-        WHEN $4::uuid IS NOT NULL AND (rm.subject_entity_id = $4::uuid OR rm.object_entity_id = $4::uuid) THEN 0
+        WHEN $4::uuid IS NOT NULL AND (rel.subject_entity_id = $4::uuid OR rel.object_entity_id = $4::uuid) THEN 0
         ELSE 1
       END,
-      CASE WHEN rm.valid_until IS NULL THEN 0 ELSE 1 END,
-      coalesce(rm.valid_until, rm.valid_from) DESC,
-      rm.confidence DESC
-    LIMIT $6
+      CASE WHEN rel.valid_until IS NULL THEN 0 ELSE 1 END,
+      coalesce(rel.valid_until, rel.valid_from) DESC,
+      rel.confidence DESC
+      LIMIT $6
     `,
-    [namespaceId, options?.timeStart ?? null, options?.timeEnd ?? null, selectedEntityId, entityName ?? null, graphLimit]
+    [
+      namespaceId,
+      options?.timeStart ?? null,
+      options?.timeEnd ?? null,
+      selectedEntityId,
+      entityName ?? null,
+      graphLimit,
+      Boolean(selectedEntityId || options?.timeStart || options?.timeEnd)
+    ]
   );
 
   const mentionRows = await queryRows<{ readonly entity_id: string; readonly mention_count: string }>(
@@ -1563,12 +1688,18 @@ export async function getOpsRelationshipGraph(
   const edges: OpsRelationshipGraphEdge[] = [];
   const edgeKeys = new Set<string>();
 
-  for (const row of rows) {
+  const filteredRows = rows.filter((row) => {
+    const noisySubject = isLowSignalAtlasEntity(row.subject_name, row.subject_type) && row.subject_entity_id !== selectedEntityId;
+    const noisyObject = isLowSignalAtlasEntity(row.object_name, row.object_type) && row.object_entity_id !== selectedEntityId;
+    return !noisySubject && !noisyObject;
+  });
+
+  for (const row of filteredRows) {
     degreeByEntity.set(row.subject_entity_id, (degreeByEntity.get(row.subject_entity_id) ?? 0) + 1);
     degreeByEntity.set(row.object_entity_id, (degreeByEntity.get(row.object_entity_id) ?? 0) + 1);
   }
 
-  for (const row of rows) {
+  for (const row of filteredRows) {
     if (!nodes.has(row.subject_entity_id)) {
       nodes.set(row.subject_entity_id, {
         id: row.subject_entity_id,
@@ -1592,7 +1723,7 @@ export async function getOpsRelationshipGraph(
     }
   }
 
-  for (const row of rows) {
+  for (const row of filteredRows) {
     const edgeId = row.relationship_id;
     if (edgeKeys.has(edgeId)) {
       continue;
@@ -1605,6 +1736,7 @@ export async function getOpsRelationshipGraph(
       subjectName: row.subject_name,
       objectName: row.object_name,
       predicate: row.predicate,
+      status: row.status,
       confidence: Number(row.confidence ?? 0),
       validFrom: row.valid_from,
       validUntil: row.valid_until,
@@ -1741,6 +1873,10 @@ export async function getOpsRelationshipGraph(
     }
 
     for (const row of focusEventRows) {
+      if (isLowSignalAtlasEntity(row.entity_name, row.entity_type) && row.entity_id !== selectedEntityId) {
+        continue;
+      }
+
       const eventNodeId = `event:${row.event_id}`;
       if (!nodes.has(eventNodeId)) {
         nodes.set(eventNodeId, {
@@ -1864,6 +2000,13 @@ export async function getOpsRelationshipGraph(
       );
 
       for (const row of hierarchyRows) {
+        if (
+          (isLowSignalAtlasEntity(row.child_name, row.child_type) && row.child_entity_id !== selectedEntityId) ||
+          (isLowSignalAtlasEntity(row.parent_name, row.parent_type) && row.parent_entity_id !== selectedEntityId)
+        ) {
+          continue;
+        }
+
         if (!nodes.has(row.child_entity_id)) {
           nodes.set(row.child_entity_id, {
             id: row.child_entity_id,
@@ -1925,7 +2068,13 @@ export async function getOpsRelationshipGraph(
 
   return {
     namespaceId,
-    selectedEntity: entityName || undefined,
+    selectedEntity: (resolvedEntity?.canonicalName ?? entityName) || undefined,
+    requestedEntity: entityName || undefined,
+    ambiguityState: graphAmbiguity ? "ambiguous" : entityName && resolvedEntity ? "clear" : undefined,
+    ambiguityType: graphAmbiguity?.ambiguity_type ?? null,
+    ambiguityReason: graphAmbiguity?.ambiguity_reason ?? null,
+    clarificationCount: graphAmbiguity ? Number(graphAmbiguity.total_count ?? "1") : 0,
+    suggestedMatches: graphAmbiguity ? parseSuggestedMatches(graphAmbiguity.metadata) : [],
     nodes: graphNodes,
     edges
   };

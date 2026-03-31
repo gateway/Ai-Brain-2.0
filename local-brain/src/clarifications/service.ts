@@ -5,6 +5,7 @@ import { runCandidateConsolidation } from "../jobs/consolidation.js";
 import { refreshRelationshipPriors } from "../jobs/relationship-priors.js";
 import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
 import { runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
+import { rebuildTypedMemoryNamespace } from "../typed-memory/service.js";
 
 type ClarificationAction = "resolve" | "ignore";
 type ClarificationTargetRole = "subject" | "object";
@@ -17,6 +18,12 @@ type AmbiguityType =
   | "asr_correction"
   | "kinship_resolution"
   | "place_grounding";
+type ClarificationClass =
+  | "kinship_person"
+  | "nickname_person"
+  | "vague_place"
+  | "alias_collision"
+  | "speaker_subject_conflict";
 
 interface ClarificationSummaryRow {
   readonly ambiguity_type: string | null;
@@ -75,6 +82,29 @@ interface OutboxEventRow {
   readonly retry_count: number;
 }
 
+interface RebuildScope {
+  readonly candidateIds: readonly string[];
+  readonly entityIds: readonly string[];
+  readonly aliases: readonly string[];
+  readonly canonicalNames: readonly string[];
+  readonly triggerKinds: readonly string[];
+}
+
+interface ClarificationResolutionRow {
+  readonly id: string;
+  readonly namespace_id: string;
+  readonly ambiguity_type: AmbiguityType;
+  readonly ambiguity_class: ClarificationClass;
+  readonly resolution_state: "resolved" | "ignored";
+  readonly target_role: ClarificationTargetRole;
+  readonly raw_text: string;
+  readonly canonical_name: string | null;
+  readonly entity_type: string | null;
+  readonly aliases: readonly string[] | null;
+  readonly operator_note: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
 interface ResolveClarificationInput {
   readonly namespaceId: string;
   readonly candidateId: string;
@@ -125,6 +155,7 @@ export interface ClarificationInboxItem {
   readonly predicate: string;
   readonly targetRole: ClarificationTargetRole;
   readonly rawText: string;
+  readonly ambiguityClass: ClarificationClass;
   readonly subjectText?: string | null;
   readonly objectText?: string | null;
   readonly confidence: number;
@@ -150,6 +181,7 @@ export interface ClarificationCommandResult {
   readonly namespaceId: string;
   readonly candidateId: string;
   readonly action: ClarificationAction;
+  readonly resolutionId?: string;
   readonly outboxEventId: string;
   readonly affectedCandidates: number;
 }
@@ -159,6 +191,10 @@ export interface BrainOutboxProcessResult {
   readonly processed: number;
   readonly failed: number;
   readonly touchedNamespaces: readonly string[];
+}
+
+interface RebuildRunRow {
+  readonly id: string;
 }
 
 export interface EntityMergeResult {
@@ -218,6 +254,79 @@ const KINSHIP_TERMS = new Set([
   "niece"
 ]);
 
+function normalizeRebuildScope(value: unknown): RebuildScope {
+  const payload = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const toStringArray = (input: unknown): string[] =>
+    Array.isArray(input) ? input.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim()) : [];
+
+  return {
+    candidateIds: toStringArray(payload.affected_candidate_ids ?? payload.candidate_ids),
+    entityIds: toStringArray(payload.entity_ids),
+    aliases: toStringArray(payload.aliases),
+    canonicalNames: toStringArray(payload.canonical_names ?? payload.canonical_name),
+    triggerKinds: toStringArray(payload.trigger_kinds ?? payload.trigger_kind)
+  };
+}
+
+function mergeRebuildScopes(scopes: readonly RebuildScope[]): RebuildScope {
+  const unique = (values: readonly string[]) => [...new Set(values.filter((value) => value.trim().length > 0))];
+  return {
+    candidateIds: unique(scopes.flatMap((scope) => scope.candidateIds)),
+    entityIds: unique(scopes.flatMap((scope) => scope.entityIds)),
+    aliases: unique(scopes.flatMap((scope) => scope.aliases)),
+    canonicalNames: unique(scopes.flatMap((scope) => scope.canonicalNames)),
+    triggerKinds: unique(scopes.flatMap((scope) => scope.triggerKinds))
+  };
+}
+
+async function createRebuildRun(namespaceId: string, triggerEventId: string | null, rebuildScope: RebuildScope): Promise<string | null> {
+  const rows = await queryRows<RebuildRunRow>(
+    `
+      INSERT INTO entity_rebuild_runs (
+        namespace_id,
+        trigger_kind,
+        trigger_event_id,
+        rebuild_scope,
+        metadata
+      )
+      VALUES ($1, $2, $3::uuid, $4::jsonb, $5::jsonb)
+      RETURNING id::text
+    `,
+    [
+      namespaceId,
+      rebuildScope.triggerKinds.join("+") || "clarification_rebuild",
+      triggerEventId,
+      JSON.stringify(rebuildScope),
+      JSON.stringify({
+        rebuild_scope_size: {
+          candidate_ids: rebuildScope.candidateIds.length,
+          entity_ids: rebuildScope.entityIds.length,
+          aliases: rebuildScope.aliases.length,
+          canonical_names: rebuildScope.canonicalNames.length
+        }
+      })
+    ]
+  );
+  return rows[0]?.id ?? null;
+}
+
+async function finishRebuildRun(runId: string | null, status: "succeeded" | "partial" | "failed", resultSummary: Record<string, unknown>): Promise<void> {
+  if (!runId) {
+    return;
+  }
+  await queryRows(
+    `
+      UPDATE entity_rebuild_runs
+      SET
+        status = $2,
+        result_summary = $3::jsonb,
+        finished_at = now()
+      WHERE id = $1::uuid
+    `,
+    [runId, status, JSON.stringify(resultSummary)]
+  );
+}
+
 const VAGUE_PLACE_PHRASES = [/^summer home$/iu, /^cabin$/iu, /^the cabin$/iu, /^lake house$/iu, /^beach house$/iu, /^family house$/iu];
 
 function normalizeWhitespace(value: string): string {
@@ -230,6 +339,133 @@ function normalizeName(value: string): string {
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => normalizeWhitespace(value)).filter(Boolean))];
+}
+
+function classifyClarificationClass(
+  ambiguityType: AmbiguityType,
+  targetRole: ClarificationTargetRole,
+  rawText: string,
+  metadata: Record<string, unknown> = {}
+): ClarificationClass {
+  switch (ambiguityType) {
+    case "kinship_resolution":
+    case "undefined_kinship":
+      return "kinship_person";
+    case "place_grounding":
+    case "vague_place":
+      return "vague_place";
+    case "alias_collision":
+      return "alias_collision";
+    case "possible_misspelling":
+    case "asr_correction":
+      return "alias_collision";
+    case "unknown_reference": {
+      const normalized = normalizeName(rawText).replace(/^the\s+/u, "");
+      const sourceKind = typeof metadata.source_kind === "string" ? metadata.source_kind : "";
+      if (targetRole === "subject" && (["doctor", "therapist", "trainer", "teacher"].includes(normalized) || sourceKind.includes("speaker"))) {
+        return "speaker_subject_conflict";
+      }
+      return "nickname_person";
+    }
+    default:
+      return "alias_collision";
+  }
+}
+
+async function upsertClarificationResolution(
+  client: PoolClient,
+  input: {
+    readonly namespaceId: string;
+    readonly ambiguityType: AmbiguityType;
+    readonly ambiguityClass: ClarificationClass;
+    readonly resolutionState: "resolved" | "ignored";
+    readonly targetRole: ClarificationTargetRole;
+    readonly rawText: string;
+    readonly canonicalName?: string | null;
+    readonly entityType?: string | null;
+    readonly aliases?: readonly string[];
+    readonly sourceCandidateId?: string | null;
+    readonly sourceSceneId?: string | null;
+    readonly sourceMemoryId?: string | null;
+    readonly operatorNote?: string | null;
+    readonly metadata?: Record<string, unknown>;
+  }
+): Promise<string> {
+  const result = await client.query<{ id: string }>(
+    `
+      INSERT INTO clarification_resolutions (
+        namespace_id,
+        ambiguity_type,
+        ambiguity_class,
+        resolution_state,
+        target_role,
+        raw_text,
+        normalized_raw_text,
+        canonical_name,
+        entity_type,
+        aliases,
+        source_candidate_id,
+        source_scene_id,
+        source_memory_id,
+        operator_note,
+        metadata
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10::text[],
+        $11::uuid,
+        $12::uuid,
+        $13::uuid,
+        $14,
+        $15::jsonb
+      )
+      ON CONFLICT (namespace_id, ambiguity_type, target_role, normalized_raw_text)
+      DO UPDATE SET
+        ambiguity_class = EXCLUDED.ambiguity_class,
+        resolution_state = EXCLUDED.resolution_state,
+        canonical_name = EXCLUDED.canonical_name,
+        entity_type = EXCLUDED.entity_type,
+        aliases = EXCLUDED.aliases,
+        source_candidate_id = COALESCE(EXCLUDED.source_candidate_id, clarification_resolutions.source_candidate_id),
+        source_scene_id = COALESCE(EXCLUDED.source_scene_id, clarification_resolutions.source_scene_id),
+        source_memory_id = COALESCE(EXCLUDED.source_memory_id, clarification_resolutions.source_memory_id),
+        operator_note = EXCLUDED.operator_note,
+        metadata = clarification_resolutions.metadata || EXCLUDED.metadata,
+        updated_at = now()
+      RETURNING id::text
+    `,
+    [
+      input.namespaceId,
+      input.ambiguityType,
+      input.ambiguityClass,
+      input.resolutionState,
+      input.targetRole,
+      normalizeWhitespace(input.rawText),
+      normalizeName(input.rawText),
+      input.canonicalName ?? null,
+      input.entityType ?? null,
+      unique(input.aliases ?? []),
+      input.sourceCandidateId ?? null,
+      input.sourceSceneId ?? null,
+      input.sourceMemoryId ?? null,
+      input.operatorNote ?? null,
+      JSON.stringify(input.metadata ?? {})
+    ]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("Failed to upsert clarification resolution.");
+  }
+  return row.id;
 }
 
 function orderEntityPair(leftEntityId: string, rightEntityId: string): readonly [string, string] {
@@ -340,6 +576,186 @@ function inferFollowUpAmbiguity(candidate: ClaimCandidateRow): {
   }
 
   return null;
+}
+
+async function resolveMatchingCandidates(
+  client: PoolClient,
+  input: {
+    readonly namespaceId: string;
+    readonly targetRole: ClarificationTargetRole;
+    readonly rawText: string;
+    readonly canonicalName: string;
+    readonly entityType: string;
+    readonly entityId: string;
+    readonly ambiguityType: AmbiguityType;
+    readonly note?: string | null;
+    readonly resolutionId?: string | null;
+  }
+): Promise<readonly string[]> {
+  const fieldText = input.targetRole === "subject" ? "subject_text" : "object_text";
+  const fieldEntityType = input.targetRole === "subject" ? "subject_entity_type" : "object_entity_type";
+  const fieldEntityId = input.targetRole === "subject" ? "subject_entity_id" : "object_entity_id";
+  const result = await client.query<{ id: string }>(
+    `
+      UPDATE claim_candidates
+      SET
+        ${fieldText} = $3,
+        ${fieldEntityType} = $4,
+        ${fieldEntityId} = $5::uuid,
+        confidence = GREATEST(confidence, 0.92),
+        status = CASE
+          WHEN (CASE WHEN $2 = 'subject' THEN object_entity_id IS NOT NULL ELSE subject_entity_id IS NOT NULL END)
+            THEN 'accepted'
+          ELSE status
+        END,
+        ambiguity_state = 'resolved',
+        ambiguity_reason = NULL,
+        metadata = claim_candidates.metadata || $6::jsonb
+      WHERE namespace_id = $1
+        AND ambiguity_type = $8
+        AND ambiguity_state = 'requires_clarification'
+        AND (
+          lower(coalesce(${fieldText}, '')) = lower($7)
+          OR lower(coalesce(metadata->>'raw_ambiguous_text', '')) = lower($7)
+        )
+      RETURNING id
+    `,
+    [
+      input.namespaceId,
+      input.targetRole,
+      input.canonicalName,
+      input.entityType,
+      input.entityId,
+      JSON.stringify({
+        clarification_action: "resolved",
+        clarification_note: input.note ?? null,
+        clarification_target_role: input.targetRole,
+        clarification_entity_id: input.entityId,
+        clarification_resolution_id: input.resolutionId ?? null,
+        clarified_at: new Date().toISOString(),
+        raw_ambiguous_text: input.rawText
+      }),
+      input.rawText,
+      input.ambiguityType
+    ]
+  );
+
+  return result.rows.map((row) => row.id);
+}
+
+async function ignoreMatchingCandidates(
+  client: PoolClient,
+  input: {
+    readonly namespaceId: string;
+    readonly targetRole: ClarificationTargetRole;
+    readonly rawText: string;
+    readonly ambiguityType: AmbiguityType;
+    readonly note?: string | null;
+    readonly resolutionId?: string | null;
+  }
+): Promise<readonly string[]> {
+  const fieldText = input.targetRole === "subject" ? "subject_text" : "object_text";
+  const result = await client.query<{ id: string }>(
+    `
+      UPDATE claim_candidates
+      SET
+        ambiguity_state = 'ignored',
+        metadata = claim_candidates.metadata || $5::jsonb
+      WHERE namespace_id = $1
+        AND ambiguity_type = $2
+        AND ambiguity_state = 'requires_clarification'
+        AND (
+          lower(coalesce(${fieldText}, '')) = lower($3)
+          OR lower(coalesce(metadata->>'raw_ambiguous_text', '')) = lower($3)
+        )
+      RETURNING id
+    `,
+    [
+      input.namespaceId,
+      input.ambiguityType,
+      input.rawText,
+      input.targetRole,
+      JSON.stringify({
+        clarification_action: "ignored",
+        clarification_note: input.note ?? null,
+        clarification_target_role: input.targetRole,
+        clarification_resolution_id: input.resolutionId ?? null,
+        clarified_at: new Date().toISOString(),
+        raw_ambiguous_text: input.rawText
+      })
+    ]
+  );
+
+  return result.rows.map((row) => row.id);
+}
+
+async function refreshFollowUpAmbiguities(client: PoolClient, candidateIds: readonly string[]): Promise<void> {
+  if (candidateIds.length === 0) {
+    return;
+  }
+
+  const updatedCandidates = await client.query<ClaimCandidateRow>(
+    `
+      SELECT
+        id,
+        namespace_id,
+        source_scene_id,
+        source_event_id,
+        source_memory_id,
+        source_chunk_id,
+        claim_type,
+        predicate,
+        subject_text,
+        subject_entity_type,
+        subject_entity_id::text,
+        object_text,
+        object_entity_type,
+        object_entity_id::text,
+        confidence,
+        prior_score,
+        occurred_at::text,
+        status,
+        ambiguity_state,
+        ambiguity_type,
+        ambiguity_reason,
+        metadata
+      FROM claim_candidates
+      WHERE id = ANY($1::uuid[])
+    `,
+    [candidateIds]
+  );
+
+  for (const updated of updatedCandidates.rows) {
+    const nextAmbiguity = inferFollowUpAmbiguity(updated);
+    await client.query(
+      `
+        UPDATE claim_candidates
+        SET
+          ambiguity_state = $2,
+          ambiguity_type = $3,
+          ambiguity_reason = $4,
+          metadata = claim_candidates.metadata || $5::jsonb
+        WHERE id = $1
+      `,
+      [
+        updated.id,
+        nextAmbiguity ? "requires_clarification" : "resolved",
+        nextAmbiguity?.type ?? null,
+        nextAmbiguity?.reason ?? null,
+        JSON.stringify(
+          nextAmbiguity
+            ? {
+                ambiguity_target_role: nextAmbiguity.targetRole,
+                raw_ambiguous_text: nextAmbiguity.rawText
+              }
+            : {
+                ambiguity_target_role: null,
+                raw_ambiguous_text: null
+              }
+        )
+      ]
+    );
+  }
 }
 
 function isRelationshipPredicate(predicate: string): boolean {
@@ -818,6 +1234,7 @@ export async function getClarificationInbox(namespaceId: string, limit = 40): Pr
         predicate: row.predicate,
         targetRole,
         rawText: rawTextForRole(row, targetRole),
+        ambiguityClass: classifyClarificationClass(row.ambiguity_type, targetRole, rawTextForRole(row, targetRole), row.metadata),
         subjectText: row.subject_text,
         objectText: row.object_text,
         confidence: row.confidence,
@@ -863,48 +1280,39 @@ export async function resolveClarification(input: ResolveClarificationInput): Pr
         source_candidate_id: input.candidateId
       });
     }
+    const ambiguityClass = classifyClarificationClass(candidate.ambiguity_type ?? "unknown_reference", targetRole, rawText, candidate.metadata);
+    const resolutionId = await upsertClarificationResolution(client, {
+      namespaceId: input.namespaceId,
+      ambiguityType: candidate.ambiguity_type ?? "unknown_reference",
+      ambiguityClass,
+      resolutionState: "resolved",
+      targetRole,
+      rawText,
+      canonicalName,
+      entityType,
+      aliases: unique([rawText, ...aliases]),
+      sourceCandidateId: candidate.id,
+      sourceSceneId: candidate.source_scene_id,
+      sourceMemoryId: candidate.source_memory_id,
+      operatorNote: input.note ?? null,
+      metadata: {
+        source: "manual_resolution",
+        source_candidate_id: candidate.id,
+        source_predicate: candidate.predicate
+      }
+    });
 
-    const fieldText = targetRole === "subject" ? "subject_text" : "object_text";
-    const fieldEntityType = targetRole === "subject" ? "subject_entity_type" : "object_entity_type";
-    const fieldEntityId = targetRole === "subject" ? "subject_entity_id" : "object_entity_id";
-    const affected = await client.query<{ id: string }>(
-      `
-        UPDATE claim_candidates
-        SET
-          ${fieldText} = $3,
-          ${fieldEntityType} = $4,
-          ${fieldEntityId} = $5::uuid,
-          confidence = GREATEST(confidence, 0.92),
-          status = CASE
-            WHEN (CASE WHEN $2 = 'subject' THEN object_entity_id IS NOT NULL ELSE subject_entity_id IS NOT NULL END)
-              THEN 'accepted'
-            ELSE status
-          END,
-          ambiguity_state = 'resolved',
-          ambiguity_reason = NULL,
-          metadata = claim_candidates.metadata || $6::jsonb
-        WHERE namespace_id = $1
-          AND ambiguity_state = 'requires_clarification'
-          AND lower(${fieldText}) = lower($7)
-        RETURNING id
-      `,
-      [
-        input.namespaceId,
-        targetRole,
-        canonicalName,
-        entityType,
-        entityId,
-        JSON.stringify({
-          clarification_action: "resolved",
-          clarification_note: input.note ?? null,
-          clarification_target_role: targetRole,
-          clarification_entity_id: entityId,
-          clarified_at: new Date().toISOString(),
-          raw_ambiguous_text: rawText
-        }),
-        rawText
-      ]
-    );
+    const affectedCandidateIds = await resolveMatchingCandidates(client, {
+      namespaceId: input.namespaceId,
+      targetRole,
+      rawText,
+      canonicalName,
+      entityType,
+      entityId,
+      ambiguityType: candidate.ambiguity_type ?? "unknown_reference",
+      note: input.note ?? null,
+      resolutionId
+    });
 
     const idempotencyKey = `clarification:resolve:${input.namespaceId}:${input.candidateId}:${normalizeName(rawText)}:${normalizeName(canonicalName)}`;
     const payload = JSON.stringify({
@@ -916,8 +1324,17 @@ export async function resolveClarification(input: ResolveClarificationInput): Pr
       canonical_name: canonicalName,
       entity_type: entityType,
       entity_id: entityId,
-      affected_candidate_ids: affected.rows.map((row) => row.id),
+      clarification_resolution_id: resolutionId,
+      ambiguity_class: ambiguityClass,
+      affected_candidate_ids: affectedCandidateIds,
       aliases: unique([rawText, ...aliases]),
+      rebuild_scope: {
+        candidate_ids: affectedCandidateIds,
+        entity_ids: [entityId],
+        aliases: unique([rawText, ...aliases]),
+        canonical_names: [canonicalName],
+        trigger_kinds: ["clarification_resolved"]
+      },
       note: input.note ?? null
     });
     const existingOutbox = await client.query<{ id: string }>(
@@ -964,111 +1381,57 @@ export async function resolveClarification(input: ResolveClarificationInput): Pr
       );
     }
 
-    if (affected.rows.length > 0) {
-      const updatedCandidates = await client.query<ClaimCandidateRow>(
-        `
-          SELECT
-            id,
-            namespace_id,
-            source_scene_id,
-            source_event_id,
-            source_memory_id,
-            source_chunk_id,
-            claim_type,
-            predicate,
-            subject_text,
-            subject_entity_type,
-            subject_entity_id::text,
-            object_text,
-            object_entity_type,
-            object_entity_id::text,
-            confidence,
-            prior_score,
-            occurred_at::text,
-            status,
-            ambiguity_state,
-            ambiguity_type,
-            ambiguity_reason,
-            metadata
-          FROM claim_candidates
-          WHERE id = ANY($1::uuid[])
-        `,
-        [affected.rows.map((row) => row.id)]
-      );
-
-      for (const updated of updatedCandidates.rows) {
-        const nextAmbiguity = inferFollowUpAmbiguity(updated);
-        await client.query(
-          `
-            UPDATE claim_candidates
-            SET
-              ambiguity_state = $2,
-              ambiguity_type = $3,
-              ambiguity_reason = $4,
-              metadata = claim_candidates.metadata || $5::jsonb
-            WHERE id = $1
-          `,
-          [
-            updated.id,
-            nextAmbiguity ? "requires_clarification" : "resolved",
-            nextAmbiguity?.type ?? null,
-            nextAmbiguity?.reason ?? null,
-            JSON.stringify(
-              nextAmbiguity
-                ? {
-                    ambiguity_target_role: nextAmbiguity.targetRole,
-                    raw_ambiguous_text: nextAmbiguity.rawText
-                  }
-                : {
-                    ambiguity_target_role: null,
-                    raw_ambiguous_text: null
-                  }
-            )
-          ]
-        );
-      }
-    }
+    await refreshFollowUpAmbiguities(client, affectedCandidateIds);
 
     return {
       namespaceId: input.namespaceId,
       candidateId: input.candidateId,
       action: "resolve",
+      resolutionId,
       outboxEventId: outbox?.id ?? "",
-      affectedCandidates: affected.rowCount ?? 0
+      affectedCandidates: affectedCandidateIds.length
     };
   });
 }
 
 export async function ignoreClarification(input: IgnoreClarificationInput): Promise<ClarificationCommandResult> {
   return withTransaction(async (client) => {
-    await fetchCandidateForUpdate(client, input.namespaceId, input.candidateId);
-
-    const affected = await client.query<{ id: string }>(
-      `
-        UPDATE claim_candidates
-        SET
-          ambiguity_state = 'ignored',
-          metadata = claim_candidates.metadata || $3::jsonb
-        WHERE namespace_id = $1
-          AND id = $2
-        RETURNING id
-      `,
-      [
-        input.namespaceId,
-        input.candidateId,
-        JSON.stringify({
-          clarification_action: "ignored",
-          clarification_note: input.note ?? null,
-          clarified_at: new Date().toISOString()
-        })
-      ]
-    );
+    const candidate = await fetchCandidateForUpdate(client, input.namespaceId, input.candidateId);
+    const targetRole = inferTargetRole(candidate);
+    const rawText = rawTextForRole(candidate, targetRole);
+    const ambiguityClass = classifyClarificationClass(candidate.ambiguity_type ?? "unknown_reference", targetRole, rawText, candidate.metadata);
+    const resolutionId = await upsertClarificationResolution(client, {
+      namespaceId: input.namespaceId,
+      ambiguityType: candidate.ambiguity_type ?? "unknown_reference",
+      ambiguityClass,
+      resolutionState: "ignored",
+      targetRole,
+      rawText,
+      sourceCandidateId: candidate.id,
+      sourceSceneId: candidate.source_scene_id,
+      sourceMemoryId: candidate.source_memory_id,
+      operatorNote: input.note ?? null,
+      metadata: {
+        source: "manual_ignore",
+        source_candidate_id: candidate.id,
+        source_predicate: candidate.predicate
+      }
+    });
+    const affectedCandidateIds = await ignoreMatchingCandidates(client, {
+      namespaceId: input.namespaceId,
+      targetRole,
+      rawText,
+      ambiguityType: candidate.ambiguity_type ?? "unknown_reference",
+      note: input.note ?? null,
+      resolutionId
+    });
 
     const idempotencyKey = `clarification:ignore:${input.namespaceId}:${input.candidateId}`;
     const payload = JSON.stringify({
       action: "ignore",
       namespace_id: input.namespaceId,
       source_candidate_id: input.candidateId,
+      clarification_resolution_id: resolutionId,
       note: input.note ?? null
     });
     const existingOutbox = await client.query<{ id: string }>(
@@ -1119,8 +1482,157 @@ export async function ignoreClarification(input: IgnoreClarificationInput): Prom
       namespaceId: input.namespaceId,
       candidateId: input.candidateId,
       action: "ignore",
+      resolutionId,
       outboxEventId: outbox?.id ?? "",
-      affectedCandidates: affected.rowCount ?? 0
+      affectedCandidates: affectedCandidateIds.length
+    };
+  });
+}
+
+export interface ClarificationReplayApplySummary {
+  readonly namespaceId: string;
+  readonly resolutionCount: number;
+  readonly affectedCandidates: number;
+  readonly rebuildScope: RebuildScope;
+}
+
+export async function applyStoredClarificationResolutions(namespaceId: string): Promise<ClarificationReplayApplySummary> {
+  return withTransaction(async (client) => {
+    const rows = await client.query<ClarificationResolutionRow>(
+      `
+        SELECT
+          id::text,
+          namespace_id,
+          ambiguity_type,
+          ambiguity_class,
+          resolution_state,
+          target_role,
+          raw_text,
+          canonical_name,
+          entity_type,
+          aliases,
+          operator_note,
+          metadata
+        FROM clarification_resolutions
+        WHERE namespace_id = $1
+        ORDER BY updated_at ASC, created_at ASC
+      `,
+      [namespaceId]
+    );
+
+    const touchedCandidateIds = new Set<string>();
+    const touchedEntityIds = new Set<string>();
+    const aliases = new Set<string>();
+    const canonicalNames = new Set<string>();
+
+    for (const row of rows.rows) {
+      aliases.add(row.raw_text);
+      for (const alias of row.aliases ?? []) {
+        aliases.add(alias);
+      }
+
+      if (row.resolution_state === "resolved" && row.canonical_name && row.entity_type) {
+        const entityId = await upsertEntity(client, namespaceId, row.entity_type, row.canonical_name, {
+          clarification_source: "replay_resolution",
+          clarification_resolution_id: row.id,
+          replay_applied_at: new Date().toISOString()
+        });
+        touchedEntityIds.add(entityId);
+        canonicalNames.add(row.canonical_name);
+
+        for (const alias of unique([row.raw_text, ...(row.aliases ?? []), row.canonical_name])) {
+          await upsertAlias(client, entityId, alias, "manual", {
+            clarification_source: "replay_resolution",
+            clarification_resolution_id: row.id
+          });
+        }
+
+        const affected = await resolveMatchingCandidates(client, {
+          namespaceId,
+          targetRole: row.target_role,
+          rawText: row.raw_text,
+          canonicalName: row.canonical_name,
+          entityType: row.entity_type,
+          entityId,
+          ambiguityType: row.ambiguity_type,
+          note: row.operator_note,
+          resolutionId: row.id
+        });
+        for (const candidateId of affected) {
+          touchedCandidateIds.add(candidateId);
+        }
+      } else {
+        const affected = await ignoreMatchingCandidates(client, {
+          namespaceId,
+          targetRole: row.target_role,
+          rawText: row.raw_text,
+          ambiguityType: row.ambiguity_type,
+          note: row.operator_note,
+          resolutionId: row.id
+        });
+        for (const candidateId of affected) {
+          touchedCandidateIds.add(candidateId);
+        }
+      }
+    }
+
+    await refreshFollowUpAmbiguities(client, [...touchedCandidateIds]);
+
+    if (touchedCandidateIds.size > 0) {
+      const candidates = await client.query<ClaimCandidateRow>(
+        `
+          SELECT
+            id,
+            namespace_id,
+            source_scene_id,
+            source_event_id,
+            source_memory_id,
+            source_chunk_id,
+            claim_type,
+            predicate,
+            subject_text,
+            subject_entity_type,
+            subject_entity_id::text,
+            object_text,
+            object_entity_type,
+            object_entity_id::text,
+            confidence,
+            prior_score,
+            occurred_at::text,
+            ambiguity_state,
+            ambiguity_type,
+            ambiguity_reason,
+            metadata,
+            status
+          FROM claim_candidates
+          WHERE id = ANY($1::uuid[])
+        `,
+        [[...touchedCandidateIds]]
+      );
+
+      for (const candidate of candidates.rows as Array<ClaimCandidateRow & { status: string }>) {
+        if (candidate.status !== "accepted" || candidate.ambiguity_state !== "resolved") {
+          continue;
+        }
+        const eventId =
+          typeof candidate.metadata?.clarification_resolution_id === "string" && candidate.metadata.clarification_resolution_id.trim().length > 0
+            ? candidate.metadata.clarification_resolution_id
+            : candidate.id;
+        await materializeResolvedClaim(client, candidate, eventId);
+      }
+    }
+
+    return {
+      namespaceId,
+      resolutionCount: rows.rows.length,
+      affectedCandidates: touchedCandidateIds.size,
+      rebuildScope: {
+        candidateIds: [...touchedCandidateIds],
+        entityIds: [...touchedEntityIds],
+        aliases: [...aliases].filter((value) => value.trim().length > 0),
+        canonicalNames: [...canonicalNames].filter((value) => value.trim().length > 0),
+        triggerKinds: rows.rows.length > 0 ? ["clarification_resolution_replay"] : []
+      }
     };
   });
 }
@@ -1548,6 +2060,13 @@ export async function mergeEntityAlias(input: MergeEntityAliasInput): Promise<En
         aliases: preserveAliases ? unique([source.canonical_name, ...aliases]) : unique(aliases),
         merge_mode: mergeMode,
         preserve_aliases: preserveAliases,
+        rebuild_scope: {
+          candidate_ids: [],
+          entity_ids: unique([source.id, targetEntityId]),
+          aliases: preserveAliases ? unique([source.canonical_name, ...aliases]) : unique(aliases),
+          canonical_names: [canonicalName],
+          trigger_kinds: ["entity_alias_merged"]
+        },
         note: input.note ?? null
       },
       idempotencyKey: `entity:merge:${input.namespaceId}:${source.id}:${targetEntityId}:${normalizeName(canonicalName)}`
@@ -1659,6 +2178,13 @@ export async function resolveIdentityConflict(input: ResolveIdentityConflictInpu
           entity_type: input.entityType,
           aliases: combinedAliases,
           merge_mode: "redirect_merge",
+          rebuild_scope: {
+            candidate_ids: [],
+            entity_ids: [left.id, right.id],
+            aliases: combinedAliases,
+            canonical_names: [canonicalName],
+            trigger_kinds: ["identity_conflict_merge"]
+          },
           note: input.note ?? null
         },
         idempotencyKey: `entity:merge:${left.namespace_id}:${left.id}:${right.id}:${normalizeName(canonicalName)}`
@@ -1767,7 +2293,14 @@ export async function resolveIdentityConflict(input: ResolveIdentityConflictInpu
             aliases: preserveAliases ? combinedAliases : aliases,
             preserve_aliases: preserveAliases,
             note: input.note ?? null,
-            source_entity_ids: [left.id, right.id]
+            source_entity_ids: [left.id, right.id],
+            rebuild_scope: {
+              candidate_ids: [],
+              entity_ids: [left.id, right.id],
+              aliases: preserveAliases ? combinedAliases : aliases,
+              canonical_names: [canonicalName],
+              trigger_kinds: ["identity_profile_linked"]
+            }
           },
           idempotencyKey: `identity:profile_linked:${identityProfileId}:${namespaceId}:${normalizeName(canonicalName)}`
         })
@@ -2009,14 +2542,15 @@ async function materializeResolvedClaim(client: PoolClient, candidate: ClaimCand
   }
 }
 
-async function processResolvedEvent(event: OutboxEventRow): Promise<void> {
+async function processResolvedEvent(event: OutboxEventRow): Promise<RebuildScope> {
   const affectedCandidateIds = Array.isArray(event.payload.affected_candidate_ids)
     ? event.payload.affected_candidate_ids.filter((value): value is string => typeof value === "string")
     : [];
+  const rebuildScope = mergeRebuildScopes([normalizeRebuildScope(event.payload.rebuild_scope), normalizeRebuildScope(event.payload)]);
 
   if (affectedCandidateIds.length === 0) {
     await markOutboxProcessed(event.id);
-    return;
+    return rebuildScope;
   }
 
   await withTransaction(async (client) => {
@@ -2069,16 +2603,19 @@ async function processResolvedEvent(event: OutboxEventRow): Promise<void> {
       [event.id]
     );
   });
+
+  return rebuildScope;
 }
 
-async function processAliasMergedEvent(event: OutboxEventRow): Promise<void> {
+async function processAliasMergedEvent(event: OutboxEventRow): Promise<RebuildScope> {
   const sourceEntityId = typeof event.payload.source_entity_id === "string" ? event.payload.source_entity_id : null;
   const targetEntityId = typeof event.payload.target_entity_id === "string" ? event.payload.target_entity_id : null;
   const mergeMode = typeof event.payload.merge_mode === "string" ? event.payload.merge_mode : "rename";
+  const rebuildScope = mergeRebuildScopes([normalizeRebuildScope(event.payload.rebuild_scope), normalizeRebuildScope(event.payload)]);
 
   if (!sourceEntityId || !targetEntityId) {
     await markOutboxProcessed(event.id);
-    return;
+    return rebuildScope;
   }
 
   await withTransaction(async (client) => {
@@ -2100,9 +2637,15 @@ async function processAliasMergedEvent(event: OutboxEventRow): Promise<void> {
       [event.id]
     );
   });
+
+  return rebuildScope;
 }
 
-async function rebuildNamespaceAfterClarification(namespaceId: string): Promise<void> {
+async function rebuildNamespaceAfterClarification(namespaceId: string, scopes: readonly RebuildScope[], triggerEventId?: string | null): Promise<void> {
+  const rebuildScope = mergeRebuildScopes(scopes);
+  const runId = await createRebuildRun(namespaceId, triggerEventId ?? null, rebuildScope);
+  const typedSummary = await rebuildTypedMemoryNamespace(namespaceId);
+  try {
   await refreshRelationshipPriors(namespaceId);
   await runCandidateConsolidation(namespaceId, 150);
   await runRelationshipAdjudication(namespaceId, {
@@ -2123,6 +2666,10 @@ async function rebuildNamespaceAfterClarification(namespaceId: string): Promise<
   const minOccurredAt = timelineSpanRows[0]?.min_occurred_at ? new Date(timelineSpanRows[0].min_occurred_at) : null;
   const maxOccurredAt = timelineSpanRows[0]?.max_occurred_at ? new Date(timelineSpanRows[0].max_occurred_at) : null;
   if (!minOccurredAt || !maxOccurredAt) {
+    await finishRebuildRun(runId, "partial", {
+      typedMemory: typedSummary,
+      timelineSpanAvailable: false
+    });
     return;
   }
 
@@ -2149,6 +2696,38 @@ async function rebuildNamespaceAfterClarification(namespaceId: string): Promise<
       maxMembersPerNode: 64
     });
   }
+    const [redirectAudit, relationshipAudit] = await Promise.all([
+      queryRows<{ readonly total: string }>(
+        `
+          SELECT COUNT(*)::text AS total
+          FROM canonical_redirect_integrity_audit
+          WHERE redirect_status <> 'ok'
+            AND namespace_id = $1
+        `,
+        [namespaceId]
+      ),
+      queryRows<{ readonly total: string }>(
+        `
+          SELECT COUNT(*)::text AS total
+          FROM relationship_canonical_integrity_audit
+          WHERE namespace_id = $1
+        `,
+        [namespaceId]
+      )
+    ]);
+    await finishRebuildRun(runId, "succeeded", {
+      typedMemory: typedSummary,
+      timelineSpanAvailable: true,
+      redirectAuditCount: Number(redirectAudit[0]?.total ?? "0"),
+      relationshipCanonicalAuditCount: Number(relationshipAudit[0]?.total ?? "0")
+    });
+  } catch (error) {
+    await finishRebuildRun(runId, "failed", {
+      typedMemory: typedSummary,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
+  }
 }
 
 export async function processBrainOutboxEvents(options?: {
@@ -2159,22 +2738,33 @@ export async function processBrainOutboxEvents(options?: {
   const workerId = options?.workerId ?? `brain-outbox-${randomUUID().slice(0, 8)}`;
   const events = await claimOutboxEvents(options?.limit ?? 25, workerId, options?.namespaceId);
   const touchedNamespaces = new Set<string>();
+  const rebuildScopes = new Map<string, RebuildScope[]>();
+  const triggerEventIds = new Map<string, string | null>();
   let processed = 0;
   let failed = 0;
 
   for (const event of events) {
     try {
       if (event.event_type === "clarification.resolved") {
-        await processResolvedEvent(event);
+        const scope = await processResolvedEvent(event);
         touchedNamespaces.add(event.namespace_id);
+        rebuildScopes.set(event.namespace_id, [...(rebuildScopes.get(event.namespace_id) ?? []), scope]);
+        triggerEventIds.set(event.namespace_id, event.id);
         processed += 1;
       } else if (event.event_type === "entity.alias_merged") {
-        await processAliasMergedEvent(event);
+        const scope = await processAliasMergedEvent(event);
         touchedNamespaces.add(event.namespace_id);
+        rebuildScopes.set(event.namespace_id, [...(rebuildScopes.get(event.namespace_id) ?? []), scope]);
+        triggerEventIds.set(event.namespace_id, event.id);
         processed += 1;
       } else if (event.event_type === "identity.profile_linked") {
         await markOutboxProcessed(event.id);
         touchedNamespaces.add(event.namespace_id);
+        rebuildScopes.set(
+          event.namespace_id,
+          [...(rebuildScopes.get(event.namespace_id) ?? []), mergeRebuildScopes([normalizeRebuildScope(event.payload.rebuild_scope), normalizeRebuildScope(event.payload)])]
+        );
+        triggerEventIds.set(event.namespace_id, event.id);
         processed += 1;
       } else if (event.event_type === "clarification.ignored") {
         await markOutboxProcessed(event.id);
@@ -2201,7 +2791,7 @@ export async function processBrainOutboxEvents(options?: {
   }
 
   for (const namespaceId of touchedNamespaces) {
-    await rebuildNamespaceAfterClarification(namespaceId);
+    await rebuildNamespaceAfterClarification(namespaceId, rebuildScopes.get(namespaceId) ?? [], triggerEventIds.get(namespaceId) ?? null);
   }
 
   return {

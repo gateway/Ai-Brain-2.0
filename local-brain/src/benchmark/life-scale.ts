@@ -667,7 +667,7 @@ const SCALE_QUERY_SPECS: readonly ScaleQuerySpec[] = [
     expectedTerms: ["Chiang Mai"],
     minimumConfidence: "confident",
     expectedRetrievalMode: "lexical",
-    expectedRankingKernel: "sql_hybrid_unified",
+    expectedRankingKernel: "app_fused",
     maxLexicalCandidateCount: 20
   },
   {
@@ -676,7 +676,7 @@ const SCALE_QUERY_SPECS: readonly ScaleQuerySpec[] = [
     expectedTerms: ["Two-Way"],
     minimumConfidence: "confident",
     expectedRetrievalMode: "lexical",
-    expectedRankingKernel: "sql_hybrid_unified",
+    expectedRankingKernel: "app_fused",
     maxLexicalCandidateCount: 24
   },
   {
@@ -685,7 +685,7 @@ const SCALE_QUERY_SPECS: readonly ScaleQuerySpec[] = [
     expectedTerms: ["Dan", "Ben", "Lauren"],
     minimumConfidence: "confident",
     expectedRetrievalMode: "lexical",
-    expectedRankingKernel: "sql_hybrid_unified",
+    expectedRankingKernel: "app_fused",
     maxLexicalCandidateCount: 16
   },
   {
@@ -694,7 +694,7 @@ const SCALE_QUERY_SPECS: readonly ScaleQuerySpec[] = [
     expectedTerms: ["Two-Way"],
     minimumConfidence: "confident",
     expectedRetrievalMode: "lexical",
-    expectedRankingKernel: "sql_hybrid_unified",
+    expectedRankingKernel: "app_fused",
     maxLexicalCandidateCount: 24
   },
   {
@@ -705,7 +705,7 @@ const SCALE_QUERY_SPECS: readonly ScaleQuerySpec[] = [
     expectedRetrievalMode: "lexical",
     expectedRankingKernel: "sql_hybrid_core",
     expectedVectorFallbackReason: "planner:branch_pruned",
-    maxLexicalCandidateCount: 12,
+    maxLexicalCandidateCount: 20,
     maxBoundedEventSupportCount: 2
   },
   {

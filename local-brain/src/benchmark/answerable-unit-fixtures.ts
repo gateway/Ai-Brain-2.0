@@ -95,6 +95,17 @@ export function answerableUnitFixtures(): readonly AnswerableUnitFixture[] {
         "Audrey: I also love volunteering at the shelter."
       ].join("\n"),
       expectedApplied: false
+    },
+    {
+      name: "primary_with_companion_scope",
+      query: "Is it likely that Nate has friends besides Joanna?",
+      normalizedText: [
+        "Joanna: Oh? Are you going to invite your tournament friends?",
+        "Nate: Definitely! And some old friends and teammates from other tournaments."
+      ].join("\n"),
+      expectedApplied: true,
+      expectedDecision: "resolved",
+      expectedClaimIncludes: "teammates"
     }
   ];
 }

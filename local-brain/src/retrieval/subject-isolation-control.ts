@@ -1,4 +1,5 @@
 import type { RecallResult } from "../types.js";
+import { parseQueryEntityFocus } from "./query-entity-focus.js";
 
 export type SubjectIsolationStatus = "subject_owned" | "mixed_subject" | "foreign_subject" | "no_subject_signal";
 
@@ -26,57 +27,6 @@ export interface SubjectIsolationEvaluation {
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
-}
-
-function extractEntityNameHints(queryText: string): readonly string[] {
-  const stopTerms = new Set([
-    "what",
-    "where",
-    "who",
-    "when",
-    "why",
-    "which",
-    "how",
-    "is",
-    "are",
-    "was",
-    "were",
-    "did",
-    "does",
-    "do",
-    "can",
-    "could",
-    "would",
-    "should",
-    "will",
-    "tell",
-    "me",
-    "ai",
-    "brain",
-    "january",
-    "february",
-    "march",
-    "april",
-    "may",
-    "june",
-    "july",
-    "august",
-    "september",
-    "october",
-    "november",
-    "december",
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
-    "sunday"
-  ]);
-  const matches = queryText.match(/\b[A-Z][a-z]+\b/gu) ?? [];
-  return [...new Set(matches.map((value) => normalizeWhitespace(value).toLowerCase()))].filter(
-    (value) => !stopTerms.has(value)
-  );
 }
 
 function derivationTypeForResult(result: RecallResult): string {
@@ -124,6 +74,14 @@ function collectStrictSubjectSignals(result: RecallResult): readonly string[] {
   add(result.provenance.transcript_speaker_name);
   add(result.provenance.speaker_name);
   add(result.provenance.canonical_name);
+  add(result.provenance.owner_entity_hint);
+  add(result.provenance.speaker_entity_hint);
+  const topLevelParticipantNames = Array.isArray(result.provenance.participant_names)
+    ? result.provenance.participant_names
+    : [];
+  for (const participant of topLevelParticipantNames) {
+    add(participant);
+  }
 
   const metadata =
     typeof result.provenance.metadata === "object" && result.provenance.metadata !== null
@@ -136,6 +94,8 @@ function collectStrictSubjectSignals(result: RecallResult): readonly string[] {
     add(metadata.speaker_name);
     add(metadata.canonical_name);
     add(metadata.primary_speaker_name);
+    add(metadata.owner_entity_hint);
+    add(metadata.speaker_entity_hint);
     const participantNames = Array.isArray(metadata.participant_names) ? metadata.participant_names : [];
     for (const participant of participantNames) {
       add(participant);
@@ -166,20 +126,44 @@ function isFallbackRow(result: RecallResult): boolean {
   return normalized === "no authoritative evidence found." || normalized === "none.";
 }
 
+function allowsCompanionParticipants(result: RecallResult): boolean {
+  const tier = typeof result.provenance.tier === "string" ? result.provenance.tier : "";
+  if (["timeline_episodic", "narrative_event", "event_scene_support", "event_neighborhood_support", "temporal_summary"].includes(tier)) {
+    return true;
+  }
+  const metadata =
+    typeof result.provenance.metadata === "object" && result.provenance.metadata !== null
+      ? (result.provenance.metadata as Record<string, unknown>)
+      : null;
+  return (
+    typeof metadata?.time_granularity === "string" ||
+    typeof metadata?.time_expression_text === "string" ||
+    Array.isArray(metadata?.participant_names)
+  );
+}
+
 export function evaluateSubjectIsolationResult(
   queryText: string,
   result: RecallResult
 ): SubjectIsolationEvaluation {
-  const targetHints = extractEntityNameHints(queryText)
-    .map((value) => normalizeWhitespace(value).toLowerCase())
-    .filter(Boolean);
+  const focus = parseQueryEntityFocus(queryText);
+  const targetHints = focus.primaryHints.map((value) => normalizeWhitespace(value).toLowerCase()).filter(Boolean);
+  const companionHints = focus.companionHints.map((value) => normalizeWhitespace(value).toLowerCase()).filter(Boolean);
   const derivationType = derivationTypeForResult(result);
   const strictSignals = collectStrictSubjectSignals(result);
   const targetSignalHit = strictSignals.some((signal) => targetHints.some((hint) => signal.includes(hint)));
-  const foreignSignalCount = strictSignals.filter((signal) => !targetHints.some((hint) => signal.includes(hint))).length;
+  const foreignSignalCount = strictSignals.filter(
+    (signal) =>
+      !targetHints.some((hint) => signal.includes(hint)) &&
+      !companionHints.some((hint) => signal.includes(hint))
+  ).length;
   const speakerTurns = parseConversationSpeakerTurns(result.content);
   const primarySpeakerTurnCount = speakerTurns.filter((turn) => targetHints.some((hint) => turn.speaker.includes(hint))).length;
-  const foreignSpeakerTurnCount = speakerTurns.filter((turn) => !targetHints.some((hint) => turn.speaker.includes(hint))).length;
+  const foreignSpeakerTurnCount = speakerTurns.filter(
+    (turn) =>
+      !targetHints.some((hint) => turn.speaker.includes(hint)) &&
+      !companionHints.some((hint) => turn.speaker.includes(hint))
+  ).length;
   const hasSourceSentenceTargetHit = sourceSentenceTargetHit(result, targetHints);
   const fallbackRow = isFallbackRow(result);
 
@@ -213,7 +197,7 @@ export function evaluateSubjectIsolationResult(
       status = foreignSignalCount > 0 ? "foreign_subject" : "no_subject_signal";
     }
   } else if (targetSignalHit || hasSourceSentenceTargetHit) {
-    status = foreignSignalCount > 0 ? "mixed_subject" : "subject_owned";
+    status = foreignSignalCount > 0 && !allowsCompanionParticipants(result) ? "mixed_subject" : "subject_owned";
   } else if (foreignSignalCount > 0) {
     status = "foreign_subject";
   }
@@ -242,7 +226,7 @@ export function retainSubjectIsolatedRecallResults(
   readonly telemetry: SubjectIsolationTelemetry;
   readonly evaluations: readonly SubjectIsolationEvaluation[];
 } {
-  const targetHints = extractEntityNameHints(queryText)
+  const targetHints = parseQueryEntityFocus(queryText).primaryHints
     .map((value) => normalizeWhitespace(value).toLowerCase())
     .filter(Boolean);
   if (targetHints.length !== 1 || results.length <= 1) {

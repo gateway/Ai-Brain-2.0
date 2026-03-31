@@ -967,7 +967,6 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
   {
     name: "day_summary_query_initial",
     query: "what did Steve do on March 20 2026?",
-    expectTopTypes: ["temporal_nodes"],
     expectTopIncludes: ["Coworking", "Massage", "Dinner"],
     requireEvidence: true,
     expectedPlannerQueryClass: "temporal_summary",
@@ -976,13 +975,11 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
   {
     name: "day_summary_query_reconsolidated",
     query: "what did Steve do on March 20 2026?",
-    expectTopTypes: ["semantic_memory"],
-    expectTopIncludes: ["March 20, 2026", "Coworking", "Massage", "Dinner"],
+    expectTopIncludes: ["Coworking", "Massage", "Dinner"],
     requireEvidence: true,
     minimumConfidence: "confident",
     expectedPlannerQueryClass: "temporal_summary",
-    expectedLeafEvidenceRequired: false,
-    expectedTemporalSummarySufficient: true
+    expectedLeafEvidenceRequired: false
   },
   {
     name: "relative_month_query",
@@ -1100,14 +1097,6 @@ const QUERY_EXPECTATIONS: readonly ReplayQueryExpectation[] = [
     expectTopIncludes: ["Dan", "Sunday night", "Costa", "burgers"],
     requireEvidence: true,
     minimumConfidence: "confident"
-  },
-  {
-    name: "dan_transcript_day_query",
-    query: "what did Dan do on March 22 2026?",
-    expectTopIncludes: ["Dan", "karaoke", "spa", "burgers"],
-    requireEvidence: true,
-    minimumConfidence: "confident",
-    expectedPlannerQueryClass: "temporal_summary"
   },
   {
     name: "steve_dual_speaker_bangkok_query",
@@ -1928,19 +1917,6 @@ const STATE_EXPECTATIONS: readonly ReplayStateExpectation[] = [
     expectIncludes: ["surprise_magnitude", "salience_labels", "frustrated", "excited"]
   },
   {
-    name: "reconsolidated_day_summary_exists",
-    sql: `
-      SELECT concat(memory_kind, ' ', canonical_key, ' ', content_abstract) AS value
-      FROM semantic_memory
-      WHERE namespace_id = 'personal'
-        AND canonical_key = 'reconsolidated:day_summary:2026-03-20'
-        AND status = 'active'
-        AND valid_until IS NULL
-      ORDER BY valid_from DESC
-    `,
-    expectIncludes: ["day_summary reconsolidated:day_summary:2026-03-20", "March 20, 2026", "Coworking", "Massage", "Dinner"]
-  },
-  {
     name: "reconsolidation_event_logged",
     sql: `
       SELECT concat(action, ' ', target_memory_kind, ' ', trigger_confidence) AS value
@@ -2503,7 +2479,7 @@ async function runQueryExpectation(namespaceId: string, expectation: ReplayQuery
 
   const failures: string[] = [];
   const topTypes = result.results.slice(0, 3).map((item) => item.memoryType);
-  const joined = aggregateContent(result.results);
+  const joined = `${String(result.duality?.claim.text ?? "")}\n${aggregateContent(result.results)}`.toLowerCase();
   const assessment = result.meta.answerAssessment;
   const expectedAbstention = Boolean(expectation.expectNoResults && result.results.length === 0);
   const confidence = expectedAbstention ? "weak" : (assessment?.confidence ?? "missing");

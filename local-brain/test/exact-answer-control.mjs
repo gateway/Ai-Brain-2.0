@@ -162,6 +162,71 @@ test("hobbies only extracts from hobby-bearing cues", () => {
   assert.equal(result.candidate?.text, "painting");
 });
 
+test("hobbies discard incomplete gerund fragments from nearby affective chatter", () => {
+  const result = runExactAnswer({
+    queryText: "What are Joanna's hobbies?",
+    family: "hobbies",
+    results: [
+      makeResult({
+        memoryId: "r6b",
+        content: "Besides writing, I also enjoy reading, watching movies, and exploring nature.",
+        subjectName: "Joanna",
+        participantNames: ["Joanna"],
+        derivationType: "source_sentence"
+      }),
+      makeResult({
+        memoryId: "r6c",
+        content: "Joanna: I'm all about dramas and romcoms. I love getting immersed in the feelings and plots.",
+        subjectName: "Joanna",
+        speakerName: "Joanna",
+        participantNames: ["Joanna"],
+        derivationType: "participant_turn"
+      }),
+      makeResult({
+        memoryId: "r6d",
+        content: "Writing and hanging with friends!",
+        subjectName: "Joanna",
+        participantNames: ["Joanna"],
+        derivationType: "source_sentence"
+      })
+    ],
+    extractValues: (text) => {
+      const values = [];
+      if (/writing/i.test(text)) values.push("writing");
+      if (/reading/i.test(text)) values.push("reading");
+      if (/watching movies/i.test(text)) values.push("watching movies");
+      if (/exploring nature/i.test(text)) values.push("exploring nature");
+      if (/getting immersed in/i.test(text)) values.push("getting immersed in");
+      if (/hanging with friends/i.test(text)) values.push("hanging with friends");
+      return values;
+    }
+  });
+
+  assert.match(result.candidate?.text ?? "", /writing/i);
+  assert.match(result.candidate?.text ?? "", /hanging with friends/i);
+  assert.doesNotMatch(result.candidate?.text ?? "", /getting immersed in/i);
+});
+
+test("meal companion extracts joint first-person meal phrasing", () => {
+  const result = runExactAnswer({
+    queryText: "Who did Maria have dinner with on May 3, 2023?",
+    family: "meal_companion",
+    results: [
+      makeResult({
+        memoryId: "r6e",
+        content: "Maria: My mom and I made some dinner together last night!",
+        subjectName: "Maria",
+        speakerName: "Maria",
+        participantNames: ["Maria", "John"],
+        derivationType: "participant_turn"
+      })
+    ],
+    extractValues: (text) => (/my mom and I made some dinner together/i.test(text) ? ["her mother"] : [])
+  });
+
+  assert.equal(result.candidate?.text, "her mother");
+});
+
 test("favorite movie trilogy adversarial case abstains when no trilogy cue exists", () => {
   const result = runExactAnswer({
     queryText: "What is Joanna's favorite movie trilogy?",
@@ -290,4 +355,151 @@ test("martial arts multi-value family returns multiple values only from strong w
 
   assert.ok(result.candidate?.text.includes("karate"));
   assert.ok(result.candidate?.text.includes("judo"));
+});
+
+test("hobbies aggregate distinct owned windows instead of collapsing to one sentence", () => {
+  const result = runExactAnswer({
+    queryText: "What are Joanna's hobbies?",
+    family: "hobbies",
+    results: [
+      makeResult({
+        memoryId: "r15",
+        content: "Joanna: Besides writing, I also enjoy watching movies and exploring nature.",
+        subjectName: "Joanna",
+        speakerName: "Joanna",
+        participantNames: ["Joanna"],
+        derivationType: "participant_turn"
+      }),
+      makeResult({
+        memoryId: "r16",
+        content: "Joanna: Writing and hanging with friends!",
+        subjectName: "Joanna",
+        speakerName: "Joanna",
+        participantNames: ["Joanna"],
+        derivationType: "participant_turn"
+      })
+    ],
+    extractValues: (text) => {
+      const values = [];
+      if (/writing/i.test(text)) values.push("writing");
+      if (/watching movies/i.test(text)) values.push("watching movies");
+      if (/exploring nature/i.test(text)) values.push("exploring nature");
+      if (/hanging with friends/i.test(text)) values.push("hanging with friends");
+      return values;
+    }
+  });
+
+  assert.ok(result.candidate?.text.includes("writing"));
+  assert.ok(result.candidate?.text.includes("watching movies"));
+  assert.ok(result.candidate?.text.includes("exploring nature"));
+  assert.ok(result.candidate?.text.includes("hanging with friends"));
+});
+
+test("hobbies reject media-only taste chatter when no hobby value is extracted", () => {
+  const result = runExactAnswer({
+    queryText: "What are Joanna's hobbies?",
+    family: "hobbies",
+    results: [
+      makeResult({
+        memoryId: "r16b",
+        content: "Joanna: I'm all about dramas and romcoms. I love getting immersed in the feelings and plots.",
+        subjectName: "Joanna",
+        speakerName: "Joanna",
+        participantNames: ["Joanna"],
+        derivationType: "participant_turn"
+      }),
+      makeResult({
+        memoryId: "r16c",
+        content: "Joanna: Besides writing, I also enjoy watching movies and exploring nature.",
+        subjectName: "Joanna",
+        speakerName: "Joanna",
+        participantNames: ["Joanna"],
+        derivationType: "participant_turn"
+      })
+    ],
+    extractValues: (text) => {
+      const values = [];
+      if (/writing/i.test(text)) values.push("writing");
+      if (/watching movies/i.test(text)) values.push("watching movies");
+      if (/exploring nature/i.test(text)) values.push("exploring nature");
+      return values;
+    }
+  });
+
+  assert.ok(result.candidate?.text.includes("writing"));
+  assert.ok(!result.candidate?.text.includes("dramas"));
+});
+
+test("allergy-safe pets prefer explicit alternatives over generic allergy complaints", () => {
+  const result = runExactAnswer({
+    queryText: "What pets wouldn't cause any discomfort to Joanna?",
+    family: "pets",
+    results: [
+      makeResult({
+        memoryId: "r16d",
+        content: "Joanna: Unfortunately, allergies make it so I don't really want to get any, and I'm too lazy to research alternative pets for my allergy.",
+        subjectName: "Joanna",
+        speakerName: "Joanna",
+        participantNames: ["Joanna"],
+        derivationType: "participant_turn"
+      }),
+      makeResult({
+        memoryId: "r16e",
+        content: "Joanna: Hairless cats or pigs would be better since they don't have fur, which is one of the main causes of my allergy.",
+        subjectName: "Joanna",
+        speakerName: "Joanna",
+        participantNames: ["Joanna"],
+        derivationType: "participant_turn"
+      })
+    ],
+    extractValues: (text) => {
+      const values = [];
+      if (/hairless cats/i.test(text)) values.push("hairless cats");
+      if (/\bpigs?\b/i.test(text)) values.push("pigs");
+      return values;
+    }
+  });
+
+  assert.ok(result.candidate?.text.includes("hairless cats"));
+  assert.ok(result.candidate?.text.includes("pigs"));
+});
+
+test("temporary job abstains to None when the role is unspecified", () => {
+  const result = runExactAnswer({
+    queryText: "What temporary job did Jon take to cover expenses?",
+    family: "temporary_job",
+    results: [
+      makeResult({
+        memoryId: "r17",
+        content: "Jon: I got a temp job to help cover expenses while I look for investors.",
+        subjectName: "Jon",
+        speakerName: "Jon",
+        participantNames: ["Jon", "Gina"],
+        derivationType: "participant_turn"
+      })
+    ],
+    extractValues: (text) => (/\btemp job\b/i.test(text) ? ["None"] : [])
+  });
+
+  assert.equal(result.candidate?.text, "None");
+});
+
+test("temporary job abstains when only a generic temp-job mention exists", () => {
+  const result = runExactAnswer({
+    queryText: "What temporary job did Jon take to cover expenses?",
+    family: "temporary_job",
+    results: [
+      makeResult({
+        memoryId: "r17",
+        content: "Jon: I got a temp job to help cover expenses while I look for investors.",
+        subjectName: "Jon",
+        speakerName: "Jon",
+        participantNames: ["Jon", "Gina"],
+        derivationType: "participant_turn"
+      })
+    ],
+    extractValues: (text) => (/temp job/i.test(text) ? [] : [])
+  });
+
+  assert.equal(result.candidate, null);
 });

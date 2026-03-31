@@ -7,6 +7,7 @@ interface ParsedArgs {
   readonly predicate?: string;
   readonly timeStart?: string;
   readonly timeEnd?: string;
+  readonly includeHistorical?: boolean;
   readonly limit?: number;
 }
 
@@ -22,6 +23,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let predicate: string | undefined;
   let timeStart: string | undefined;
   let timeEnd: string | undefined;
+  let includeHistorical: boolean | undefined;
   let limit: number | undefined;
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -44,6 +46,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       timeStart = value;
     } else if (arg === "--time-end") {
       timeEnd = value;
+    } else if (arg === "--include-historical") {
+      includeHistorical = value === "true";
     } else if (arg === "--limit") {
       limit = Number(value);
     } else {
@@ -59,6 +63,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     predicate,
     timeStart,
     timeEnd,
+    includeHistorical,
     limit
   };
 }

@@ -193,6 +193,7 @@ function toolSchema(name: string): Record<string, unknown> {
           predicate: { type: "string" },
           time_start: { type: "string" },
           time_end: { type: "string" },
+          include_historical: { type: "boolean" },
           limit: { type: "integer", minimum: 1, maximum: 50 }
         },
         required: ["entity_name", "namespace_id"]
@@ -633,6 +634,7 @@ export async function executeMcpTool(name: string, args: Record<string, unknown>
           predicate: optionalString(args.predicate),
           timeStart: optionalString(args.time_start),
           timeEnd: optionalString(args.time_end),
+          includeHistorical: typeof args.include_historical === "boolean" ? args.include_historical : undefined,
           limit: optionalNumber(args.limit)
         })
       );
@@ -657,11 +659,13 @@ export async function executeMcpTool(name: string, args: Record<string, unknown>
               item.predicate,
               item.ambiguityType,
               item.ambiguityReason ?? "",
-              item.sceneText ?? ""
+              item.sceneText ?? "",
+              ...(item.suggestedMatches ?? [])
             ].join(" ").toLowerCase();
             return rawQuery.split(/\s+/u).every((token) => token.length < 2 || haystacks.includes(token));
           })
         : inbox.items;
+      const suggestedMatches = [...new Set(items.flatMap((item) => item.suggestedMatches ?? []).filter(Boolean))].slice(0, 8);
 
       return wrapResult({
         namespaceId,
@@ -671,7 +675,8 @@ export async function executeMcpTool(name: string, args: Record<string, unknown>
           suggestedPrompt:
             items.length > 0
               ? `The brain needs clarification before it can answer confidently about: ${optionalString(args.query) ?? "the requested topic"}`
-              : `No open clarification items matched ${optionalString(args.query) ?? "the requested topic"}.`
+              : `No open clarification items matched ${optionalString(args.query) ?? "the requested topic"}.`,
+          suggestedMatches
         }
       });
     }

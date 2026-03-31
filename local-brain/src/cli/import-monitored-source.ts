@@ -13,21 +13,23 @@ function readFlag(flag: string): string | undefined {
 async function main(): Promise<void> {
   const sourceId = readFlag("--source-id");
   if (!sourceId) {
-    throw new Error("Usage: import-monitored-source --source-id <uuid> [--trigger-type manual|scheduled|onboarding]");
+    throw new Error("Usage: import-monitored-source --source-id <uuid> [--trigger-type manual|scheduled|onboarding] [--force]");
   }
 
   const triggerType = (readFlag("--trigger-type") as "manual" | "scheduled" | "onboarding" | undefined) ?? "manual";
+  const force = process.argv.includes("--force");
 
   try {
     const preview = await scanMonitoredSource(sourceId);
-    const imported = await importMonitoredSource(sourceId, triggerType);
+    const imported = await importMonitoredSource(sourceId, triggerType, undefined, { forceImport: force });
 
     process.stdout.write(
       `${JSON.stringify(
         {
           source: imported.source,
           importRun: imported.importRun,
-          preview: preview.preview
+          preview: preview.preview,
+          forceImport: force
         },
         null,
         2

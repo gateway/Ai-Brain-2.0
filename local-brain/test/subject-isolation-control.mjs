@@ -12,6 +12,8 @@ function makeResult({
   score = 1,
   subjectName,
   speakerName,
+  ownerEntityHint,
+  speakerEntityHint,
   participantNames = [],
   derivationType = "source_sentence",
   sourceSentenceText
@@ -27,10 +29,15 @@ function makeResult({
     provenance: {
       subject_name: subjectName,
       speaker_name: speakerName,
+      owner_entity_hint: ownerEntityHint,
+      speaker_entity_hint: speakerEntityHint,
+      participant_names: participantNames,
       derivation_type: derivationType,
       metadata: {
         subject_name: subjectName,
         speaker_name: speakerName,
+        owner_entity_hint: ownerEntityHint,
+        speaker_entity_hint: speakerEntityHint,
         participant_names: participantNames,
         derivation_type: derivationType,
         source_sentence_text: sourceSentenceText
@@ -128,4 +135,35 @@ test("fallback none row cannot outrank a target-owned row", () => {
 
   const retained = retainSubjectIsolatedRecallResults("How does James plan to make his dog-sitting app unique?", [fallback, owned], 2);
   assert.equal(retained.results[0]?.memoryId, "owned-source");
+});
+
+test("companion-name query does not treat the companion as a foreign speaker", () => {
+  const mixed = makeResult({
+    memoryId: "nate-joanna-friends",
+    content: "Conversation unit between Nate and Joanna.\nJoanna: Are you going to invite your tournament friends?\nNate: Definitely! And some old friends and teammates from other tournaments.",
+    subjectName: "Nate",
+    participantNames: ["Nate", "Joanna"],
+    derivationType: "conversation_unit"
+  });
+
+  const evaluation = evaluateSubjectIsolationResult("Is it likely that Nate has friends besides Joanna?", mixed);
+  assert.equal(evaluation.status, "subject_owned");
+});
+
+test("answerable-unit owner and participant provenance count as subject-owned signals", () => {
+  const answerableTemporal = makeResult({
+    memoryId: "melanie-date-span",
+    memoryType: "episodic_memory",
+    content: "Yeah, I painted that lake sunrise last year!",
+    subjectName: undefined,
+    speakerName: undefined,
+    ownerEntityHint: "melanie",
+    speakerEntityHint: "melanie",
+    participantNames: ["melanie"],
+    derivationType: "date_span",
+    sourceSentenceText: "Yeah, I painted that lake sunrise last year!"
+  });
+
+  const evaluation = evaluateSubjectIsolationResult("When did Melanie paint a sunrise?", answerableTemporal);
+  assert.equal(evaluation.status, "subject_owned");
 });

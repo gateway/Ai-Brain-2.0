@@ -1112,6 +1112,10 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
       predicate: optionalString(url.searchParams.get("predicate")),
       timeStart: optionalString(url.searchParams.get("time_start")),
       timeEnd: optionalString(url.searchParams.get("time_end")),
+      includeHistorical:
+        url.searchParams.get("include_historical") === null
+          ? undefined
+          : url.searchParams.get("include_historical") === "true",
       limit: optionalNumber(url.searchParams.get("limit"))
     });
 

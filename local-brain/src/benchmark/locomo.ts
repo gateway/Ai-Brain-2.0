@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { withMaintenanceLock } from "../db/client.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { planRecallQuery } from "../retrieval/planner.js";
+import { rebuildTypedMemoryNamespace } from "../typed-memory/service.js";
 import {
   isIdentityProfileQuery,
   isPreciseFactDetailQuery,
@@ -22,6 +23,7 @@ interface TurnRecord {
   readonly speaker: string;
   readonly text?: string;
   readonly blip_caption?: string;
+  readonly query?: string;
 }
 
 interface LocomoConversation {
@@ -604,6 +606,12 @@ function formatConversationSession(sample: LocomoConversation, sessionKey: strin
   for (const turn of turns) {
     const caption = typeof turn.blip_caption === "string" && turn.blip_caption.trim().length > 0 ? ` [image: ${turn.blip_caption.trim()}]` : "";
     lines.push(`${turn.speaker}: ${(turn.text ?? "").trim()}${caption}`);
+    if (typeof turn.query === "string" && turn.query.trim().length > 0) {
+      lines.push(`--- image_query: ${turn.query.trim()}`);
+    }
+    if (typeof turn.blip_caption === "string" && turn.blip_caption.trim().length > 0) {
+      lines.push(`--- image_caption: ${turn.blip_caption.trim()}`);
+    }
   }
   return lines.join("\n");
 }
@@ -750,7 +758,17 @@ function rate(numerator: number, denominator: number): number {
 }
 
 async function cleanupBenchmarkNamespace(namespaceId: string): Promise<void> {
-  await cleanupPublicBenchmarkNamespaces([namespaceId]);
+  try {
+    await cleanupPublicBenchmarkNamespaces([namespaceId], {
+      namespaceChunkSize: 1,
+      statementTimeoutMs: 15_000,
+      lockTimeoutMs: 2_000,
+      logger: (message) => benchmarkLog(`cleanup detail namespaceId=${namespaceId} ${message}`)
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    benchmarkLog(`cleanup warning namespaceId=${namespaceId} reason=${JSON.stringify(message)}`);
+  }
 }
 
 export async function runAndWriteLoCoMoBenchmark(): Promise<{
@@ -1021,17 +1039,24 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
                 sourceType: "markdown",
                 inputUri: sessionPath,
                 capturedAt: sessionDateTime ?? new Date().toISOString(),
-                metadata: {
-                  benchmark: "locomo",
-                  sample_id: sample.sample_id,
-                  session_key: sessionKey
-                },
+              metadata: {
+                benchmark: "locomo",
+                sample_id: sample.sample_id,
+                session_key: sessionKey
+              },
                 sourceChannel: "benchmark:locomo"
               });
             });
             benchmarkLog(`ingest complete sampleId=${sample.sample_id} session=${sessionKey}`);
             lastProgressAtMs = Date.now();
           }
+
+          benchmarkLog(`typed rebuild start sampleId=${sample.sample_id} namespaceId=${namespaceId}`);
+          await withBenchmarkTimeout(`typed rebuild ${sample.sample_id}`, queryTimeoutMs, async () => {
+            await rebuildTypedMemoryNamespace(namespaceId);
+          });
+          benchmarkLog(`typed rebuild complete sampleId=${sample.sample_id} namespaceId=${namespaceId}`);
+          lastProgressAtMs = Date.now();
 
           for (const [questionIndex, qa] of entry.questions.entries()) {
             currentQuestionIndex = questionIndex;

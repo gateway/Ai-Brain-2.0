@@ -1,12 +1,44 @@
 import type { PoolClient } from "pg";
 import { queryRows, withTransaction } from "../db/client.js";
-
-function normalizeWhitespace(value: string): string {
-  return value.replace(/\s+/gu, " ").trim();
-}
+import { expandEntityLookupCandidates, normalizeEntityLookupName, normalizeWhitespace } from "./canonicalization.js";
 
 function normalizeName(value: string): string {
-  return normalizeWhitespace(value.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/gu, "")).toLowerCase();
+  return normalizeEntityLookupName(value);
+}
+
+function deriveSelfAliases(canonicalName: string, explicitAliases?: readonly string[]): readonly string[] {
+  const values = new Set<string>();
+  const push = (value: string | null | undefined) => {
+    const normalized = normalizeWhitespace(value ?? "");
+    if (normalized) {
+      values.add(normalized);
+    }
+  };
+
+  push(canonicalName);
+  for (const alias of explicitAliases ?? []) {
+    push(alias);
+  }
+
+  const parts = normalizeWhitespace(canonicalName).split(/\s+/u).filter(Boolean);
+  if (parts.length > 0 && parts[0] && parts[0].length >= 3) {
+    push(parts[0]);
+  }
+
+  return [...values];
+}
+
+async function ensureSelfAliases(
+  client: PoolClient,
+  entityId: string,
+  canonicalName: string,
+  explicitAliases?: readonly string[]
+): Promise<void> {
+  for (const alias of deriveSelfAliases(canonicalName, explicitAliases)) {
+    await upsertAlias(client, entityId, alias, alias === canonicalName ? "manual" : "derived", {
+      source: "self_alias_ensure"
+    });
+  }
 }
 
 async function upsertEntity(
@@ -81,6 +113,160 @@ export interface NamespaceSelfProfile {
   readonly metadata: Record<string, unknown>;
 }
 
+export interface ResolvedEntityReference {
+  readonly entityId: string;
+  readonly canonicalName: string;
+  readonly entityType: string;
+  readonly matchedVia: "canonical" | "alias" | "canonicalized";
+  readonly matchedText: string;
+}
+
+async function resolveLiveEntityReferenceById(
+  entityId: string
+): Promise<Pick<ResolvedEntityReference, "entityId" | "canonicalName" | "entityType"> | null> {
+  const rows = await queryRows<{
+    readonly entity_id: string;
+    readonly canonical_name: string;
+    readonly entity_type: string;
+  }>(
+    `
+      WITH RECURSIVE lineage AS (
+        SELECT
+          e.id,
+          e.canonical_name,
+          e.entity_type,
+          e.merged_into_entity_id,
+          0 AS depth
+        FROM entities e
+        WHERE e.id = $1::uuid
+
+        UNION ALL
+
+        SELECT
+          e.id,
+          e.canonical_name,
+          e.entity_type,
+          e.merged_into_entity_id,
+          lineage.depth + 1
+        FROM entities e
+        JOIN lineage ON e.id = lineage.merged_into_entity_id
+        WHERE lineage.merged_into_entity_id IS NOT NULL
+          AND lineage.depth < 12
+      )
+      SELECT
+        id::text AS entity_id,
+        canonical_name,
+        entity_type
+      FROM lineage
+      ORDER BY depth DESC
+      LIMIT 1
+    `,
+    [entityId]
+  );
+
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    entityId: row.entity_id,
+    canonicalName: row.canonical_name,
+    entityType: row.entity_type
+  };
+}
+
+export async function resolveCanonicalEntityReference(
+  namespaceId: string,
+  rawName: string,
+  options?: {
+    readonly entityTypes?: readonly string[];
+  }
+): Promise<ResolvedEntityReference | null> {
+  const normalizedRawName = normalizeEntityLookupName(rawName);
+  const candidates = expandEntityLookupCandidates(rawName);
+  if (!normalizedRawName || candidates.length === 0) {
+    return null;
+  }
+
+  const entityTypes = options?.entityTypes?.length ? options.entityTypes : null;
+  const rows = await queryRows<{
+    readonly entity_id: string;
+    readonly canonical_name: string;
+    readonly entity_type: string;
+    readonly matched_alias: string | null;
+    readonly match_rank: string;
+    readonly alias_verified: boolean | null;
+  }>(
+    `
+      WITH candidate_names AS (
+        SELECT unnest($2::text[]) AS normalized_value
+      )
+      SELECT
+        resolved.id::text AS entity_id,
+        resolved.canonical_name,
+        resolved.entity_type,
+        matched.matched_alias,
+        matched.match_rank::text,
+        matched.alias_verified
+      FROM (
+        SELECT
+          e.id AS entity_id,
+          NULL::text AS matched_alias,
+          0 AS match_rank,
+          NULL::boolean AS alias_verified
+        FROM entities e
+        JOIN candidate_names c ON c.normalized_value = e.normalized_name
+        WHERE e.namespace_id = $1
+          AND ($3::text[] IS NULL OR e.entity_type = ANY($3::text[]))
+
+        UNION ALL
+
+        SELECT
+          e.id AS entity_id,
+          ea.alias AS matched_alias,
+          CASE WHEN ea.normalized_alias = $4 THEN 1 ELSE 2 END AS match_rank,
+          ea.is_user_verified AS alias_verified
+        FROM entity_aliases ea
+        JOIN entities e ON e.id = ea.entity_id
+        JOIN candidate_names c ON c.normalized_value = ea.normalized_alias
+        WHERE e.namespace_id = $1
+          AND ($3::text[] IS NULL OR e.entity_type = ANY($3::text[]))
+      ) matched
+      JOIN entities resolved ON resolved.id = matched.entity_id
+      ORDER BY
+        matched.match_rank ASC,
+        CASE WHEN matched.alias_verified IS TRUE THEN 0 ELSE 1 END ASC,
+        CASE WHEN resolved.normalized_name = $4 THEN 0 ELSE 1 END ASC,
+        resolved.last_seen_at DESC,
+        resolved.created_at ASC
+      LIMIT 1
+    `,
+    [namespaceId, candidates, entityTypes, normalizedRawName]
+  );
+
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+
+  const live = await resolveLiveEntityReferenceById(row.entity_id);
+  if (!live) {
+    return null;
+  }
+
+  const matchedVia: ResolvedEntityReference["matchedVia"] =
+    row.matched_alias === null ? (row.match_rank === "0" ? "canonical" : "canonicalized") : "alias";
+
+  return {
+    entityId: live.entityId,
+    canonicalName: live.canonicalName,
+    entityType: live.entityType,
+    matchedVia,
+    matchedText: row.matched_alias ?? row.canonical_name
+  };
+}
+
 export async function loadNamespaceSelfProfileForClient(
   client: PoolClient,
   namespaceId: string
@@ -137,6 +323,8 @@ export async function loadNamespaceSelfProfileForClient(
         source: "namespace_self_binding"
       });
     }
+
+    await ensureSelfAliases(client, entityId, row.display_name);
 
     const aliasRows = await client.query<{ alias: string }>(
       `
@@ -325,11 +513,7 @@ export async function upsertNamespaceSelfProfileForClient(
   );
 
   const aliases = [...new Set([canonicalName, ...(input.aliases ?? [])].map((value) => normalizeWhitespace(value)).filter(Boolean))];
-  for (const alias of aliases) {
-    await upsertAlias(client, entityId, alias, "manual", {
-      source: "ops_profile"
-    });
-  }
+  await ensureSelfAliases(client, entityId, canonicalName, aliases);
 
   const profile = await loadNamespaceSelfProfileForClient(client, input.namespaceId);
   if (!profile) {

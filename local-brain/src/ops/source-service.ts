@@ -3,8 +3,13 @@ import { access, readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { constants as fsConstants } from "node:fs";
 import { queryRows, withTransaction } from "../db/client.js";
+import { applyStoredClarificationResolutions } from "../clarifications/service.js";
 import { readConfig } from "../config.js";
 import { ingestArtifact } from "../ingest/worker.js";
+import { runCandidateConsolidation } from "../jobs/consolidation.js";
+import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
+import { runTemporalNodeArchival, runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
+import { rebuildTypedMemoryNamespace } from "../typed-memory/service.js";
 import type { SourceType } from "../types.js";
 
 type MonitoredSourceType = "openclaw" | "folder";
@@ -121,6 +126,8 @@ interface ScannedFileCandidate {
   readonly lastStatus: Exclude<FileStatus, "deleted" | "imported">;
   readonly errorMessage?: string;
 }
+
+type OpenClawMemoryKind = "daily" | "long_term" | "bootstrap" | "workspace_note";
 
 export interface OpsBootstrapState {
   readonly ownerProfileCompleted: boolean;
@@ -262,6 +269,28 @@ export interface ProcessScheduledMonitoredSourcesResult {
     readonly preview?: OpsMonitoredSourcePreview["preview"];
     readonly error?: string;
   }>;
+}
+
+export interface ImportMonitoredSourceOptions {
+  readonly forceImport?: boolean;
+  readonly skipPostImportRefresh?: boolean;
+}
+
+async function refreshDerivedNamespaceState(namespaceId: string): Promise<void> {
+  await rebuildTypedMemoryNamespace(namespaceId);
+  await applyStoredClarificationResolutions(namespaceId);
+  await runCandidateConsolidation(namespaceId, 800);
+  await runRelationshipAdjudication(namespaceId, {
+    acceptThreshold: 0.58,
+    rejectThreshold: 0.38
+  });
+  for (const layer of ["day", "week", "month", "year"] as const) {
+    await runTemporalSummaryScaffold(namespaceId, {
+      layer,
+      lookbackDays: 365
+    });
+  }
+  await runTemporalNodeArchival(namespaceId);
 }
 
 export interface OpsRuntimeOperationsSettings {
@@ -852,6 +881,56 @@ function resultSourceTypeFor(extension: string): SourceType {
   return extension === ".md" ? "markdown" : "text";
 }
 
+function inferOpenClawMetadata(relativePath: string, fileName: string): Record<string, unknown> {
+  const normalizedRelativePath = relativePath.replace(/\\/gu, "/");
+  const lowerRelativePath = normalizedRelativePath.toLowerCase();
+  const lowerFileName = fileName.toLowerCase();
+  const bootstrapFiles = new Set(["agents.md", "soul.md", "identity.md", "user.md", "tools.md", "heartbeat.md"]);
+  const metadata: Record<string, unknown> = {
+    openclaw_memory_kind: "workspace_note" satisfies OpenClawMemoryKind
+  };
+
+  const datedDailyMatch = lowerRelativePath.match(/(?:^|\/)memory\/(\d{4}-\d{2}-\d{2})\.md$/u);
+  if (datedDailyMatch) {
+    metadata.openclaw_memory_kind = "daily";
+    metadata.openclaw_session_date = datedDailyMatch[1];
+    return metadata;
+  }
+
+  if (lowerFileName === "memory.md") {
+    metadata.openclaw_memory_kind = "long_term";
+    return metadata;
+  }
+
+  if (bootstrapFiles.has(lowerFileName)) {
+    metadata.openclaw_memory_kind = "bootstrap";
+    metadata.openclaw_bootstrap_file = fileName;
+    return metadata;
+  }
+
+  return metadata;
+}
+
+function buildMonitoredFileMetadata(
+  sourceType: MonitoredSourceType,
+  relativePath: string,
+  fileName: string,
+  scanMarker: string,
+  existingMetadata?: Record<string, unknown>
+): Record<string, unknown> {
+  const nextMetadata: Record<string, unknown> = {
+    ...(existingMetadata ?? {}),
+    source_type: sourceType,
+    scan_marker: scanMarker
+  };
+
+  if (sourceType === "openclaw") {
+    Object.assign(nextMetadata, inferOpenClawMetadata(relativePath, fileName));
+  }
+
+  return nextMetadata;
+}
+
 function normalizeIsoCandidate(value: string | null | undefined): string | null {
   if (typeof value !== "string" || value.trim().length === 0) {
     return null;
@@ -1414,10 +1493,7 @@ export async function scanMonitoredSource(sourceId: string): Promise<OpsMonitore
           scannedAt,
           candidate.lastStatus,
           candidate.errorMessage ?? null,
-          JSON.stringify({
-            source_type: existingSource.source_type,
-            scan_marker: scannedAt
-          })
+          JSON.stringify(buildMonitoredFileMetadata(existingSource.source_type, candidate.relativePath, candidate.fileName, scannedAt))
         ]
       );
     }
@@ -1486,7 +1562,8 @@ export async function scanMonitoredSource(sourceId: string): Promise<OpsMonitore
 export async function importMonitoredSource(
   sourceId: string,
   triggerType: ImportTriggerType = "manual",
-  fileIds?: readonly string[]
+  fileIds?: readonly string[],
+  options: ImportMonitoredSourceOptions = {}
 ): Promise<{
   readonly source: OpsMonitoredSourceSummary;
   readonly importRun: OpsSourceImportRun;
@@ -1494,6 +1571,8 @@ export async function importMonitoredSource(
 }> {
   await scanMonitoredSource(sourceId);
   const sourceRow = await getSourceRow(sourceId);
+  const forceImport = options.forceImport === true;
+  const skipPostImportRefresh = options.skipPostImportRefresh === true;
   const normalizedFileIds =
     fileIds?.filter((value): value is string => typeof value === "string" && value.trim().length > 0) ?? [];
   const pendingRows = await queryRows<MonitoredSourceFileRow>(
@@ -1523,11 +1602,21 @@ export async function importMonitoredSource(
       WHERE source_id = $1::uuid
         AND exists_now = true
         AND content_hash IS NOT NULL
-        AND (last_imported_hash IS DISTINCT FROM content_hash OR last_imported_hash IS NULL)
+        AND (
+          $3::boolean = true
+          OR last_imported_hash IS DISTINCT FROM content_hash
+          OR last_imported_hash IS NULL
+          OR artifact_id IS NULL
+          OR NOT EXISTS (
+            SELECT 1
+            FROM artifacts a
+            WHERE a.id = ops.monitored_source_files.artifact_id
+          )
+        )
         AND ($2::uuid[] IS NULL OR id = ANY($2::uuid[]))
       ORDER BY relative_path ASC
     `,
-    [sourceId, normalizedFileIds.length > 0 ? normalizedFileIds : null]
+    [sourceId, normalizedFileIds.length > 0 ? normalizedFileIds : null, forceImport]
   );
 
   const importRunRows = await queryRows<ImportRunRow>(
@@ -1578,6 +1667,7 @@ export async function importMonitoredSource(
         sourceChannel: `bootstrap:${sourceRow.source_type}`,
         capturedAt,
         metadata: {
+          ...(row.metadata ?? {}),
           bootstrap_import: true,
           monitored_source: true,
           monitored_source_id: sourceId,
@@ -1672,7 +1762,8 @@ export async function importMonitoredSource(
         JSON.stringify({
           imported_artifact_ids: importedArtifactIds,
           source_label: sourceRow.label,
-          targeted_file_ids: normalizedFileIds
+          targeted_file_ids: normalizedFileIds,
+          force_import: forceImport
         })
       ]
     )
@@ -1691,6 +1782,10 @@ export async function importMonitoredSource(
       [sourceId, finalStatus === "failed" ? "error" : sourceRow.status === "disabled" ? "disabled" : "ready"]
     );
   });
+
+  if (!skipPostImportRefresh && filesImported > 0) {
+    await refreshDerivedNamespaceState(sourceRow.namespace_id);
+  }
 
   const source = (await listMonitoredSources()).find((item) => item.id === sourceId);
   if (!source) {

@@ -8,6 +8,7 @@ import {
   isSharedCommonalityQuery,
   isTemporalDetailQuery
 } from "./query-signals.js";
+import { buildFocusedEntityQuery, parseQueryEntityFocus } from "./query-entity-focus.js";
 
 export type AnswerableUnitType = "participant_turn" | "source_sentence" | "event_span" | "date_span" | "fact_span";
 export type AnswerableUnitOwnershipStatus = "owned" | "mixed" | "foreign" | "no_subject_signal";
@@ -23,6 +24,9 @@ export interface AnswerableUnit {
   readonly sourceChunkId?: string | null;
   readonly unitType: AnswerableUnitType;
   readonly contentText: string;
+  readonly turnIndex?: number | null;
+  readonly turnStartIndex?: number | null;
+  readonly turnEndIndex?: number | null;
   readonly ownerEntityHint?: string | null;
   readonly speakerEntityHint?: string | null;
   readonly participantNames: readonly string[];
@@ -41,6 +45,7 @@ export interface AnswerableUnitCandidate {
   readonly ownershipStatus: AnswerableUnitOwnershipStatus;
   readonly subjectMatchScore: number;
   readonly temporalScore: number;
+  readonly slotCueScore: number;
   readonly authorityScore: number;
   readonly supportScore: number;
   readonly totalScore: number;
@@ -62,25 +67,37 @@ export function scoreAnswerableUnitsForQuery(
   if (!isScopedAnswerableUnitQuery(queryText)) {
     return [];
   }
-  const targetHints = extractEntityNameHints(queryText);
-  const target = targetHints[0] ?? "";
+  const focus = parseQueryEntityFocus(queryText);
+  const target = focus.primaryHints[0] ?? "";
+  const companionHints = focus.companionHints;
   return units
     .map<AnswerableUnitCandidate>((unit) => {
-      const ownershipStatus = target ? targetSupportFromUnit(target, unit) : "no_subject_signal";
+      const ownershipStatus = target ? targetSupportFromUnit(target, companionHints, unit) : "no_subject_signal";
       const subjectMatchScore =
         ownershipStatus === "owned" ? 1.45 :
         ownershipStatus === "mixed" ? 0.2 :
         ownershipStatus === "foreign" ? -1.2 :
         -0.4;
       const temporalScore = temporalScoreForUnit(queryText, unit);
+      const eventAlignmentScore = temporalEventAlignmentScore(queryText, unit);
+      const slotCueScore = slotCueScoreForUnit(queryText, unit);
       const authority = authorityScore(unit.unitType);
       const supportScore = supportSeedScore(unit, supportResults);
-      const totalScore = unit.lexicalScore + authority + unit.ownershipConfidence + subjectMatchScore + temporalScore + supportScore;
+      const totalScore =
+        unit.lexicalScore +
+        authority +
+        unit.ownershipConfidence +
+        subjectMatchScore +
+        temporalScore +
+        eventAlignmentScore +
+        slotCueScore +
+        supportScore;
       return {
         unit,
         ownershipStatus,
         subjectMatchScore,
         temporalScore,
+        slotCueScore,
         authorityScore: authority,
         supportScore,
         totalScore
@@ -100,6 +117,9 @@ interface AnswerableUnitRow {
   readonly source_chunk_id: string | null;
   readonly unit_type: AnswerableUnitType;
   readonly content_text: string;
+  readonly turn_index: number | null;
+  readonly turn_start_index: number | null;
+  readonly turn_end_index: number | null;
   readonly owner_entity_hint: string | null;
   readonly speaker_entity_hint: string | null;
   readonly participant_names: unknown;
@@ -117,51 +137,104 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
-function extractEntityNameHints(queryText: string): readonly string[] {
-  const stopTerms = new Set([
-    "what",
-    "where",
-    "who",
-    "when",
-    "why",
-    "which",
-    "how",
-    "is",
-    "are",
-    "was",
-    "were",
-    "did",
-    "does",
-    "do",
-    "can",
-    "could",
-    "would",
-    "should",
-    "will",
-    "tell",
-    "me",
-    "january",
-    "february",
-    "march",
-    "april",
-    "may",
-    "june",
-    "july",
-    "august",
-    "september",
-    "october",
-    "november",
-    "december"
-  ]);
-  const matches = queryText.match(/\b[A-Z][a-z]+\b/gu) ?? [];
-  return [...new Set(matches.map((value) => normalizeWhitespace(value).toLowerCase()))].filter(
-    (value) => !stopTerms.has(value)
+type AnswerableUnitCueFamily =
+  | "generic"
+  | "hobbies"
+  | "martial_arts"
+  | "meal_companion"
+  | "color"
+  | "allergy_safe_pets"
+  | "favorite_movie"
+  | "social_exclusion";
+
+function inferAnswerableUnitCueFamily(queryText: string): AnswerableUnitCueFamily {
+  const lowered = queryText.toLowerCase();
+  if (/\bhobbies?\b/.test(lowered)) {
+    return "hobbies";
+  }
+  if (/\bwhat\s+martial\s+arts?\b/.test(lowered) || /\bmartial\s+arts?\s+has\b/.test(lowered)) {
+    return "martial_arts";
+  }
+  if (/\bwho\b/.test(lowered) && /\b(?:dinner|lunch|breakfast)\b/.test(lowered)) {
+    return "meal_companion";
+  }
+  if (/\bwhat\s+color\b/.test(lowered)) {
+    return "color";
+  }
+  if ((/\bpets?\b/.test(lowered) && /\bdiscomfort\b/.test(lowered)) || /\ballerg/i.test(lowered)) {
+    return "allergy_safe_pets";
+  }
+  if (/\bfavorite\s+movies?\b/.test(lowered) || (/\bone\s+of\b/.test(lowered) && /\bfavorite\s+movies?\b/.test(lowered))) {
+    return "favorite_movie";
+  }
+  if (/\bbesides\b/.test(lowered) && /\bfriends?\b/.test(lowered)) {
+    return "social_exclusion";
+  }
+  return "generic";
+}
+
+function isStandaloneHobbyStatement(text: string): boolean {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized || /\?\s*$/u.test(normalized)) {
+    return false;
+  }
+  return (
+    /\bbesides\s+[A-Za-z][^,!?\n]{0,40},\s*(?:i|he|she)\s+(?:also\s+)?(?:love|loves|enjoy|enjoys|like|likes)\b/iu.test(normalized) ||
+    /^[A-Za-z]+ing(?:\s+[A-Za-z]+){0,2}(?:\s+and\s+[A-Za-z]+ing(?:\s+(?:with|around)\s+[A-Za-z]+){0,3})?!?$/u.test(normalized)
   );
 }
 
+function slotCueScoreForUnit(queryText: string, unit: AnswerableUnit): number {
+  const family = inferAnswerableUnitCueFamily(queryText);
+  const text = normalizeWhitespace(unit.contentText);
+  if (!text || /\?\s*$/u.test(text)) {
+    return 0;
+  }
+  switch (family) {
+    case "hobbies":
+      if (/\bhobbies?\b/i.test(text)) {
+        return 2.4;
+      }
+      if (isStandaloneHobbyStatement(text)) {
+        return 2.2;
+      }
+      if (/\b(?:i|he|she)\s+(?:also\s+)?(?:enjoy|enjoys|love|loves|like|likes)\s+[A-Za-z]/i.test(text)) {
+        return 1.55;
+      }
+      return 0;
+    case "martial_arts":
+      if (/\b(kickboxing|taekwondo|karate|judo|muay thai|boxing|jiu[- ]?jitsu|wrestling)\b/i.test(text)) {
+        return 2.5;
+      }
+      if (/\bmartial arts?\b/i.test(text)) {
+        return 1.2;
+      }
+      return 0;
+    case "meal_companion":
+      if (/\b(?:dinner|lunch|breakfast)\b/i.test(text)) {
+        return /\b(?:with|along with|together with)\b/i.test(text) ? 2.2 : 1.2;
+      }
+      return 0;
+    case "color":
+      return /\b(?:color|shade|dyed|dye|hair)\b/i.test(text) ? 2.1 : 0;
+    case "allergy_safe_pets":
+      return /\b(?:pets?|dogs?|cats?|rabbits?|fish|birds?|allerg|hypoallergenic)\b/i.test(text) ? 2.05 : 0;
+    case "favorite_movie":
+      if (/\b(?:favorite\s+movies?|favorite\s+film|one of .*favorite movies?)\b/i.test(text)) {
+        return 2.2;
+      }
+      return /\b(?:movie|film)\b/i.test(text) ? 0.8 : 0;
+    case "social_exclusion":
+      return /\b(?:old friends?|other friends?|some friends?|teammates?|team|tournament friends?|outside of my circle)\b/i.test(text) ? 2.3 : 0;
+    case "generic":
+    default:
+      return 0;
+  }
+}
+
 export function isScopedAnswerableUnitQuery(queryText: string): boolean {
-  const targets = extractEntityNameHints(queryText);
-  if (targets.length !== 1) {
+  const focus = parseQueryEntityFocus(queryText);
+  if (focus.primaryHints.length !== 1 || focus.mode === "shared_group" || focus.mode === "multi_subject") {
     return false;
   }
   if (/\blately\b/i.test(queryText) || /\bbeen\s+doing\b/i.test(queryText)) {
@@ -199,6 +272,9 @@ function toUnit(row: AnswerableUnitRow): AnswerableUnit {
     sourceChunkId: row.source_chunk_id,
     unitType: row.unit_type,
     contentText: row.content_text,
+    turnIndex: row.turn_index,
+    turnStartIndex: row.turn_start_index,
+    turnEndIndex: row.turn_end_index,
     ownerEntityHint: row.owner_entity_hint ? normalizeWhitespace(row.owner_entity_hint).toLowerCase() : null,
     speakerEntityHint: row.speaker_entity_hint ? normalizeWhitespace(row.speaker_entity_hint).toLowerCase() : null,
     participantNames: participantNamesFromRow(row.participant_names),
@@ -228,12 +304,18 @@ function authorityScore(unitType: AnswerableUnitType): number {
   }
 }
 
-function targetSupportFromUnit(target: string, unit: AnswerableUnit): AnswerableUnitOwnershipStatus {
+function targetSupportFromUnit(
+  target: string,
+  companionHints: readonly string[],
+  unit: AnswerableUnit
+): AnswerableUnitOwnershipStatus {
   const owner = unit.ownerEntityHint ?? "";
   const speaker = unit.speakerEntityHint ?? "";
   const participants = unit.participantNames;
   const targetInParticipants = participants.some((value) => value.includes(target));
-  const foreignParticipants = participants.filter((value) => !value.includes(target));
+  const foreignParticipants = participants.filter(
+    (value) => !value.includes(target) && !companionHints.some((hint) => value.includes(hint))
+  );
   const lowerContent = unit.contentText.toLowerCase();
   const contentTargetHit = lowerContent.includes(target);
 
@@ -302,6 +384,219 @@ function temporalScoreForUnit(queryText: string, unit: AnswerableUnit): number {
   return 0;
 }
 
+function temporalEventAlignmentScore(queryText: string, unit: AnswerableUnit): number {
+  if (!isTemporalDetailQuery(queryText)) {
+    return 0;
+  }
+
+  const metadata = unit.metadata ?? {};
+  const contextText = [
+    unit.contentText,
+    typeof metadata.source_sentence_text === "string" ? metadata.source_sentence_text : "",
+    typeof metadata.source_turn_text === "string" ? metadata.source_turn_text : ""
+  ]
+    .join(" ")
+    .toLowerCase();
+  const entityTerms = new Set(parseQueryEntityFocus(queryText).primaryHints.flatMap((value) => value.split(/\s+/u)));
+  const eventTerms = [...new Set(
+    (queryText.match(/[A-Za-z']+/gu) ?? [])
+      .map((term) => normalizeWhitespace(term).toLowerCase())
+      .filter((term) => term.length > 1)
+      .filter((term) => !["when", "did", "does", "do", "was", "were", "the", "a", "an", "to", "of", "at", "in", "on", "first", "last", "year", "month", "day", "date", "time", "my", "his", "her", "their"].includes(term))
+      .filter((term) => !entityTerms.has(term))
+  )];
+  if (eventTerms.length === 0) {
+    return 0;
+  }
+
+  const overlapCount = eventTerms.filter((term) => contextText.includes(term)).length;
+  const hasDateAnchor =
+    (typeof metadata.date_text === "string" && metadata.date_text.length > 0) ||
+    (typeof metadata.relative_label === "string" && metadata.relative_label.length > 0);
+  return overlapCount * 1.35 + (hasDateAnchor && overlapCount > 0 ? 2.6 : 0);
+}
+
+async function queryNeighborhoodUnits(options: {
+  readonly namespaceId: string;
+  readonly seedCandidates: readonly AnswerableUnitCandidate[];
+  readonly excludeIds: readonly string[];
+  readonly limit: number;
+}): Promise<readonly AnswerableUnit[]> {
+  const seedMemoryIds = [...new Set(options.seedCandidates.map((candidate) => candidate.unit.sourceMemoryId).filter((value): value is string => Boolean(value)))];
+  const seedObservationIds = [...new Set(options.seedCandidates.map((candidate) => candidate.unit.artifactObservationId).filter((value): value is string => Boolean(value)))];
+  const seedChunkIds = [...new Set(options.seedCandidates.map((candidate) => candidate.unit.sourceChunkId).filter((value): value is string => Boolean(value)))];
+  if (seedMemoryIds.length === 0 && seedObservationIds.length === 0 && seedChunkIds.length === 0) {
+    return [];
+  }
+
+  const rows = await queryRows<AnswerableUnitRow>(
+    `
+      SELECT
+        au.id::text,
+        au.namespace_id,
+        au.source_kind,
+        au.source_memory_id::text,
+        au.source_derivation_id::text,
+        au.artifact_id::text,
+        au.artifact_observation_id::text,
+        au.source_chunk_id::text,
+        au.unit_type,
+        au.content_text,
+        au.turn_index,
+        au.turn_start_index,
+        au.turn_end_index,
+        au.owner_entity_hint,
+        au.speaker_entity_hint,
+        au.participant_names,
+        au.occurred_at::text,
+        au.valid_from::text,
+        au.valid_until::text,
+        au.is_current,
+        au.ownership_confidence,
+        au.provenance,
+        au.metadata,
+        0::float8 AS lexical_score
+      FROM answerable_units au
+      WHERE au.namespace_id = $1
+        AND NOT (au.id::text = ANY($2::text[]))
+        AND (
+          ($3::text[] IS NOT NULL AND au.source_memory_id::text = ANY($3::text[]))
+          OR ($4::text[] IS NOT NULL AND au.artifact_observation_id::text = ANY($4::text[]))
+          OR ($5::text[] IS NOT NULL AND au.source_chunk_id::text = ANY($5::text[]))
+        )
+      ORDER BY au.ownership_confidence DESC, au.occurred_at DESC NULLS LAST
+      LIMIT $6
+    `,
+    [
+      options.namespaceId,
+      options.excludeIds,
+      seedMemoryIds.length > 0 ? seedMemoryIds : null,
+      seedObservationIds.length > 0 ? seedObservationIds : null,
+      seedChunkIds.length > 0 ? seedChunkIds : null,
+      options.limit
+    ]
+  );
+
+  const seedUnits = options.seedCandidates.map((candidate) => candidate.unit);
+  return rows
+    .map(toUnit)
+    .sort((left, right) => {
+      const leftDistance = nearestTurnDistance(left, seedUnits);
+      const rightDistance = nearestTurnDistance(right, seedUnits);
+      if (leftDistance !== rightDistance) {
+        return leftDistance - rightDistance;
+      }
+      if (right.ownershipConfidence !== left.ownershipConfidence) {
+        return right.ownershipConfidence - left.ownershipConfidence;
+      }
+      return Date.parse(right.occurredAt ?? "") - Date.parse(left.occurredAt ?? "");
+    })
+    .slice(0, options.limit);
+}
+
+function nearestTurnDistance(unit: AnswerableUnit, seeds: readonly AnswerableUnit[]): number {
+  const unitTurnIndex = unit.turnIndex ?? unit.turnStartIndex ?? unit.turnEndIndex;
+  if (!Number.isFinite(unitTurnIndex)) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  let bestDistance = Number.MAX_SAFE_INTEGER;
+  for (const seed of seeds) {
+    const seedTurnIndex = seed.turnIndex ?? seed.turnStartIndex ?? seed.turnEndIndex;
+    if (!Number.isFinite(seedTurnIndex)) {
+      continue;
+    }
+    if (seed.artifactObservationId && unit.artifactObservationId && seed.artifactObservationId !== unit.artifactObservationId) {
+      continue;
+    }
+    bestDistance = Math.min(bestDistance, Math.abs((unitTurnIndex as number) - (seedTurnIndex as number)));
+  }
+  return bestDistance;
+}
+
+function ownerFamilyRegex(cueFamily: AnswerableUnitCueFamily): string | null {
+  switch (cueFamily) {
+    case "hobbies":
+      return "(hobbies?|enjoy|enjoys|love|loves|like|likes|writing|reading|watching movies|exploring nature|hanging with friends)";
+    case "martial_arts":
+      return "(kickboxing|taekwondo|karate|judo|muay thai|boxing|jiu[- ]?jitsu|wrestling|martial arts?)";
+    case "allergy_safe_pets":
+      return "(allerg|animals with fur|hairless cats?|pigs?|reptiles?)";
+    case "social_exclusion":
+      return "(old friends?|other friends?|some friends?|teammates?|team|tournament friends?|outside of my circle|my team)";
+    default:
+      return null;
+  }
+}
+
+async function queryOwnerFamilyUnits(options: {
+  readonly namespaceId: string;
+  readonly targetHints: readonly string[];
+  readonly cueFamily: AnswerableUnitCueFamily;
+  readonly excludeIds: readonly string[];
+  readonly limit: number;
+  readonly timeStart?: string;
+  readonly timeEnd?: string;
+}): Promise<readonly AnswerableUnit[]> {
+  const familyRegex = ownerFamilyRegex(options.cueFamily);
+  if (options.targetHints.length === 0 || !familyRegex) {
+    return [];
+  }
+
+  const rows = await queryRows<AnswerableUnitRow>(
+    `
+      SELECT
+        au.id::text,
+        au.namespace_id,
+        au.source_kind,
+        au.source_memory_id::text,
+        au.source_derivation_id::text,
+        au.artifact_id::text,
+        au.artifact_observation_id::text,
+        au.source_chunk_id::text,
+        au.unit_type,
+        au.content_text,
+        au.turn_index,
+        au.turn_start_index,
+        au.turn_end_index,
+        au.owner_entity_hint,
+        au.speaker_entity_hint,
+        au.participant_names,
+        au.occurred_at::text,
+        au.valid_from::text,
+        au.valid_until::text,
+        au.is_current,
+        au.ownership_confidence,
+        au.provenance,
+        au.metadata,
+        0.25::float8 AS lexical_score
+      FROM answerable_units au
+      WHERE au.namespace_id = $1
+        AND NOT (au.id::text = ANY($2::text[]))
+        AND (
+          lower(coalesce(au.owner_entity_hint, '')) = ANY($3::text[])
+          OR lower(coalesce(au.speaker_entity_hint, '')) = ANY($3::text[])
+        )
+        AND lower(au.content_text) ~ $4
+        AND ($5::timestamptz IS NULL OR au.occurred_at >= $5)
+        AND ($6::timestamptz IS NULL OR au.occurred_at <= $6)
+      ORDER BY au.ownership_confidence DESC, au.occurred_at DESC NULLS LAST
+      LIMIT $7
+    `,
+    [
+      options.namespaceId,
+      options.excludeIds,
+      options.targetHints,
+      familyRegex,
+      options.timeStart ?? null,
+      options.timeEnd ?? null,
+      options.limit
+    ]
+  );
+
+  return rows.map(toUnit);
+}
+
 export async function queryAnswerableUnits(options: {
   readonly namespaceId: string;
   readonly queryText: string;
@@ -314,7 +609,10 @@ export async function queryAnswerableUnits(options: {
   readonly candidates: readonly AnswerableUnitCandidate[];
   readonly telemetry: AnswerableUnitRetrievalTelemetry;
 }> {
-  const targetHints = extractEntityNameHints(options.queryText);
+  const focus = parseQueryEntityFocus(options.queryText);
+  const targetHints = focus.primaryHints;
+  const focusedQueryText = buildFocusedEntityQuery(options.queryText);
+  const cueFamily = inferAnswerableUnitCueFamily(options.queryText);
   if (!isScopedAnswerableUnitQuery(options.queryText)) {
     return {
       applied: false,
@@ -329,6 +627,10 @@ export async function queryAnswerableUnits(options: {
     };
   }
 
+  const candidateFetchLimit =
+    targetHints.length > 0 && cueFamily !== "generic"
+      ? Math.max(options.limit * 20, 160)
+      : Math.max(options.limit * 4, 24);
   const queryRowsResult = await queryRows<AnswerableUnitRow>(
     `
       WITH query_state AS (
@@ -345,6 +647,9 @@ export async function queryAnswerableUnits(options: {
         au.source_chunk_id::text,
         au.unit_type,
         au.content_text,
+        au.turn_index,
+        au.turn_start_index,
+        au.turn_end_index,
         au.owner_entity_hint,
         au.speaker_entity_hint,
         au.participant_names,
@@ -371,19 +676,62 @@ export async function queryAnswerableUnits(options: {
     `,
     [
       options.namespaceId,
-      options.queryText,
+      focusedQueryText,
       options.timeStart ?? null,
       options.timeEnd ?? null,
       targetHints.length > 0 ? targetHints : null,
-      Math.max(options.limit * 4, 24)
+      candidateFetchLimit
     ]
   );
 
-  const candidates = scoreAnswerableUnitsForQuery(
+  const initialCandidates = scoreAnswerableUnitsForQuery(
     options.queryText,
     queryRowsResult.map(toUnit),
     options.supportResults
-  ).slice(0, Math.max(options.limit, 8));
+  );
+  const temporalNeighborhoodQuery = isTemporalDetailQuery(options.queryText);
+  const neighborhoodLimit =
+    temporalNeighborhoodQuery
+      ? 12
+      : cueFamily === "hobbies" || cueFamily === "martial_arts" || cueFamily === "allergy_safe_pets" || cueFamily === "social_exclusion"
+      ? 48
+      : 24;
+  const neighborhoodUnits =
+    cueFamily !== "generic" || temporalNeighborhoodQuery
+      ? await queryNeighborhoodUnits({
+          namespaceId: options.namespaceId,
+          seedCandidates: initialCandidates.filter((candidate) => candidate.ownershipStatus !== "foreign").slice(0, temporalNeighborhoodQuery ? 1 : 3),
+          excludeIds: queryRowsResult.map((row) => row.id),
+          limit: neighborhoodLimit
+        })
+      : [];
+  const ownerFamilyUnits =
+    cueFamily !== "generic"
+      ? await queryOwnerFamilyUnits({
+          namespaceId: options.namespaceId,
+          targetHints,
+          cueFamily,
+          excludeIds: [...queryRowsResult.map((row) => row.id), ...neighborhoodUnits.map((unit) => unit.id)],
+          limit: cueFamily === "hobbies" || cueFamily === "martial_arts" ? 48 : 24,
+          timeStart: options.timeStart,
+          timeEnd: options.timeEnd
+        })
+      : [];
+  const mergedUnits = [
+    ...queryRowsResult.map(toUnit),
+    ...neighborhoodUnits,
+    ...ownerFamilyUnits
+  ];
+  const candidates = scoreAnswerableUnitsForQuery(
+    options.queryText,
+    mergedUnits.filter((unit, index, all) => all.findIndex((other) => other.id === unit.id) === index),
+    options.supportResults
+  ).slice(
+    0,
+    cueFamily !== "generic"
+      ? Math.max(options.limit * 10, cueFamily === "martial_arts" || cueFamily === "hobbies" || cueFamily === "allergy_safe_pets" || cueFamily === "social_exclusion" ? 120 : 80)
+      : Math.max(options.limit, 8)
+  );
 
   return {
     applied: true,

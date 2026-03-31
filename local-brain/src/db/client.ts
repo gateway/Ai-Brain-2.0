@@ -78,6 +78,56 @@ export async function isMaintenanceLockActive(): Promise<boolean> {
   });
 }
 
+export interface MaintenanceLockHolder {
+  readonly backendPid: number;
+  readonly applicationName: string | null;
+  readonly state: string | null;
+  readonly queryStart: string | null;
+}
+
+export async function getMaintenanceLockHolders(): Promise<readonly MaintenanceLockHolder[]> {
+  return withClient(async (client) => {
+    const result = await client.query<{
+      readonly backend_pid: number;
+      readonly application_name: string | null;
+      readonly state: string | null;
+      readonly query_start_iso: string | null;
+    }>(
+      `
+        SELECT DISTINCT
+          activity.pid AS backend_pid,
+          NULLIF(activity.application_name, '') AS application_name,
+          activity.state,
+          to_char(activity.query_start AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS query_start_iso
+        FROM pg_locks locks
+        JOIN pg_stat_activity activity
+          ON activity.pid = locks.pid
+        WHERE locks.locktype = 'advisory'
+          AND locks.classid = $1
+          AND locks.objid = $2
+          AND locks.granted = true
+      `,
+      [MAINTENANCE_LOCK_KEY_A, MAINTENANCE_LOCK_KEY_B]
+    );
+    return result.rows.map((row) => ({
+      backendPid: row.backend_pid,
+      applicationName: row.application_name,
+      state: row.state,
+      queryStart: row.query_start_iso
+    }));
+  });
+}
+
+export async function terminateMaintenanceLockHolder(backendPid: number): Promise<boolean> {
+  return withClient(async (client) => {
+    const result = await client.query<{ readonly terminated: boolean }>(
+      "SELECT pg_terminate_backend($1) AS terminated",
+      [backendPid]
+    );
+    return result.rows[0]?.terminated === true;
+  });
+}
+
 export async function withMaintenanceLock<T>(reason: string, fn: () => Promise<T>): Promise<T> {
   if (localMaintenanceDepth > 0) {
     localMaintenanceDepth += 1;

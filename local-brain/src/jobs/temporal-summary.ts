@@ -410,13 +410,38 @@ function summarizeBucket(
   topEntitySummary: string,
   topEventSummary: string
 ): string {
+  const periodStartLabel = String(periodStart).slice(0, 10);
+  const periodEndLabel = String(periodEnd).slice(0, 10);
+  const labelsFromSummary = (value: string): string[] =>
+    value === "none"
+      ? []
+      : value
+          .split(",")
+          .map((part) => part.split(":")[0]?.trim() ?? "")
+          .filter((part) => part.length > 0)
+          .slice(0, 4);
+
+  const activities = labelsFromSummary(topEventSummary);
+  const entities = labelsFromSummary(topEntitySummary);
+  const roles = labelsFromSummary(roleSummary);
+  const lead =
+    layer === "day"
+      ? `Day summary for ${periodStartLabel}.`
+      : layer === "week"
+        ? `Week summary starting ${periodStartLabel}.`
+        : layer === "month"
+          ? `Month summary starting ${periodStartLabel}.`
+          : `Year summary starting ${periodStartLabel}.`;
+
   return [
-    `${layer.toUpperCase()} rollup ${periodStart} -> ${periodEnd}.`,
-    `events=${eventCount}.`,
-    `activities=${topEventSummary}.`,
-    `roles=${roleSummary}.`,
-    `top_entities=${topEntitySummary}.`
-  ].join(" ");
+    lead,
+    `${eventCount} grounded events were captured between ${periodStartLabel} and ${periodEndLabel}.`,
+    activities.length > 0 ? `Main activities were ${activities.join(", ")}.` : "",
+    entities.length > 0 ? `The strongest recurring entities were ${entities.join(", ")}.` : "",
+    roles.length > 0 ? `Roles present: ${roles.join(", ")}.` : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function asStringArray(value: unknown): string[] {

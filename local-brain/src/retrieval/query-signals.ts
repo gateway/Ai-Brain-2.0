@@ -98,6 +98,9 @@ export function isActiveRelationshipQuery(queryText: string): boolean {
   }
 
   return (
+    /\bwho\s+is\s+.+\s+in\s+my\s+life(?:\s+right\s+now)?\b/i.test(normalized) ||
+    /\bwhat\s+is\s+.+['’]s\s+relationship\s+to\s+me\b/i.test(normalized) ||
+    /\bwhat\s+is\s+each\s+person'?s?\s+relationship\s+to\s+me\b/i.test(normalized) ||
     /\bwhere\s+do(?:es)?\s+.+\s+(?:live|work|stay|based)\b/i.test(normalized) ||
     /\bwhere\s+has\s+.+\s+lived\b/i.test(normalized) ||
     /\bwhere\s+has\s+.+\s+worked\b/i.test(normalized) ||
@@ -127,6 +130,9 @@ export function isHistoricalRelationshipQuery(queryText: string): boolean {
     /\bwhat\s+is\s+.+['’]s\s+history\s+with\b/i.test(normalized) ||
     /\bwhat\s+is\s+the\s+history\s+between\b/i.test(normalized) ||
     /\brelationship\s+history\b/i.test(normalized) ||
+    /\bwho\s+used\s+to\s+be\s+in\s+my\s+life\b/i.test(normalized) ||
+    /\bwho\s+is\s+no\s+longer\s+current\s+in\s+my\s+life\b/i.test(normalized) ||
+    /\bnot\s+current\s+now\b/i.test(normalized) ||
     /\bwhere\s+has\s+.+\s+lived\b/i.test(normalized) ||
     /\bwhere\s+has\s+.+\s+worked\b/i.test(normalized) ||
     /\bwhere\s+was\s+.+\s+born\b/i.test(normalized) ||
@@ -264,9 +270,131 @@ export function isDailyLifeSummaryQuery(queryText: string): boolean {
 
   return (
     /\bwhat\s+did\s+.+\s+do\s+(?:today|yesterday|tonight)\b/i.test(normalized) ||
+    /\bwhat\s+did\s+i\s+do\s+(?:this\s+morning|last\s+week)\b/i.test(normalized) ||
+    /\bwhat\s+did\s+.+\s+(?:talk|talk about|discuss|discuss about)\s+(?:today|yesterday|tonight)\b/i.test(normalized) ||
+    /\bwhat\s+did\s+i\s+(?:talk|talk about|discuss|discuss about)\s+(?:this\s+morning|last\s+week)\b/i.test(normalized) ||
     /\bwhat\s+happened\s+(?:today|yesterday|that\s+day)\b/i.test(normalized) ||
+    /\bwhat\s+happened\s+(?:last\s+week|this\s+morning)\b/i.test(normalized) ||
     /\bwhat\s+did\s+.+\s+do\s+on\b/i.test(normalized) ||
     /\bwhat\s+happened\s+on\b/i.test(normalized)
+  );
+}
+
+export function isWarmStartQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bwhat\s+should\s+you\s+know\s+about\s+me\s+to\s+start\s+today\b/i.test(normalized) ||
+    /\bwhat\s+should\s+the\s+brain\s+know\s+about\s+me\s+to\s+start\s+today\b/i.test(normalized) ||
+    /\bhow\s+should\s+you\s+start\s+today\s+with\s+my\s+context\b/i.test(normalized) ||
+    /\bgive\s+me\s+(?:a\s+)?warm\s+start\b/i.test(normalized) ||
+    /\bwarm\s+start\s+pack\b/i.test(normalized) ||
+    /\bstart\s+today\b[\s\S]{0,20}\bcontext\b/i.test(normalized)
+  );
+}
+
+export function isPurchaseSummaryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  if (
+    /\btemporary\s+job\b/i.test(normalized) ||
+    /\bcover\s+expenses\b/i.test(normalized) ||
+    /\bwhat\s+job\b/i.test(normalized)
+  ) {
+    return false;
+  }
+
+  return (
+    /\bwhat\s+did\s+.+\s+(?:buy|purchase)\b/i.test(normalized) ||
+    /\bwhat\s+did\s+i\s+(?:buy|purchase)\b/i.test(normalized) ||
+    /\bwhat\s+did\s+.+\s+spend\b/i.test(normalized) ||
+    /\bwhat\s+did\s+i\s+spend\b/i.test(normalized) ||
+    /\bwhat\s+were\s+the\s+prices?\b/i.test(normalized) ||
+    /\bhow\s+much\s+did\s+.+\s+spend\b/i.test(normalized) ||
+    /\bhow\s+much\s+did\s+i\s+spend\b/i.test(normalized) ||
+    /\bwhat\s+were\s+my\s+purchases?\b/i.test(normalized) ||
+    /\bpurchases?\b/i.test(normalized) ||
+    (/\bexpenses?\b/i.test(normalized) && /\b(?:my|i|today|yesterday|week|month|buy|bought|purchase|purchases|spend|spent|prices?)\b/i.test(normalized))
+  );
+}
+
+export function isMediaSummaryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bwhat\s+movies?\s+(?:have|has)\s+.+\s+(?:talked about|mentioned|watched|seen)\b/i.test(normalized) ||
+    /\bwhat\s+movies?\s+have\s+i\s+(?:talked about|mentioned|watched|seen)\b/i.test(normalized) ||
+    /\bwhat\s+shows?\s+(?:have|has)\s+.+\s+(?:talked about|mentioned|watched|seen)\b/i.test(normalized) ||
+    /\bwhat\s+media\b/i.test(normalized) ||
+    /\bmovies?\s+have\s+been\s+mentioned\b/i.test(normalized) ||
+    /\bwhat\s+movie\s+did\s+.+\s+mention\b/i.test(normalized)
+  );
+}
+
+export function isPreferenceSummaryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bwhat\s+do\s+i\s+like\b/i.test(normalized) ||
+    /\bwhat\s+do\s+i\s+dislike\b/i.test(normalized) ||
+    /\bwhat\s+do\s+i\s+like\s+or\s+dislike\b/i.test(normalized) ||
+    /\bwhat\s+do\s+i\s+consistently\s+like\s+or\s+dislike\b/i.test(normalized) ||
+    /\bwhat\s+beer(?:s)?\s+do\s+i\s+like\b/i.test(normalized) ||
+    /\bwhat\s+are\s+my\s+favorite\s+beer(?:s)?\b/i.test(normalized) ||
+    /\bwhat\s+thai\s+beer(?:s)?\s+do\s+i\s+(?:prefer|rank)\b/i.test(normalized) ||
+    /\bwhat\s+are\s+my\s+favorite\s+beers?\s+in\s+thailand\b/i.test(normalized) ||
+    /\bwhat\s+food\s+did\s+i\s+like\b/i.test(normalized) ||
+    /\bwhat\s+food\s+do\s+i\s+dislike\b/i.test(normalized) ||
+    /\bwhat\s+foods?\s+do\s+i\s+like\b/i.test(normalized) ||
+    /\bwhat\s+foods?\s+or\s+drinks?\s+do\s+i\s+(?:consistently\s+)?like\s+or\s+dislike\b/i.test(normalized) ||
+    /\bwhat\s+foods?\s+do\s+i\s+like\s+or\s+dislike\b/i.test(normalized) ||
+    /\bwhat\s+shows?\s+did\s+i\s+like\b/i.test(normalized) ||
+    /\bwhat\s+movies?\s+did\s+i\s+like\b/i.test(normalized) ||
+    /\bwhat\s+are\s+my\s+likes\s+and\s+dislikes\b/i.test(normalized) ||
+    /\bwhat\s+preferences?\b/i.test(normalized)
+  );
+}
+
+export function isRoutineSummaryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bwhat\s+is\s+my\s+(?:current\s+)?daily\s+routine\b/i.test(normalized) ||
+    /\bwhat\s+is\s+my\s+current\s+routine\b/i.test(normalized) ||
+    /\bwhat\s+is\s+my\s+routine\b/i.test(normalized) ||
+    /\bwhat\s+routines?\s+do\s+i\s+have\b/i.test(normalized) ||
+    /\bwhat\s+habits?\s+do\s+i\s+have\b/i.test(normalized) ||
+    /\bwhat\s+(?:routines?|habits?)\s+matter\s+right\s+now\b/i.test(normalized) ||
+    /\bwhat\s+habits?\s+matter\s+right\s+now\b/i.test(normalized) ||
+    /\bhow\s+do\s+i\s+usually\s+start\s+my\s+day\b/i.test(normalized)
+  );
+}
+
+export function isPersonTimeFactQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bwhat\s+did\s+.+\s+(?:talk about|mention|discuss)\b/i.test(normalized) ||
+    /\bwhat\s+was\s+i\s+talking\s+about\s+with\b/i.test(normalized) ||
+    /\bwhat\s+did\s+i\s+talk\s+about\s+with\b/i.test(normalized)
   );
 }
 
@@ -280,6 +408,13 @@ export function isPreciseFactDetailQuery(queryText: string): boolean {
     /\bhow\s+long\b/i.test(normalized) ||
     /\bhow\s+many\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\b/i.test(normalized) ||
     /\bwhat\s+(?:play|movie|film|show|book|song|title)\b/i.test(normalized) ||
+    /\bfavorite\s+movie\s+trilog(?:y|ies)\b/i.test(normalized) ||
+    /\bhobbies?\b/i.test(normalized) ||
+    /\bwhat\s+(?:martial arts?|color)\b/i.test(normalized) ||
+    /\btemporary\s+job\b/i.test(normalized) ||
+    /\bwho\s+did\s+.+\s+(?:dinner|lunch|breakfast)\s+with\b/i.test(normalized) ||
+    /\bpets?\s+wouldn'?t\s+cause\b/i.test(normalized) ||
+    (/\bpets?\b/i.test(normalized) && /\ballerg/i.test(normalized)) ||
     /\bwhat\s+(?:was|is)\s+the\s+name\s+of\b/i.test(normalized) ||
     /\bwhere\s+did\s+i\s+(?:redeem|buy|get|purchase)\b/i.test(normalized) ||
     /\bwhere\s+do\s+i\s+take\b.+\bclasses?\b/i.test(normalized) ||
@@ -317,6 +452,14 @@ export function isIdentityProfileQuery(queryText: string): boolean {
     return false;
   }
 
+  if (
+    /\bin\s+my\s+life\b/i.test(normalized) ||
+    /\brelationship\s+to\s+me\b/i.test(normalized) ||
+    /\bfriends?\b/i.test(normalized)
+  ) {
+    return false;
+  }
+
   return (
     /\bwhat\s+is\s+.+['’]s\s+identity\b/i.test(normalized) ||
     /\bwhat\s+does\s+.+\s+identify\s+as\b/i.test(normalized) ||
@@ -335,8 +478,15 @@ export function isSharedCommonalityQuery(queryText: string): boolean {
   return (
     /\bin\s+common\b/i.test(normalized) ||
     /\bwhat\s+do\s+.+\s+both\b/i.test(normalized) ||
+    /\bwhat\s+type\s+of\s+.+\s+have\s+.+\s+both\s+done\b/i.test(normalized) ||
+    /\bwhat\s+kind\s+of\s+.+\s+have\s+.+\s+both\s+done\b/i.test(normalized) ||
+    /\bwhat\s+.+\s+have\s+.+\s+both\s+done\b/i.test(normalized) ||
     /\bhow\s+do\s+.+\s+both\b/i.test(normalized) ||
+    /\bwhich\s+\w+\s+have\s+both\b/i.test(normalized) ||
+    /\bwhich\s+\w+\s+do\s+.+\s+share\b/i.test(normalized) ||
+    /\bboth\s+.+\s+visited\b/i.test(normalized) ||
     /\bshared\b/i.test(normalized) ||
+    /\bshare\b/i.test(normalized) ||
     /\bsame\b/i.test(normalized) && /\b(?:like|goal|goals|care|care about|way|ways|stress|destress)\b/i.test(normalized)
   );
 }
@@ -462,6 +612,8 @@ export function isConstraintQuery(queryText: string): boolean {
 
   return (
     /\bwhat\s+constraints?\b/i.test(normalized) ||
+    /\bwhat\s+(?:habits?\s+or\s+constraints?|constraints?\s+or\s+habits?)\b/i.test(normalized) ||
+    /\bwhat\s+constraints?\s+matter\s+right\s+now\b/i.test(normalized) ||
     /\bwhat\s+rules?\b/i.test(normalized) ||
     /\bpolicy\b/i.test(normalized) ||
     /\bmandatory\s+protocol\b/i.test(normalized) ||
@@ -540,6 +692,51 @@ export function preferredRelationshipPredicates(queryText: string): readonly str
   const normalized = queryText.trim().toLowerCase();
   if (!normalized) {
     return [];
+  }
+
+  if (
+    /\bwho\s+is\s+.+\s+in\s+my\s+life(?:\s+right\s+now)?\b/i.test(normalized) &&
+    /\bassociated with\b/i.test(normalized)
+  ) {
+    return [
+      "owner_of",
+      "associated_with",
+      "friend_of",
+      "best_friends_with",
+      "former_partner_of",
+      "works_with",
+      "works_on",
+      "project_role",
+      "met_through",
+      "member_of",
+      "significant_other_of",
+      "was_with",
+      "relationship_reconnected",
+      "relationship_ended"
+    ];
+  }
+
+  if (
+    /\bwho\s+is\s+.+\s+in\s+my\s+life(?:\s+right\s+now)?\b/i.test(normalized) ||
+    /\bwhat\s+is\s+.+['’]s\s+relationship\s+to\s+me\b/i.test(normalized) ||
+    /\bwhat\s+is\s+each\s+person'?s?\s+relationship\s+to\s+me\b/i.test(normalized)
+  ) {
+    return [
+      "friend_of",
+      "best_friends_with",
+      "significant_other_of",
+      "former_partner_of",
+      "was_with",
+      "works_with",
+      "works_on",
+      "owner_of",
+      "associated_with",
+      "met_through",
+      "member_of",
+      "project_role",
+      "relationship_reconnected",
+      "relationship_ended"
+    ];
   }
 
   if (/\bwhere\s+do(?:es)?\s+.+\s+(?:live|stay|based)\b/i.test(normalized)) {

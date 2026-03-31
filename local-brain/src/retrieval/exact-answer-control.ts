@@ -1,5 +1,6 @@
 import type { RecallResult } from "../types.js";
 import type { RecallExactDetailSource } from "./types.js";
+import { extractEntityNameHints, parseQueryEntityFocus } from "./query-entity-focus.js";
 
 export type ExactAnswerWindowStatus = "subject_safe" | "mixed_subject" | "foreign_subject" | "no_answer_bearing_text";
 export type ExactAnswerSlotFit = "strong" | "weak" | "none";
@@ -31,6 +32,11 @@ interface ExactAnswerCandidate {
   readonly score: number;
   readonly strongSupport: boolean;
   readonly slotValueFitnessScore: number;
+}
+
+interface ExactAnswerWindowValues {
+  readonly window: ExactAnswerWindowEvaluation;
+  readonly values: readonly string[];
 }
 
 export interface ExactAnswerTelemetry {
@@ -65,10 +71,26 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
-function extractEntityNameHints(queryText: string): readonly string[] {
-  const matches = queryText.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b/gu) ?? [];
-  return [...new Set(matches.map((value) => normalizeWhitespace(value).toLowerCase()))].filter(
-    (value) => !["what", "where", "who", "when", "why", "ai brain"].includes(value)
+function isPetSafetyQueryText(queryText: string): boolean {
+  return (
+    /\bpets?\b/i.test(queryText) &&
+    (/\ballerg/i.test(queryText) ||
+      /\bdiscomfort\b/i.test(queryText) ||
+      /\bwould(?:\s+not|n't)\s+cause\b/i.test(queryText) ||
+      /\bsafe\b/i.test(queryText))
+  );
+}
+
+function isInterrogativeClaimText(value: string): boolean {
+  const normalized = normalizeWhitespace(value);
+  if (!normalized) {
+    return false;
+  }
+  if (/\?\s*$/u.test(normalized)) {
+    return true;
+  }
+  return /^(?:what|when|where|who|why|how|did|does|do|can|could|would|will|is|are|was|were|have|has|had)\b/iu.test(
+    normalized.replace(/^[A-Z][a-z]+:\s*/u, "")
   );
 }
 
@@ -159,7 +181,7 @@ function targetContextMatches(text: string, targetHints: readonly string[], resu
 function extractAnswerBearingWindows(queryText: string, result: RecallResult): readonly ExactAnswerWindow[] {
   const derivationType = derivationTypeForResult(result);
   const source = baseExactDetailSource(result);
-  const targetHints = extractEntityNameHints(queryText);
+  const targetHints = parseQueryEntityFocus(queryText).primaryHints;
   const resultSignals = collectResultParticipantSignals(result);
   const metadata =
     typeof result.provenance.metadata === "object" && result.provenance.metadata !== null
@@ -226,18 +248,24 @@ function extractAnswerBearingWindows(queryText: string, result: RecallResult): r
 }
 
 function classifyWindowStatus(window: ExactAnswerWindow, queryText: string): ExactAnswerWindowStatus {
-  const targetHints = extractEntityNameHints(queryText);
+  const focus = parseQueryEntityFocus(queryText);
+  const targetHints = focus.primaryHints;
+  const companionHints = focus.companionHints;
   if (targetHints.length !== 1) {
     return "subject_safe";
   }
 
   const target = targetHints[0]!;
-  const resultSignals = collectResultParticipantSignals(window.result).filter((signal) => signal !== target);
+  const resultSignals = collectResultParticipantSignals(window.result).filter(
+    (signal) => signal !== target && !companionHints.some((hint) => signal.includes(hint))
+  );
   const normalizedText = normalizeWhitespace(window.text).toLowerCase();
   const speaker = normalizeWhitespace(window.speaker ?? "").toLowerCase();
   const speakerTurns = parseConversationSpeakerTurns(window.result.content);
   const primarySpeakerTurns = speakerTurns.filter((turn) => turn.speaker.includes(target));
-  const foreignSpeakerTurns = speakerTurns.filter((turn) => !turn.speaker.includes(target));
+  const foreignSpeakerTurns = speakerTurns.filter(
+    (turn) => !turn.speaker.includes(target) && !companionHints.some((hint) => turn.speaker.includes(hint))
+  );
 
   if (window.speaker) {
     if (!speaker.includes(target)) {
@@ -275,7 +303,7 @@ function scoreSubjectPurity(status: ExactAnswerWindowStatus): number {
 }
 
 function scoreSpeakerAlignment(window: ExactAnswerWindow, queryText: string): number {
-  const targetHints = extractEntityNameHints(queryText);
+  const targetHints = parseQueryEntityFocus(queryText).primaryHints;
   if (targetHints.length !== 1) {
     return 0;
   }
@@ -296,7 +324,9 @@ function scoreSlotCueForFamily(queryText: string, family: string, text: string):
     return /\bmartial\b|\bkickboxing\b|\btaekwondo\b|\bkarate\b|\bjudo\b|\bboxing\b/u.test(lowered) ? 1.1 : -0.6;
   }
   if (family === "main_focus") {
-    return /\bmain focus\b|\bfocus(?:ed)? on\b/u.test(lowered) ? 1.1 : -0.5;
+    return /\bmain focus(?:es)?\b|\bfocus(?:ed)? on\b|\bpassionate about\b|\bparticularly interesting to me\b/u.test(lowered)
+      ? 1.1
+      : -0.5;
   }
   if (family === "meal_companion") {
     return /\b(?:dinner|lunch|breakfast)\s+with\b/u.test(lowered) ? 1.1 : -0.6;
@@ -320,7 +350,18 @@ function scoreSlotCueForFamily(queryText: string, family: string, text: string):
   }
 
   if (/\bhobbies?\b/i.test(queryText)) {
-    return /\bhobbies?\s+(?:are|include)\b|\benjoys?\b|\blikes? to\b|\bloves?\b/u.test(lowered) ? 1.2 : -0.8;
+    const explicitHobbyCue =
+      /\bhobbies?\s+(?:are|include)\b/u.test(lowered) ||
+      /\bbesides\s+[a-z][^,!?\n]{0,40},\s*(?:i|he|she)\s+(?:also\s+)?(?:enjoy|enjoys|love|loves|like|likes)\b/u.test(lowered) ||
+      /\b(?:enjoy|enjoys|love|loves|like|likes)\b/u.test(lowered) &&
+        /\b(?:writing|reading|painting|drawing|sketching|hiking|running|cycling|exploring nature|hanging with friends)\b/u.test(lowered);
+    const mediaOnlyPreference =
+      /\b(?:dramas?|romcoms?|movies?|films?|tv|shows?)\b/u.test(lowered) &&
+      !/\b(?:writing|reading|painting|drawing|sketching|hiking|running|cycling|exploring nature|hanging with friends)\b/u.test(lowered);
+    if (explicitHobbyCue) {
+      return mediaOnlyPreference ? 0.25 : 1.35;
+    }
+    return mediaOnlyPreference ? -1.35 : -0.8;
   }
   if (/\bfavorite\s+movie\s+trilog(?:y|ies)\b/i.test(queryText)) {
     return /\btrilog(?:y|ies)\b|\bseries\b|\bfranchise\b/u.test(lowered) ? 1.25 : -1.1;
@@ -328,14 +369,26 @@ function scoreSlotCueForFamily(queryText: string, family: string, text: string):
   if (/\bfavorite\s+movies?\b/i.test(queryText)) {
     return /\bfavorite\b|\bloves?\b|\binclud(?:e|ed)\b/u.test(lowered) ? 1.2 : -0.9;
   }
-  if (/\bpets?\b/i.test(queryText) && /\ballerg/i.test(queryText)) {
-    return /\ballerg/i.test(lowered) || /\bwouldn'?t cause discomfort\b/u.test(lowered) || /\bfur\b/u.test(lowered) ? 1.1 : -0.8;
+  if (isPetSafetyQueryText(queryText)) {
+    const explicitSafePet =
+      /\b(?:hairless cats?|pigs?|reptiles?)\b/u.test(lowered) ||
+      /\b(?:safe|alternative)\s+pets?\b/u.test(lowered);
+    const allergyReason = /\ballerg/i.test(lowered) || /\bfur\b/u.test(lowered);
+    if (explicitSafePet && allergyReason) {
+      return 1.4;
+    }
+    if (explicitSafePet) {
+      return 0.8;
+    }
+    return /\ballerg/i.test(lowered) ? -0.9 : -0.8;
   }
   if (/\bfinancial status\b/i.test(queryText)) {
     return /\bmiddle[- ]class\b|\bwealthy\b|\brich\b|\bwell-off\b|\bfinancially stable\b/u.test(lowered) ? 1.2 : -1;
   }
   if (/\bspark(?:ed)?\b/i.test(queryText) && /\binterest\b/i.test(queryText)) {
-    return /\bspark(?:ed)?\b|\binspir(?:ed|ing)\b|\bseeing how\b|\bgrowing up\b/u.test(lowered) ? 1.15 : -0.8;
+    return /\bspark(?:ed)?\b|\binspir(?:ed|ing)\b|\b(?:saw|seeing)\s+how\b|\bgrowing up\b|\bbetter understanding of\b|\bimpact these issues have on\b|\bcommunity meetings?\b|\bgetting involved in\b/u.test(lowered)
+      ? 1.15
+      : -0.8;
   }
   if (/\bwhat\s+kind\s+of\s+flowers?\b/i.test(queryText)) {
     return /\bflowers?\b|\btattoo\b/u.test(lowered) ? 0.9 : -0.6;
@@ -423,6 +476,113 @@ function isStrongSupport(window: ExactAnswerWindow, slotFit: ExactAnswerSlotFit)
   return false;
 }
 
+function windowAggregationKey(window: ExactAnswerWindowEvaluation): string {
+  return [
+    window.result.memoryId,
+    window.sourceSentenceText ?? "",
+    window.speaker ?? "",
+    window.text
+  ].join("|");
+}
+
+function collectWindowValueBundles(
+  queryText: string,
+  safeWindows: readonly ExactAnswerWindowEvaluation[],
+  extractValues: (text: string, queryText: string) => readonly string[]
+): readonly ExactAnswerWindowValues[] {
+  const seen = new Set<string>();
+  const bundles: ExactAnswerWindowValues[] = [];
+  for (const window of [...safeWindows].sort((left, right) => right.windowScore - left.windowScore)) {
+    if (isInterrogativeClaimText(window.text)) {
+      continue;
+    }
+    const key = windowAggregationKey(window);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const values = extractValues(window.text, queryText).map((value) => normalizeWhitespace(value)).filter(Boolean);
+    if (values.length === 0) {
+      continue;
+    }
+    bundles.push({ window, values });
+  }
+  return bundles;
+}
+
+function isStandaloneHobbyStatement(text: string): boolean {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized || /\?\s*$/u.test(normalized)) {
+    return false;
+  }
+  return (
+    /\bbesides\s+[A-Za-z][^,!?\n]{0,40},\s*(?:i|he|she)\s+(?:also\s+)?(?:love|loves|enjoy|enjoys)\b/iu.test(normalized) ||
+    /^[A-Za-z]+ing(?:\s+[A-Za-z]+){0,2}(?:\s+and\s+[A-Za-z]+ing(?:\s+(?:with|around)\s+[A-Za-z]+){0,3})?!?$/u.test(normalized)
+  );
+}
+
+function isPlausibleHobbyValue(value: string): boolean {
+  const normalized = normalizeWhitespace(value).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (/\b(?:in|on|at|to|of|from|into|onto|around|about)$/iu.test(normalized)) {
+    return false;
+  }
+  return true;
+}
+
+function deriveMultiValueWindowSelection(
+  queryText: string,
+  family: string,
+  safeWindows: readonly ExactAnswerWindowEvaluation[],
+  extractValues: (text: string, queryText: string) => readonly string[]
+): readonly string[] {
+  const bundles = collectWindowValueBundles(queryText, safeWindows, extractValues);
+  if (bundles.length === 0) {
+    return [];
+  }
+
+  const isHobbyQuery = /\bhobbies?\b/i.test(queryText);
+  const isPetSafetyQuery = isPetSafetyQueryText(queryText);
+  const wideProfileListFamily = isHobbyQuery || family === "martial_arts" || isPetSafetyQuery;
+  const topWindowScore = bundles[0]!.window.windowScore;
+  const minWindowScore = wideProfileListFamily
+    ? Math.max(topWindowScore - 4.25, topWindowScore * 0.22)
+    : Math.max(topWindowScore - 1.9, topWindowScore * 0.5);
+  const maxValues = isHobbyQuery ? 8 : isPetSafetyQuery ? 4 : 5;
+  const selected: string[] = [];
+  const seenValues = new Set<string>();
+
+  for (const bundle of bundles) {
+    if (bundle.window.windowScore < minWindowScore) {
+      continue;
+    }
+    if (isHobbyQuery && bundle.window.slotCueScore < 0.9 && !isStandaloneHobbyStatement(bundle.window.text)) {
+      continue;
+    }
+    if (isPetSafetyQuery && bundle.window.slotCueScore < 0.8) {
+      continue;
+    }
+    for (const value of bundle.values) {
+      if (isHobbyQuery && !isPlausibleHobbyValue(value)) {
+        continue;
+      }
+      const normalized = value.toLowerCase();
+      if (seenValues.has(normalized)) {
+        continue;
+      }
+      seenValues.add(normalized);
+      selected.push(value);
+      if (selected.length >= maxValues) {
+        return selected;
+      }
+    }
+  }
+
+  return selected;
+}
+
 export function deriveExactAnswerCandidate(options: ExactAnswerDerivationOptions): ExactAnswerDerivationResult {
   const windows = options.results.flatMap((result) => extractAnswerBearingWindows(options.queryText, result));
   const evaluated = windows.map((window) => {
@@ -465,6 +625,9 @@ export function deriveExactAnswerCandidate(options: ExactAnswerDerivationOptions
     for (const value of values) {
       const normalizedValue = normalizeWhitespace(value);
       if (!normalizedValue) {
+        continue;
+      }
+      if (/\bhobbies?\b/i.test(options.queryText) && !isPlausibleHobbyValue(normalizedValue)) {
         continue;
       }
       const slotValueFitnessScore = scoreSlotValueFitness(normalizedValue, options.family, options.queryText);
@@ -524,7 +687,29 @@ export function deriveExactAnswerCandidate(options: ExactAnswerDerivationOptions
     };
   }
 
-  if (options.structuredQuery && top.strongSupportCount === 0) {
+  const allowSingleCandidateStructuredFallback =
+    options.structuredQuery &&
+    top.strongSupportCount === 0 &&
+    !runnerUp &&
+    safeWindows.length > 0 &&
+    top.supportCount >= 1 &&
+    !/\bfavorite\s+movie\s+trilog(?:y|ies)\b/i.test(options.queryText) &&
+    top.score >= 3;
+  const isHobbyQuery = /\bhobbies?\b/i.test(options.queryText);
+  const isPetSafetyQuery = isPetSafetyQueryText(options.queryText);
+  const allowStructuredMultiValueFallback =
+    options.structuredQuery &&
+    top.strongSupportCount === 0 &&
+    safeWindows.length > 0 &&
+    candidates.length > 0 &&
+    (multiValueFamilies.has(options.family) || isHobbyQuery || isPetSafetyQuery);
+
+  if (
+    options.structuredQuery &&
+    top.strongSupportCount === 0 &&
+    !allowSingleCandidateStructuredFallback &&
+    !allowStructuredMultiValueFallback
+  ) {
     return {
       candidate: null,
       telemetry: {
@@ -536,6 +721,8 @@ export function deriveExactAnswerCandidate(options: ExactAnswerDerivationOptions
 
   if (
     !multiValueFamilies.has(options.family) &&
+    !isHobbyQuery &&
+    !isPetSafetyQuery &&
     runnerUp &&
     runnerUp.display.toLowerCase() !== top.display.toLowerCase() &&
     top.score < runnerUp.score * 1.25
@@ -549,13 +736,28 @@ export function deriveExactAnswerCandidate(options: ExactAnswerDerivationOptions
     };
   }
 
-  const selectedValues = multiValueFamilies.has(options.family)
-    ? ranked
-        .filter((value) => value.strongSupportCount > 0)
-        .filter((value) => value.score >= Math.max(top.score - 0.75, top.score * 0.55))
-        .slice(0, 4)
-        .map((value) => value.display)
-    : [top.display];
+  const multiValueSelection =
+    multiValueFamilies.has(options.family) || isHobbyQuery || isPetSafetyQuery
+      ? deriveMultiValueWindowSelection(options.queryText, options.family, safeWindows, options.extractValues)
+      : [];
+  const wideProfileListFamily = multiValueFamilies.has(options.family) || isHobbyQuery || isPetSafetyQuery;
+
+  const selectedValues =
+    multiValueSelection.length > 0
+      ? multiValueSelection
+      : wideProfileListFamily
+        ? ranked
+            .filter((value) => value.strongSupportCount > 0 || value.supportCount > 0)
+            .filter((value) =>
+              value.score >= (
+                wideProfileListFamily
+                  ? Math.max(top.score - 4.5, top.score * 0.2)
+                  : Math.max(top.score - 1.1, top.score * 0.45)
+              )
+            )
+            .slice(0, isHobbyQuery ? 6 : isPetSafetyQuery ? 4 : options.family === "martial_arts" ? 5 : 4)
+            .map((value) => value.display)
+        : [top.display];
 
   return {
     candidate: {

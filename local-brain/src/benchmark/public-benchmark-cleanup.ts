@@ -15,6 +15,9 @@ export async function cleanupPublicBenchmarkNamespaces(
   namespaceIds: readonly string[],
   options?: {
     readonly namespaceChunkSize?: number;
+    readonly statementTimeoutMs?: number;
+    readonly lockTimeoutMs?: number;
+    readonly logger?: (message: string) => void;
   }
 ): Promise<void> {
   const normalizedNamespaceIds = [...new Set(namespaceIds.map((namespaceId) => namespaceId.trim()).filter(Boolean))];
@@ -26,10 +29,17 @@ export async function cleanupPublicBenchmarkNamespaces(
     normalizedNamespaceIds,
     options?.namespaceChunkSize ?? DEFAULT_NAMESPACE_CHUNK_SIZE
   );
+  const statementTimeoutMs = Math.max(1_000, Math.floor(options?.statementTimeoutMs ?? 15_000));
+  const lockTimeoutMs = Math.max(250, Math.floor(options?.lockTimeoutMs ?? 2_000));
+  const logger = options?.logger ?? (() => {});
 
   for (const namespaceChunk of namespaceChunks) {
     await withTransaction(async (client) => {
+      logger(`cleanup chunk start namespaces=${namespaceChunk.join(",")}`);
       await client.query(`SET LOCAL timescaledb.max_tuples_decompressed_per_dml_transaction = 0`);
+      await client.query(`SET LOCAL statement_timeout = ${statementTimeoutMs}`);
+      await client.query(`SET LOCAL lock_timeout = ${lockTimeoutMs}`);
+      logger(`cleanup chunk configured statementTimeoutMs=${statementTimeoutMs} lockTimeoutMs=${lockTimeoutMs}`);
       const artifactRows = await client.query<{ readonly artifact_id: string }>(
         `
           SELECT ao.artifact_id
@@ -40,6 +50,7 @@ export async function cleanupPublicBenchmarkNamespaces(
         [namespaceChunk]
       );
       const artifactIds = [...new Set(artifactRows.rows.map((row) => row.artifact_id))];
+      logger(`cleanup chunk artifactIds=${artifactIds.length}`);
       const observationRows = await client.query<{ readonly id: string }>(
         `
           SELECT ao.id
@@ -50,11 +61,13 @@ export async function cleanupPublicBenchmarkNamespaces(
         [namespaceChunk]
       );
       const observationIds = [...new Set(observationRows.rows.map((row) => row.id))];
+      logger(`cleanup chunk observationIds=${observationIds.length}`);
       const episodicRows = await client.query<{ readonly id: string }>(
         `SELECT id FROM episodic_memory WHERE namespace_id = ANY($1::text[])`,
         [namespaceChunk]
       );
       const episodicIds = [...new Set(episodicRows.rows.map((row) => row.id))];
+      logger(`cleanup chunk episodicIds=${episodicIds.length}`);
 
       await client.query(`DELETE FROM procedural_memory WHERE namespace_id = ANY($1::text[])`, [namespaceChunk]);
       await client.query(`DELETE FROM relationship_memory WHERE namespace_id = ANY($1::text[])`, [namespaceChunk]);
@@ -82,6 +95,7 @@ export async function cleanupPublicBenchmarkNamespaces(
         await client.query(`DELETE FROM artifact_observations WHERE artifact_id = ANY($1::uuid[])`, [artifactIds]);
         await client.query(`DELETE FROM artifacts WHERE id = ANY($1::uuid[])`, [artifactIds]);
       }
+      logger(`cleanup chunk complete namespaces=${namespaceChunk.join(",")}`);
     });
   }
 }

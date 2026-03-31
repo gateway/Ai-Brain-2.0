@@ -290,6 +290,7 @@ export interface RecapQuery {
   readonly timeEnd?: string;
   readonly referenceNow?: string;
   readonly limit?: number;
+  readonly decompositionDepth?: number;
   readonly participants?: readonly string[];
   readonly topics?: readonly string[];
   readonly projects?: readonly string[];
@@ -397,17 +398,23 @@ export interface RelationshipQuery {
   readonly predicate?: string;
   readonly timeStart?: string;
   readonly timeEnd?: string;
+  readonly includeHistorical?: boolean;
   readonly limit?: number;
 }
 
 export interface RelationshipResult {
   readonly relationshipId: string;
+  readonly subjectEntityId?: string | null;
+  readonly objectEntityId?: string | null;
   readonly subjectName: string;
   readonly predicate: string;
   readonly objectName: string;
+  readonly status?: string | null;
   readonly confidence?: number;
   readonly sourceMemoryId?: string | null;
   readonly occurredAt?: string | null;
+  readonly validFrom?: string | null;
+  readonly validUntil?: string | null;
   readonly namespaceId: NamespaceId;
   readonly provenance: Record<string, unknown>;
 }

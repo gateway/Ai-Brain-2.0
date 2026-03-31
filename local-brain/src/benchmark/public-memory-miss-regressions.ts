@@ -21,6 +21,7 @@ interface TurnRecord {
   readonly speaker: string;
   readonly text?: string;
   readonly blip_caption?: string;
+  readonly query?: string;
 }
 
 interface LocomoConversation {
@@ -142,6 +143,12 @@ function formatConversationSession(sample: LocomoConversation, sessionKey: strin
   for (const turn of turns) {
     const caption = typeof turn.blip_caption === "string" && turn.blip_caption.trim().length > 0 ? ` [image: ${turn.blip_caption.trim()}]` : "";
     lines.push(`${turn.speaker}: ${(turn.text ?? "").trim()}${caption}`);
+    if (typeof turn.query === "string" && turn.query.trim().length > 0) {
+      lines.push(`--- image_query: ${turn.query.trim()}`);
+    }
+    if (typeof turn.blip_caption === "string" && turn.blip_caption.trim().length > 0) {
+      lines.push(`--- image_caption: ${turn.blip_caption.trim()}`);
+    }
   }
   return lines.join("\n");
 }
