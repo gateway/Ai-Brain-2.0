@@ -150,3 +150,17 @@ AI Brain should handle:
 
 That keeps startup context small and avoids reading large daily/weekly markdown
 trees just to answer questions about yesterday or last weekend.
+
+## Current Product Test Loop
+
+The current synthetic continuity benchmark for this startup contract is:
+
+- `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/src/benchmark/personal-openclaw-review.ts`
+
+It runs against the shadow namespace:
+
+- `personal_continuity_shadow`
+
+And the checked-in OpenClaw-style fixture corpus:
+
+- `/Users/evilone/Documents/Development/AI-Brain/ai-brain/local-brain/benchmark-generated/personal-openclaw-fixtures`

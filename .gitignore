@@ -24,6 +24,7 @@
 /local-brain/eval-results/
 /local-brain/benchmark-results/
 /local-brain/benchmark-generated/
+/local-brain/benchmark-jobs/
 /local-brain/benchmark-results/lexical-benchmark-*.json
 /local-brain/benchmark-results/lexical-benchmark-*.md
 /local-brain/benchmark-results/life-replay-*.json
