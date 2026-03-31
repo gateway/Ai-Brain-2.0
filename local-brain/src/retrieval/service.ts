@@ -3,6 +3,7 @@ import { readConfig } from "../config.js";
 import { queryRows, withTransaction } from "../db/client.js";
 import { canonicalizeObservedEntityText, normalizeEntityLookupName } from "../identity/canonicalization.js";
 import { getNamespaceSelfProfile, resolveCanonicalEntityReference } from "../identity/service.js";
+import type { ResolvedEntityReference } from "../identity/service.js";
 import { linkDerivedProfileSnapshot, recordCoRetrievalEdges } from "../jobs/memory-graph.js";
 import { resolveEmbeddingRuntimeSelection } from "../providers/embedding-config.js";
 import { getProviderAdapter } from "../providers/registry.js";
@@ -171,7 +172,7 @@ interface EntityAliasEvidenceRow {
 }
 
 function extractCanonicalAliasQuestionSubject(queryText: string): string | null {
-  const match = queryText.match(/^\s*what\s+is\s+(.+?)\s*\??\s*$/i);
+  const match = queryText.match(/^\s*(?:what|who)\s+is\s+(.+?)\s*\??\s*$/i);
   if (!match) {
     return null;
   }
@@ -1111,6 +1112,119 @@ function rankRelationshipLaneByPreferredPredicates(
     });
 }
 
+function isProfileIdentityPredicate(predicate: string): boolean {
+  return [
+    "friend_of",
+    "best_friends_with",
+    "significant_other_of",
+    "former_partner_of",
+    "was_with",
+    "works_with",
+    "owner_of",
+    "member_of"
+  ].includes(predicate);
+}
+
+function isProfileAssociationPredicate(predicate: string): boolean {
+  return [
+    "associated_with",
+    "resides_at",
+    "lives_in",
+    "currently_in",
+    "from",
+    "originates_from",
+    "works_at",
+    "worked_at",
+    "works_on",
+    "project_role"
+  ].includes(predicate);
+}
+
+function reduceProfileRelationshipFacts(
+  focusEntityName: string,
+  relationships: readonly RelationshipResult[]
+): readonly RelationshipResult[] {
+  if (relationships.length <= 2) {
+    return relationships;
+  }
+
+  const ranked = [...relationships];
+  const selected: RelationshipResult[] = [];
+  const seenKeys = new Set<string>();
+  const pushIfFresh = (result: RelationshipResult | undefined) => {
+    if (!result) {
+      return;
+    }
+    const key = `${result.predicate}|${normalizeWhitespace(relationshipCounterpartyName(result, focusEntityName)).toLowerCase()}`;
+    if (seenKeys.has(key)) {
+      return;
+    }
+    seenKeys.add(key);
+    selected.push(result);
+  };
+
+  pushIfFresh(ranked.find((result) => isProfileIdentityPredicate(result.predicate)));
+  pushIfFresh(ranked.find((result) => isProfileAssociationPredicate(result.predicate)));
+  pushIfFresh(
+    ranked.find(
+      (result) =>
+        isProfileAssociationPredicate(result.predicate) &&
+        normalizeWhitespace(relationshipCounterpartyName(result, focusEntityName)).toLowerCase() !==
+          normalizeWhitespace(relationshipCounterpartyName(selected[1] ?? selected[0] ?? result, focusEntityName)).toLowerCase()
+    )
+  );
+
+  for (const result of ranked) {
+    if (selected.length >= 6) {
+      break;
+    }
+    if (result.predicate === "met_through" && selected.some((item) => isProfileAssociationPredicate(item.predicate))) {
+      continue;
+    }
+    pushIfFresh(result);
+  }
+
+  return selected.length > 0 ? selected : relationships;
+}
+
+function ensureProfileRelationshipCoverage(
+  focusEntityName: string,
+  selectedRelationships: readonly RelationshipResult[],
+  allRelationships: readonly RelationshipResult[]
+): readonly RelationshipResult[] {
+  if (allRelationships.length === 0) {
+    return selectedRelationships;
+  }
+
+  const merged: RelationshipResult[] = [...selectedRelationships];
+  const seen = new Set(
+    merged.map(
+      (result) =>
+        `${result.predicate}|${normalizeWhitespace(relationshipCounterpartyName(result, focusEntityName)).toLowerCase()}`
+    )
+  );
+  const pushIfMissing = (result: RelationshipResult | undefined) => {
+    if (!result) {
+      return;
+    }
+    const key = `${result.predicate}|${normalizeWhitespace(relationshipCounterpartyName(result, focusEntityName)).toLowerCase()}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    merged.push(result);
+  };
+
+  if (!merged.some((result) => isProfileIdentityPredicate(result.predicate))) {
+    pushIfMissing(allRelationships.find((result) => isProfileIdentityPredicate(result.predicate)));
+  }
+  if (!merged.some((result) => isProfileAssociationPredicate(result.predicate))) {
+    pushIfMissing(allRelationships.find((result) => isProfileAssociationPredicate(result.predicate)));
+  }
+
+  return reduceProfileRelationshipFacts(focusEntityName, merged);
+}
+
 function relationshipCounterpartyName(result: RelationshipResult, focusEntityName: string): string {
   const focus = normalizeWhitespace(focusEntityName).toLowerCase();
   const subject = normalizeWhitespace(result.subjectName).toLowerCase();
@@ -1413,7 +1527,9 @@ function deriveRelationshipLaneClaimText(
   }
 
   const mode = inferRelationshipLaneMode(queryText);
-  const ordered = filterRelationshipLaneResults(mode, relationships);
+  const ordered = isRelationshipProfileQueryText(queryText)
+    ? reduceProfileRelationshipFacts(focusEntityName, relationships)
+    : filterRelationshipLaneResults(mode, relationships);
   const counterpartyNamesForPredicates = (...predicates: string[]): readonly string[] =>
     uniqueStrings(
       ordered
@@ -1481,6 +1597,23 @@ function deriveRelationshipLaneClaimText(
     const clause = relationshipWindowClause(strongest, focusEntityName, mode);
     const dateLabel = formatRelationshipDateLabel(strongest.validUntil ?? strongest.validFrom ?? strongest.occurredAt);
     return dateLabel ? `${clause}. The grounded change point is ${dateLabel}.` : `${clause}.`;
+  }
+
+  if (isRelationshipProfileQueryText(queryText)) {
+    const identityClauses = uniqueStrings(
+      ordered
+        .filter((result) => isProfileIdentityPredicate(result.predicate))
+        .map((result) => relationshipClauseFromResult(result, focusEntityName))
+    );
+    const associationClauses = uniqueStrings(
+      ordered
+        .filter((result) => isProfileAssociationPredicate(result.predicate))
+        .map((result) => relationshipClauseFromResult(result, focusEntityName))
+    );
+    const profileClauses = [...identityClauses.slice(0, 1), ...associationClauses.slice(0, 2)];
+    if (profileClauses.length > 0) {
+      return `${focusEntityName}'s grounded profile is that ${joinExactDetailValues(profileClauses)}.`;
+    }
   }
 
   return `${focusEntityName}'s grounded profile is that ${joinExactDetailValues(uniqueClauses.slice(0, 3))}.`;
@@ -1691,7 +1824,8 @@ function buildCompanionExclusionRelationshipSearchResponse(
 
 function selectRelationshipLaneResults(
   queryText: string,
-  relationships: readonly RelationshipResult[]
+  relationships: readonly RelationshipResult[],
+  focusEntityName?: string
 ): readonly RelationshipResult[] {
   const laneMode = inferRelationshipLaneMode(queryText);
   const filtered = filterRelationshipLaneResults(laneMode, relationships);
@@ -1701,9 +1835,15 @@ function selectRelationshipLaneResults(
     if (preferred.length === 0) {
       return [];
     }
-    return rankRelationshipLaneByPreferredPredicates(queryText, preferred);
+    const ranked = rankRelationshipLaneByPreferredPredicates(queryText, preferred);
+    return isRelationshipProfileQueryText(queryText) && focusEntityName
+      ? reduceProfileRelationshipFacts(focusEntityName, ranked)
+      : ranked;
   }
-  return rankRelationshipLaneByPreferredPredicates(queryText, filtered);
+  const ranked = rankRelationshipLaneByPreferredPredicates(queryText, filtered);
+  return isRelationshipProfileQueryText(queryText) && focusEntityName
+    ? reduceProfileRelationshipFacts(focusEntityName, ranked)
+    : ranked;
 }
 
 async function loadWarmStartProtocolRows(namespaceId: string, candidateLimit: number): Promise<SearchRow[]> {
@@ -4006,6 +4146,14 @@ function deriveMovieMentionClaimText(queryText: string, results: readonly Recall
   for (const result of candidates) {
     const sourceUri = typeof result.provenance.source_uri === "string" ? result.provenance.source_uri : null;
     const sourceReferenceInstant = readSourceReferenceInstant(sourceUri) ?? result.occurredAt ?? null;
+    const provenanceMetadata =
+      typeof result.provenance.metadata === "object" && result.provenance.metadata !== null
+        ? (result.provenance.metadata as Record<string, unknown>)
+        : null;
+    const coarseTemporalAnchor =
+      typeof provenanceMetadata?.time_granularity === "string" &&
+      ["year", "month"].includes(provenanceMetadata.time_granularity);
+    const relativeAnchorInstant = coarseTemporalAnchor && sourceReferenceInstant ? sourceReferenceInstant : result.occurredAt;
     const contentCandidates = [
       result.content,
       ...(sourceUri && isTrustedPersonalSourceUri(sourceUri) && existsSync(sourceUri)
@@ -4030,7 +4178,7 @@ function deriveMovieMentionClaimText(queryText: string, results: readonly Recall
         continue;
       }
 
-      const absoluteDate = inferRelativeTemporalAnswerLabel(content, result.occurredAt, sourceReferenceInstant);
+      const absoluteDate = inferRelativeTemporalAnswerLabel(content, relativeAnchorInstant, sourceReferenceInstant);
       const relativePhrase =
         content.match(/\b(one|two|three|four|\d+)\s+weeks?\s+ago\b/iu)?.[0] ??
         content.match(/\byesterday\b/iu)?.[0] ??
@@ -10729,6 +10877,7 @@ function assessRecallAnswer(
   const subjectBinding = assessSubjectBinding(results, queryText);
   const derivedMovieMentionClaim = deriveMovieMentionClaimText(queryText, results);
   const derivedProjectIdeaClaim = deriveProjectIdeaClaimText(queryText, results);
+  const derivedRelationshipChangeClaim = deriveRelationshipChangeClaimText(queryText, results);
   const derivedRelationshipHistoryClaim = deriveRelationshipHistoryClaimText(queryText, results);
   const derivedRelationshipProfileClaim = deriveRelationshipProfileClaimText(queryText, results);
   const derivedCurrentProjectClaim = deriveCurrentProjectClaimText(queryText, results);
@@ -11234,6 +11383,19 @@ function assessRecallAnswer(
       confidence: "confident",
       reason:
         "The relationship-history answer is grounded in direct Lauren-linked history evidence and preserves the Tahoe/Bend timeline deterministically.",
+      lexicalCoverage: coverage.lexicalCoverage,
+      matchedTerms: coverage.matchedTerms,
+      totalTerms: coverage.totalTerms,
+      evidenceCount: evidence.length,
+      directEvidence
+    });
+  }
+
+  if (isRelationshipChangeQueryText(queryText) && directEvidence && derivedRelationshipChangeClaim && evidence.length >= 2) {
+    return annotateAssessment({
+      confidence: "confident",
+      reason:
+        "The relationship-change answer is grounded in direct Lauren-linked transition evidence and preserves the change point deterministically.",
       lexicalCoverage: coverage.lexicalCoverage,
       matchedTerms: coverage.matchedTerms,
       totalTerms: coverage.totalTerms,
@@ -20430,7 +20592,13 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
       timeEnd: query.timeEnd,
       limit: Math.max(limit * 4, 64)
     });
-    const laneRelationships = selectRelationshipLaneResults(query.query, relationshipResponse.relationships);
+    const laneRelationships = isRelationshipProfileQueryText(query.query)
+      ? ensureProfileRelationshipCoverage(
+          directRelationshipEntity,
+          selectRelationshipLaneResults(query.query, relationshipResponse.relationships, directRelationshipEntity),
+          relationshipResponse.relationships
+        )
+      : selectRelationshipLaneResults(query.query, relationshipResponse.relationships, directRelationshipEntity);
     if (laneRelationships.length > 0) {
       return buildRelationshipLaneSearchResponse(
         query,
@@ -21367,7 +21535,7 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
               coalesce(is_user_verified, false) desc,
               alias_type asc nulls last,
               created_at asc
-            limit 4
+            limit 8
           `,
           [resolvedCanonicalEntity.entityId, normalizedSubject]
         );
@@ -21375,6 +21543,18 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
           aliasRows.find((row) => normalizeEntityLookupName(row.alias) === normalizedSubject) ??
           aliasRows[0] ??
           null;
+        const supportingAliases = aliasRows
+          .map((row) => normalizeWhitespace(row.alias))
+          .filter((alias) => {
+            const normalizedAlias = normalizeEntityLookupName(alias);
+            return (
+              Boolean(normalizedAlias) &&
+              normalizedAlias !== normalizedSubject &&
+              normalizedAlias !== normalizedCanonicalName
+            );
+          })
+          .filter((alias, index, all) => all.findIndex((candidate) => candidate.toLowerCase() === alias.toLowerCase()) === index)
+          .slice(0, 2);
         const aliasMetadata =
           typeof matchedAliasRow?.metadata === "object" && matchedAliasRow.metadata !== null
             ? matchedAliasRow.metadata
@@ -21421,7 +21601,9 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
             : typeof aliasMetadata?.created_at === "string"
               ? aliasMetadata.created_at
               : aliasEvidenceRow?.occurred_at ?? null;
-        const aliasClaim = `${canonicalAliasQuestionSubject} refers to ${resolvedCanonicalEntity.canonicalName}.`;
+        const aliasClaim = supportingAliases.length > 0
+          ? `${canonicalAliasQuestionSubject} refers to ${resolvedCanonicalEntity.canonicalName}, also known as ${supportingAliases.join(" and ")}.`
+          : `${canonicalAliasQuestionSubject} refers to ${resolvedCanonicalEntity.canonicalName}.`;
         const aliasResult: RecallResult = {
           memoryId: aliasMemoryId,
           memoryType: "semantic_memory",
@@ -24380,6 +24562,7 @@ export async function getRelationships(query: RelationshipQuery): Promise<Relati
   const normalizedEntityName = query.entityName.trim().toLowerCase();
   const resolvedEntity = await resolveCanonicalEntityReference(query.namespaceId, query.entityName);
   const includeHistorical = query.includeHistorical ?? Boolean(query.timeStart || query.timeEnd);
+  const rawLimit = Math.max(limit * 4, 24);
   const rows = await queryRows<RelationshipRow>(
     `
       WITH matched_entities AS (
@@ -24515,7 +24698,7 @@ export async function getRelationships(query: RelationshipQuery): Promise<Relati
         relationships.occurred_at DESC NULLS LAST
       LIMIT $6
     `,
-    [query.namespaceId, normalizedEntityName, query.predicate ?? null, query.timeStart ?? null, query.timeEnd ?? null, limit, resolvedEntity?.entityId ?? null, includeHistorical]
+    [query.namespaceId, normalizedEntityName, query.predicate ?? null, query.timeStart ?? null, query.timeEnd ?? null, rawLimit, resolvedEntity?.entityId ?? null, includeHistorical]
   );
 
   if (rows.length === 0) {
@@ -24559,7 +24742,7 @@ export async function getRelationships(query: RelationshipQuery): Promise<Relati
         );
       if (aliasRelationships.length > 0) {
         return {
-          relationships: aliasRelationships.slice(0, limit)
+          relationships: rankRelationshipResultsForQuery(aliasRelationships, query, resolvedEntity).slice(0, limit)
         };
       }
     }
@@ -24588,34 +24771,155 @@ export async function getRelationships(query: RelationshipQuery): Promise<Relati
       `,
       [query.namespaceId, normalizedEntityName, query.timeStart ?? null, query.timeEnd ?? null, Math.max(limit * 3, 12)]
     );
-    const fallback = dedupeRelationshipResults(buildFallbackRelationships(query, fallbackRows)).slice(0, limit);
+    const fallback = rankRelationshipResultsForQuery(
+      filterRelationshipNoise(dedupeRelationshipResults(buildFallbackRelationships(query, fallbackRows))),
+      query,
+      resolvedEntity
+    ).slice(0, limit);
     if (fallback.length > 0) {
       return { relationships: fallback };
     }
   }
 
   return {
-    relationships: dedupeRelationshipResults(
-      rows.map<RelationshipResult>((row) =>
-        sanitizeRelationshipResult({
-          relationshipId: row.relationship_id,
-          subjectEntityId: row.subject_entity_id,
-          subjectName: row.subject_name,
-          predicate: row.predicate,
-          objectEntityId: row.object_entity_id,
-          objectName: row.object_name,
-          status: row.status,
-          confidence: toNumber(row.confidence),
-          sourceMemoryId: row.source_memory_id,
-          occurredAt: toIsoString(row.occurred_at),
-          validFrom: toIsoString(row.valid_from),
-          validUntil: toIsoString(row.valid_until),
-          namespaceId: row.namespace_id,
-          provenance: row.provenance
-        })
-      )
+    relationships: rankRelationshipResultsForQuery(
+      filterRelationshipNoise(dedupeRelationshipResults(
+        rows.map<RelationshipResult>((row) =>
+          sanitizeRelationshipResult({
+            relationshipId: row.relationship_id,
+            subjectEntityId: row.subject_entity_id,
+            subjectName: row.subject_name,
+            predicate: row.predicate,
+            objectEntityId: row.object_entity_id,
+            objectName: row.object_name,
+            status: row.status,
+            confidence: toNumber(row.confidence),
+            sourceMemoryId: row.source_memory_id,
+            occurredAt: toIsoString(row.occurred_at),
+            validFrom: toIsoString(row.valid_from),
+            validUntil: toIsoString(row.valid_until),
+            namespaceId: row.namespace_id,
+            provenance: row.provenance
+          })
+        )
+      )),
+      query,
+      resolvedEntity
     ).slice(0, limit)
   };
+}
+
+function filterRelationshipNoise(results: readonly RelationshipResult[]): readonly RelationshipResult[] {
+  return results.filter((result) => !isSelfReferentialRelationshipNoise(result));
+}
+
+function isSelfReferentialRelationshipNoise(result: RelationshipResult): boolean {
+  const subject = normalizeWhitespace(result.subjectName).toLowerCase();
+  const object = normalizeWhitespace(result.objectName).toLowerCase();
+  if (!subject || !object || subject !== object) {
+    return false;
+  }
+
+  return [
+    "friend_of",
+    "friends_with",
+    "best_friends_with",
+    "significant_other_of",
+    "former_partner_of",
+    "met_through",
+    "works_with",
+    "was_with"
+  ].includes(result.predicate);
+}
+
+function rankRelationshipResultsForQuery(
+  results: readonly RelationshipResult[],
+  query: RelationshipQuery,
+  resolvedEntity: ResolvedEntityReference | null
+): readonly RelationshipResult[] {
+  if (results.length <= 1) {
+    return results;
+  }
+
+  const broadPersonProfile =
+    !query.predicate &&
+    !query.timeStart &&
+    !query.timeEnd &&
+    (resolvedEntity?.entityType === "person" || resolvedEntity?.entityType === "self" || resolvedEntity === null);
+
+  if (!broadPersonProfile) {
+    return results;
+  }
+
+  return [...results].sort((left, right) => {
+    const rankDelta = relationshipPredicatePriority(right.predicate, query.includeHistorical ?? false) -
+      relationshipPredicatePriority(left.predicate, query.includeHistorical ?? false);
+    if (rankDelta !== 0) {
+      return rankDelta;
+    }
+
+    const tierDelta = relationshipTierRank(right.provenance?.tier) - relationshipTierRank(left.provenance?.tier);
+    if (tierDelta !== 0) {
+      return tierDelta;
+    }
+
+    const confidenceDelta = (right.confidence ?? 0) - (left.confidence ?? 0);
+    if (confidenceDelta !== 0) {
+      return confidenceDelta;
+    }
+
+    const validityDelta = (Boolean(right.validUntil) ? 1 : 0) - (Boolean(left.validUntil) ? 1 : 0);
+    if (validityDelta !== 0) {
+      return validityDelta;
+    }
+
+    const timeDelta = (right.occurredAt ? Date.parse(right.occurredAt) : 0) - (left.occurredAt ? Date.parse(left.occurredAt) : 0);
+    if (timeDelta !== 0) {
+      return timeDelta;
+    }
+
+    return (right.objectName?.length ?? 0) - (left.objectName?.length ?? 0);
+  });
+}
+
+function relationshipPredicatePriority(predicate: string, includeHistorical: boolean): number {
+  switch (predicate) {
+    case "former_partner_of":
+      return includeHistorical ? 140 : 120;
+    case "significant_other_of":
+      return 118;
+    case "friend_of":
+    case "best_friends_with":
+      return 114;
+    case "was_with":
+    case "relationship_ended":
+    case "relationship_reconnected":
+      return 110;
+    case "works_with":
+      return 104;
+    case "owner_of":
+      return 102;
+    case "associated_with":
+    case "member_of":
+    case "project_role":
+    case "works_on":
+      return 100;
+    case "met_through":
+      return 86;
+    case "works_at":
+    case "worked_at":
+      return 80;
+    case "resides_at":
+    case "lives_in":
+    case "currently_in":
+    case "lived_in":
+    case "born_in":
+    case "from":
+    case "originates_from":
+      return 68;
+    default:
+      return 60;
+  }
 }
 
 function sanitizeRelationshipResult(result: RelationshipResult): RelationshipResult {

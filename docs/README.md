@@ -7,9 +7,10 @@ This folder is the public documentation surface for AI Brain 2.0.
 If you are resuming active engineering work, start with the current phase state before reading older roadmap or benchmark docs:
 
 1. [PHASE_WRAP_HARDENING_PLAN_2026-03-31.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PHASE_WRAP_HARDENING_PLAN_2026-03-31.md)
-2. [LOCOMO_REMEDIATION_LOOP_2026-03-29.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_REMEDIATION_LOOP_2026-03-29.md)
-3. [LOCOMO_FIRST_PASS_AUDIT_2026-03-29.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_FIRST_PASS_AUDIT_2026-03-29.md)
-4. [PRODUCTION_CONFIDENCE_98.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PRODUCTION_CONFIDENCE_98.md)
+2. [PROTECTED_LANE_RECOVERY_2026-03-31.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PROTECTED_LANE_RECOVERY_2026-03-31.md)
+3. [LOCOMO_REMEDIATION_LOOP_2026-03-29.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_REMEDIATION_LOOP_2026-03-29.md)
+4. [LOCOMO_FIRST_PASS_AUDIT_2026-03-29.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_FIRST_PASS_AUDIT_2026-03-29.md)
+5. [PRODUCTION_CONFIDENCE_98.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PRODUCTION_CONFIDENCE_98.md)
 
 If you are new to the project, start here:
 
@@ -49,6 +50,7 @@ If you are new to the project, start here:
 ## Current Phase Docs
 
 - [PHASE_WRAP_HARDENING_PLAN_2026-03-31.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PHASE_WRAP_HARDENING_PLAN_2026-03-31.md)
+- [PROTECTED_LANE_RECOVERY_2026-03-31.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PROTECTED_LANE_RECOVERY_2026-03-31.md)
 - [LOCOMO_REMEDIATION_LOOP_2026-03-29.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_REMEDIATION_LOOP_2026-03-29.md)
 - [LOCOMO_FIRST_PASS_AUDIT_2026-03-29.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_FIRST_PASS_AUDIT_2026-03-29.md)
 - [PRODUCTION_CONFIDENCE_98.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PRODUCTION_CONFIDENCE_98.md)

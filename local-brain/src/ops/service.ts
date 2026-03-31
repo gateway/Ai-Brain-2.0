@@ -917,55 +917,32 @@ function clarificationPriority(input: {
 }
 
 export async function getOpsClarificationInbox(namespaceId: string, limit = 40): Promise<OpsClarificationInbox> {
-  const [summaryRows, itemRows] = await Promise.all([
-    queryRows<ClarificationInboxSummaryRow>(
-      `
-      SELECT ambiguity_type, COUNT(*)::text AS total
-      FROM claim_candidates
-      WHERE namespace_id = $1
-        AND ambiguity_state = 'requires_clarification'
-      GROUP BY ambiguity_type
-      `,
-      [namespaceId]
-    ),
-    queryRows<ClarificationInboxItemRow>(
-      `
-      SELECT
-        cc.id AS candidate_id,
-        cc.claim_type,
-        cc.predicate,
-        cc.subject_text,
-        cc.object_text,
-        cc.confidence,
-        cc.prior_score,
-        cc.ambiguity_type,
-        cc.ambiguity_reason,
-        cc.occurred_at::text,
-        ns.scene_text,
-        a.uri AS source_uri,
-        cc.metadata
-      FROM claim_candidates cc
-      LEFT JOIN narrative_scenes ns ON ns.id = cc.source_scene_id
-      LEFT JOIN artifacts a ON a.id = ns.artifact_id
-      WHERE cc.namespace_id = $1
-        AND cc.ambiguity_state = 'requires_clarification'
-      ORDER BY cc.prior_score DESC, cc.occurred_at DESC, cc.created_at DESC
-      LIMIT $2
-      `,
-      [namespaceId, limit]
-    )
-  ]);
-
-  const byType: Record<string, number> = {};
-  for (const row of summaryRows) {
-    byType[row.ambiguity_type ?? "unknown"] = Number(row.total);
-  }
-
-  const byPriority: Record<"priority_1" | "priority_2" | "priority_3", number> = {
-    priority_1: 0,
-    priority_2: 0,
-    priority_3: 0
-  };
+  const itemRows = await queryRows<ClarificationInboxItemRow>(
+    `
+    SELECT
+      cc.id AS candidate_id,
+      cc.claim_type,
+      cc.predicate,
+      cc.subject_text,
+      cc.object_text,
+      cc.confidence,
+      cc.prior_score,
+      cc.ambiguity_type,
+      cc.ambiguity_reason,
+      cc.occurred_at::text,
+      ns.scene_text,
+      a.uri AS source_uri,
+      cc.metadata
+    FROM claim_candidates cc
+    LEFT JOIN narrative_scenes ns ON ns.id = cc.source_scene_id
+    LEFT JOIN artifacts a ON a.id = ns.artifact_id
+    WHERE cc.namespace_id = $1
+      AND cc.ambiguity_state = 'requires_clarification'
+    ORDER BY cc.prior_score DESC, cc.occurred_at DESC, cc.created_at DESC
+    LIMIT $2
+    `,
+    [namespaceId, limit]
+  );
 
   const items = itemRows.map((row) => {
     const priority = clarificationPriority({
@@ -974,54 +951,91 @@ export async function getOpsClarificationInbox(namespaceId: string, limit = 40):
       confidence: row.confidence,
       occurredAt: row.occurred_at
     });
-    byPriority[`priority_${priority.level}`] += 1;
 
-      const targetRole: "subject" | "object" =
-        typeof row.metadata.ambiguity_target_role === "string" && (row.metadata.ambiguity_target_role === "subject" || row.metadata.ambiguity_target_role === "object")
-          ? row.metadata.ambiguity_target_role
-          : row.object_text
-            ? "object"
-            : "subject";
-      const rawText = typeof row.metadata.raw_ambiguous_text === "string"
-        ? row.metadata.raw_ambiguous_text
-        : targetRole === "subject"
-          ? row.subject_text ?? ""
-          : row.object_text ?? "";
+    const targetRole: "subject" | "object" =
+      typeof row.metadata.ambiguity_target_role === "string" && (row.metadata.ambiguity_target_role === "subject" || row.metadata.ambiguity_target_role === "object")
+        ? row.metadata.ambiguity_target_role
+        : row.object_text
+          ? "object"
+          : "subject";
+    const rawText = typeof row.metadata.raw_ambiguous_text === "string"
+      ? row.metadata.raw_ambiguous_text
+      : targetRole === "subject"
+        ? row.subject_text ?? ""
+        : row.object_text ?? "";
 
-      return {
-        candidateId: row.candidate_id,
-        claimType: row.claim_type,
-        predicate: row.predicate,
-        targetRole,
-        rawText,
-        confidence: row.confidence,
-        priorScore: row.prior_score,
-        ambiguityType: row.ambiguity_type,
-        ambiguityClass: classifyClarificationClass(row.ambiguity_type, targetRole, rawText, row.metadata),
-        ambiguityReason: row.ambiguity_reason,
-        suggestedMatches:
-          row.ambiguity_type === "possible_misspelling" || row.ambiguity_type === "alias_collision"
-            ? parseSuggestedMatches(row.metadata)
-            : [],
-        occurredAt: row.occurred_at,
-        sceneText: row.scene_text,
-        sourceUri: row.source_uri,
-        priorityScore: priority.score,
-        priorityLevel: priority.level,
-        priorityLabel: priority.label,
-        priorityReasons: priority.reasons
-      };
-    });
+    return {
+      candidateId: row.candidate_id,
+      claimType: row.claim_type,
+      predicate: row.predicate,
+      targetRole,
+      rawText,
+      confidence: row.confidence,
+      priorScore: row.prior_score,
+      ambiguityType: row.ambiguity_type,
+      ambiguityClass: classifyClarificationClass(row.ambiguity_type, targetRole, rawText, row.metadata),
+      ambiguityReason: row.ambiguity_reason,
+      suggestedMatches:
+        row.ambiguity_type === "possible_misspelling" || row.ambiguity_type === "alias_collision"
+          ? parseSuggestedMatches(row.metadata)
+          : [],
+      occurredAt: row.occurred_at,
+      sceneText: row.scene_text,
+      sourceUri: row.source_uri,
+      priorityScore: priority.score,
+      priorityLevel: priority.level,
+      priorityLabel: priority.label,
+      priorityReasons: priority.reasons
+    };
+  });
+
+  const filteredItems = (
+    await Promise.all(
+      items.map(async (item) => {
+        if (!shouldSuppressClarificationItem(item)) {
+          return item;
+        }
+        const resolved = await resolveCanonicalEntityReference(namespaceId, item.rawText, {
+          entityTypes: ["person", "place", "project", "concept", "unknown"]
+        });
+        return resolved ? null : item;
+      })
+    )
+  ).filter((item): item is (typeof items)[number] => item !== null);
+
+  const byType: Record<string, number> = {};
+  const byPriority: Record<"priority_1" | "priority_2" | "priority_3", number> = {
+    priority_1: 0,
+    priority_2: 0,
+    priority_3: 0
+  };
+  for (const item of filteredItems) {
+    byType[item.ambiguityType ?? "unknown"] = (byType[item.ambiguityType ?? "unknown"] ?? 0) + 1;
+    byPriority[`priority_${item.priorityLevel}`] += 1;
+  }
 
   return {
     namespaceId,
     summary: {
-      total: Object.values(byType).reduce((sum, value) => sum + value, 0),
+      total: filteredItems.length,
       byType,
       byPriority
     },
-    items
+    items: filteredItems
   };
+}
+
+function shouldSuppressClarificationItem(item: OpsClarificationInbox["items"][number]): boolean {
+  const raw = item.rawText.trim().toLowerCase().replace(/^the\s+/u, "");
+  if (!raw) {
+    return false;
+  }
+
+  if (item.ambiguityType === "kinship_resolution") {
+    return ["uncle", "aunt", "mom", "mother", "dad", "father", "brother", "sister", "cousin"].includes(raw);
+  }
+
+  return false;
 }
 
 export async function getOpsIdentityConflicts(namespaceId: string, limit = 20): Promise<readonly OpsIdentityConflict[]> {

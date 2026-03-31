@@ -24,6 +24,7 @@ Current checkpoint docs:
 
 - [LoCoMo remediation checkpoint](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_REMEDIATION_LOOP_2026-03-29.md)
 - [Phase wrap and hardening plan](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PHASE_WRAP_HARDENING_PLAN_2026-03-31.md)
+- [Protected lane recovery checkpoint](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PROTECTED_LANE_RECOVERY_2026-03-31.md)
 - [Docs index](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/README.md)
 
 This matters because the repo is not a clean single-feature branch anymore. It currently contains coordinated changes across:

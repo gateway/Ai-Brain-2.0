@@ -1,8 +1,22 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { closePool } from "../db/client.js";
+import { closePool, withMaintenanceLock } from "../db/client.js";
+import { runMigrations } from "../db/migrations.js";
+import { upsertNamespaceSelfProfile } from "../identity/service.js";
+import { runCandidateConsolidation } from "../jobs/consolidation.js";
+import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
+import { runTemporalNodeArchival, runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
 import { executeMcpTool } from "../mcp/server.js";
+import { executeProvenanceAuditWorker } from "../ops/runtime-worker-service.js";
+import {
+  createMonitoredSource,
+  deleteMonitoredSource,
+  importMonitoredSource,
+  listMonitoredSources,
+  scanMonitoredSource
+} from "../ops/source-service.js";
+import { rebuildTypedMemoryNamespace } from "../typed-memory/service.js";
 import type { ProductionFailureCategory } from "./production-confidence-shared.js";
 import { countFailureCategories } from "./production-confidence-shared.js";
 
@@ -66,6 +80,10 @@ function outputDir(): string {
   return path.resolve(rootDir(), "benchmark-results");
 }
 
+function continuityFixtureRoot(): string {
+  return path.resolve(rootDir(), "benchmark-generated", "personal-openclaw-fixtures");
+}
+
 function jsonString(value: unknown): string {
   return JSON.stringify(value ?? null).toLowerCase();
 }
@@ -120,6 +138,57 @@ function confidenceRank(value: string | null): number {
     default:
       return 0;
   }
+}
+
+async function ensureContinuityShadowSource(namespaceId: string) {
+  const existing = (await listMonitoredSources(100)).filter((source) => source.namespaceId === namespaceId);
+  for (const source of existing) {
+    await deleteMonitoredSource(source.id);
+  }
+  return createMonitoredSource({
+    sourceType: "openclaw",
+    namespaceId,
+    label: "Personal OpenClaw Continuity Shadow",
+    rootPath: continuityFixtureRoot(),
+    includeSubfolders: true,
+    monitorEnabled: true,
+    scanSchedule: "every_30_minutes",
+    notes: "Synthetic OpenClaw-style markdown corpus for production smoke continuity benchmarking.",
+    metadata: {
+      source_intent: "continuity_shadow_smoke",
+      producer: "mcp_production_smoke_benchmark",
+      fixture_family: "openclaw_markdown"
+    }
+  });
+}
+
+async function rebuildContinuityShadowNamespace(namespaceId: string): Promise<void> {
+  await runCandidateConsolidation(namespaceId, 800);
+  await runRelationshipAdjudication(namespaceId, {
+    limit: 800,
+    acceptThreshold: 0.58,
+    rejectThreshold: 0.38
+  });
+  for (const layer of ["day", "week", "month", "year"] as const) {
+    await runTemporalSummaryScaffold(namespaceId, { layer, lookbackDays: 60 });
+  }
+  await runTemporalNodeArchival(namespaceId);
+  await executeProvenanceAuditWorker();
+  await rebuildTypedMemoryNamespace(namespaceId);
+}
+
+async function primeContinuityShadowNamespace(namespaceId = "personal_continuity_shadow"): Promise<void> {
+  await runMigrations();
+  await upsertNamespaceSelfProfile({
+    namespaceId,
+    canonicalName: "Steve Tietze",
+    aliases: ["Steve"],
+    note: "Shadow self anchor for production-smoke continuity benchmarking."
+  });
+  const source = await ensureContinuityShadowSource(namespaceId);
+  await scanMonitoredSource(source.id);
+  await importMonitoredSource(source.id, "onboarding");
+  await rebuildContinuityShadowNamespace(namespaceId);
 }
 
 function scenarios(): readonly Scenario[] {
@@ -711,34 +780,38 @@ export async function runAndWriteMcpProductionSmokeBenchmark(): Promise<{
     readonly markdownPath: string;
   };
 }> {
-  const results: ScenarioResult[] = [];
-  for (const scenario of scenarios()) {
-    results.push(await runScenario(scenario));
-  }
-  const report: McpProductionSmokeReport = {
-    generatedAt: new Date().toISOString(),
-    results,
-    summary: {
-      pass: results.filter((item) => item.passed).length,
-      fail: results.filter((item) => !item.passed).length,
-      failureCategoryCounts: countFailureCategories(results)
-    },
-    passed: results.every((item) => item.passed)
-  };
-  const dir = outputDir();
-  await mkdir(dir, { recursive: true });
-  const stamp = report.generatedAt.replace(/[:.]/g, "-");
-  const jsonPath = path.join(dir, `mcp-production-smoke-${stamp}.json`);
-  const markdownPath = path.join(dir, `mcp-production-smoke-${stamp}.md`);
-  await writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  await writeFile(markdownPath, toMarkdown(report), "utf8");
-  return {
-    report,
-    output: {
-      jsonPath,
-      markdownPath
+  return withMaintenanceLock("the MCP production smoke benchmark", async () => {
+    await primeContinuityShadowNamespace();
+
+    const results: ScenarioResult[] = [];
+    for (const scenario of scenarios()) {
+      results.push(await runScenario(scenario));
     }
-  };
+    const report: McpProductionSmokeReport = {
+      generatedAt: new Date().toISOString(),
+      results,
+      summary: {
+        pass: results.filter((item) => item.passed).length,
+        fail: results.filter((item) => !item.passed).length,
+        failureCategoryCounts: countFailureCategories(results)
+      },
+      passed: results.every((item) => item.passed)
+    };
+    const dir = outputDir();
+    await mkdir(dir, { recursive: true });
+    const stamp = report.generatedAt.replace(/[:.]/g, "-");
+    const jsonPath = path.join(dir, `mcp-production-smoke-${stamp}.json`);
+    const markdownPath = path.join(dir, `mcp-production-smoke-${stamp}.md`);
+    await writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    await writeFile(markdownPath, toMarkdown(report), "utf8");
+    return {
+      report,
+      output: {
+        jsonPath,
+        markdownPath
+      }
+    };
+  });
 }
 
 export async function runMcpProductionSmokeBenchmarkCli(): Promise<void> {
