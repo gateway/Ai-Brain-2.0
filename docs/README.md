@@ -2,6 +2,15 @@
 
 This folder is the public documentation surface for AI Brain 2.0.
 
+## Current Checkpoints
+
+If you are resuming active engineering work, start with the current phase state before reading older roadmap or benchmark docs:
+
+1. [PHASE_WRAP_HARDENING_PLAN_2026-03-31.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PHASE_WRAP_HARDENING_PLAN_2026-03-31.md)
+2. [LOCOMO_REMEDIATION_LOOP_2026-03-29.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_REMEDIATION_LOOP_2026-03-29.md)
+3. [LOCOMO_FIRST_PASS_AUDIT_2026-03-29.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_FIRST_PASS_AUDIT_2026-03-29.md)
+4. [PRODUCTION_CONFIDENCE_98.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PRODUCTION_CONFIDENCE_98.md)
+
 If you are new to the project, start here:
 
 1. [FIRST_RUN_SETUP.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/FIRST_RUN_SETUP.md)
@@ -36,6 +45,14 @@ If you are new to the project, start here:
 - [ROUTING_RULES.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/ROUTING_RULES.md)
 - [FRESH_REPLAY_REGRESSION.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/FRESH_REPLAY_REGRESSION.md)
 - [BRAIN_PHASE_ROADMAP.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/BRAIN_PHASE_ROADMAP.md)
+
+## Current Phase Docs
+
+- [PHASE_WRAP_HARDENING_PLAN_2026-03-31.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PHASE_WRAP_HARDENING_PLAN_2026-03-31.md)
+- [LOCOMO_REMEDIATION_LOOP_2026-03-29.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_REMEDIATION_LOOP_2026-03-29.md)
+- [LOCOMO_FIRST_PASS_AUDIT_2026-03-29.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_FIRST_PASS_AUDIT_2026-03-29.md)
+- [PRODUCTION_CONFIDENCE_98.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PRODUCTION_CONFIDENCE_98.md)
+- [TEMPORAL_RECAP_PROFILE_PHASE.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/TEMPORAL_RECAP_PROFILE_PHASE.md)
 
 ## Repository And Engineering
 

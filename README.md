@@ -10,6 +10,33 @@ It combines:
 
 This is not a thin RAG demo. It is a reviewable cognitive substrate with evidence, staged extraction, clarifications, graph memory, hybrid retrieval, and time-aware summaries.
 
+## Current State
+
+The repository is currently between two phases:
+
+- a completed LoCoMo remediation slice frozen at mini LoCoMo `0.825`
+- a new hardening phase focused on:
+  - protected product-lane recovery
+  - dashboard/operator sync
+  - worktree hygiene and explicit phase boundaries
+
+Current checkpoint docs:
+
+- [LoCoMo remediation checkpoint](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_REMEDIATION_LOOP_2026-03-29.md)
+- [Phase wrap and hardening plan](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PHASE_WRAP_HARDENING_PLAN_2026-03-31.md)
+- [Docs index](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/README.md)
+
+This matters because the repo is not a clean single-feature branch anymore. It currently contains coordinated changes across:
+
+- `local-brain`
+  - retrieval, benchmark infrastructure, typed memory, clarifications, canonicalization
+- `brain-console`
+  - bootstrap, inbox/clarifications, relationship/graph, knowledge/runtime surfaces
+- `docs`
+  - LoCoMo audit/remediation history, confidence/certification notes, phase-close docs
+
+If you are resuming work, read the checkpoint docs first instead of assuming the README alone reflects the latest benchmark and product state.
+
 ## What You Get
 
 AI Brain 2.0 is built to help you:
@@ -93,6 +120,12 @@ Then open [http://127.0.0.1:3005](http://127.0.0.1:3005) and go through:
 4. `Sessions`
 
 The bootstrap script prepares the repo, local Python helper venv, database, and Node dependencies. The doctor script verifies that the machine is actually ready before you trust the result.
+
+If you want the current recommended operator and hardening context before diving into code, read:
+
+1. [docs/README.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/README.md)
+2. [docs/LOCOMO_REMEDIATION_LOOP_2026-03-29.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/LOCOMO_REMEDIATION_LOOP_2026-03-29.md)
+3. [docs/PHASE_WRAP_HARDENING_PLAN_2026-03-31.md](/Users/evilone/Documents/Development/AI-Brain/ai-brain/docs/PHASE_WRAP_HARDENING_PLAN_2026-03-31.md)
 
 ## Prerequisites
 
@@ -318,6 +351,8 @@ For a docs index, see [docs/README.md](docs/README.md).
 
 ## Best Entry Points
 
+- [docs/PHASE_WRAP_HARDENING_PLAN_2026-03-31.md](docs/PHASE_WRAP_HARDENING_PLAN_2026-03-31.md)
+- [docs/LOCOMO_REMEDIATION_LOOP_2026-03-29.md](docs/LOCOMO_REMEDIATION_LOOP_2026-03-29.md)
 - [docs/GITHUB_REPOSITORY_GUIDE.md](docs/GITHUB_REPOSITORY_GUIDE.md)
 - [docs/README.md](docs/README.md)
 - [docs/BRAIN_FEATURES_AND_EXAMPLES.md](docs/BRAIN_FEATURES_AND_EXAMPLES.md)
