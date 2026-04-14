@@ -24,6 +24,7 @@ export interface BrainConfig {
   readonly relationIeRelationThreshold: number;
   readonly localRerankerEnabled: boolean;
   readonly localRerankerVersion: string;
+  readonly canonicalAdjudicationEnabled: boolean;
   readonly retrievalFusionVersion: string;
   readonly benchmarkFastScorerVersion: string;
   readonly benchmarkOfficialishScorerVersion: string;
@@ -246,6 +247,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     relationIeRelationThreshold: parseThreshold(env.BRAIN_RELATION_IE_RELATION_THRESHOLD, 0.45),
     localRerankerEnabled: parseBoolean(env.BRAIN_LOCAL_RERANKER_ENABLED, true),
     localRerankerVersion: env.BRAIN_LOCAL_RERANKER_VERSION ?? "local_reasoning_reranker_v3",
+    canonicalAdjudicationEnabled: parseBoolean(env.BRAIN_CANONICAL_ADJUDICATION, true),
     retrievalFusionVersion: env.BRAIN_RETRIEVAL_FUSION_VERSION ?? "retrieval_fusion_v3",
     benchmarkFastScorerVersion: env.BRAIN_BENCHMARK_FAST_SCORER_VERSION ?? "benchmark_fast_v1",
     benchmarkOfficialishScorerVersion:

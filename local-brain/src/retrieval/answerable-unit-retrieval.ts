@@ -145,7 +145,13 @@ type AnswerableUnitCueFamily =
   | "color"
   | "allergy_safe_pets"
   | "favorite_movie"
-  | "social_exclusion";
+  | "social_exclusion"
+  | "goals"
+  | "owned_pets"
+  | "purchased_items"
+  | "bands"
+  | "plural_names"
+  | "broken_items";
 
 function inferAnswerableUnitCueFamily(queryText: string): AnswerableUnitCueFamily {
   const lowered = queryText.toLowerCase();
@@ -170,11 +176,29 @@ function inferAnswerableUnitCueFamily(queryText: string): AnswerableUnitCueFamil
   if (/\bbesides\b/.test(lowered) && /\bfriends?\b/.test(lowered)) {
     return "social_exclusion";
   }
+  if (/\bgoals?\b/.test(lowered) && /\b(?:career|basketball|endorsements?|brand|charity)\b/.test(lowered)) {
+    return "goals";
+  }
+  if (/\bwhat\s+pets?\s+does\b/.test(lowered)) {
+    return "owned_pets";
+  }
+  if (/\bwhat\s+are\s+the\s+names?\b/.test(lowered) || /\bnames?\s+of\b/.test(lowered)) {
+    return "plural_names";
+  }
+  if (/\bwhat\s+items?\s+did\b/.test(lowered) || (/\bwhat\s+did\b/.test(lowered) && /\b(?:buy|purchase)\b/.test(lowered))) {
+    return "purchased_items";
+  }
+  if (/\bwhich\s+bands?\b/.test(lowered) || /\bwhat\s+bands?\b/.test(lowered)) {
+    return "bands";
+  }
+  if (/\bwhat\s+kinds?\s+of\s+things?\b/.test(lowered) && /\bbroken\b/.test(lowered)) {
+    return "broken_items";
+  }
   return "generic";
 }
 
 function isStandaloneHobbyStatement(text: string): boolean {
-  const normalized = normalizeWhitespace(text);
+  const normalized = normalizeWhitespace(text).replace(/^[A-Z][a-z]+:\s*/u, "");
   if (!normalized || /\?\s*$/u.test(normalized)) {
     return false;
   }
@@ -226,6 +250,18 @@ function slotCueScoreForUnit(queryText: string, unit: AnswerableUnit): number {
       return /\b(?:movie|film)\b/i.test(text) ? 0.8 : 0;
     case "social_exclusion":
       return /\b(?:old friends?|other friends?|some friends?|teammates?|team|tournament friends?|outside of my circle)\b/i.test(text) ? 2.3 : 0;
+    case "goals":
+      return /\b(?:goals?|want(?:s)? to|hope(?:s)? to|plan(?:s)? to|championship|endorsements?|brand|charity)\b/i.test(text) ? 2.15 : 0;
+    case "owned_pets":
+      return /\b(?:pets?|snakes?|dogs?|cats?|birds?|fish|hamsters?|rabbits?|turtles?|lizards?)\b/i.test(text) ? 2.1 : 0;
+    case "plural_names":
+      return /\b(?:named|called|names?\s+are|snakes?\s+(?:named|called))\b/i.test(text) ? 2.1 : 0;
+    case "purchased_items":
+      return /\b(?:bought|purchased)\b/i.test(text) ? 2.15 : 0;
+    case "bands":
+      return /\b(?:bands?|listening to|listen to)\b/i.test(text) ? 2.1 : 0;
+    case "broken_items":
+      return /\b(?:broken|broke|prius)\b/i.test(text) ? 2.05 : 0;
     case "generic":
     default:
       return 0;
@@ -517,13 +553,25 @@ function nearestTurnDistance(unit: AnswerableUnit, seeds: readonly AnswerableUni
 function ownerFamilyRegex(cueFamily: AnswerableUnitCueFamily): string | null {
   switch (cueFamily) {
     case "hobbies":
-      return "(hobbies?|enjoy|enjoys|love|loves|like|likes|writing|reading|watching movies|exploring nature|hanging with friends)";
+      return "(hobbies?|writing|reading|watching movies|exploring nature|hanging with friends|painting|sketching|hiking|running|cycling|stories|express myself|bring(?:s)? you joy|joy|cooking|baking|creative outlets?|desserts?|kitchen)";
     case "martial_arts":
       return "(kickboxing|taekwondo|karate|judo|muay thai|boxing|jiu[- ]?jitsu|wrestling|martial arts?)";
     case "allergy_safe_pets":
-      return "(allerg|animals with fur|hairless cats?|pigs?|reptiles?)";
+      return "(allerg|animals with fur|hairless cats?|pigs?|reptiles?|dogs?|cats?|turtles?|cockroaches?)";
     case "social_exclusion":
       return "(old friends?|other friends?|some friends?|teammates?|team|tournament friends?|outside of my circle|my team)";
+    case "goals":
+      return "(goals?|want|wants|hope|hopes|plan|plans|championship|endorsements?|brand|charity)";
+    case "owned_pets":
+      return "(pets?|snakes?|dogs?|cats?|birds?|fish|hamsters?|rabbits?|turtles?|lizards?)";
+    case "plural_names":
+      return "(named|called|names? are|snakes? (?:named|called))";
+    case "purchased_items":
+      return "(bought|purchased)";
+    case "bands":
+      return "(bands?|listening to|listen to)";
+    case "broken_items":
+      return "(broken|broke|prius)";
     default:
       return null;
   }
@@ -693,9 +741,9 @@ export async function queryAnswerableUnits(options: {
   const neighborhoodLimit =
     temporalNeighborhoodQuery
       ? 12
-      : cueFamily === "hobbies" || cueFamily === "martial_arts" || cueFamily === "allergy_safe_pets" || cueFamily === "social_exclusion"
-      ? 48
-      : 24;
+      : cueFamily === "hobbies" || cueFamily === "martial_arts" || cueFamily === "allergy_safe_pets" || cueFamily === "social_exclusion" || cueFamily === "plural_names"
+        ? 48
+        : 24;
   const neighborhoodUnits =
     cueFamily !== "generic" || temporalNeighborhoodQuery
       ? await queryNeighborhoodUnits({
@@ -712,7 +760,7 @@ export async function queryAnswerableUnits(options: {
           targetHints,
           cueFamily,
           excludeIds: [...queryRowsResult.map((row) => row.id), ...neighborhoodUnits.map((unit) => unit.id)],
-          limit: cueFamily === "hobbies" || cueFamily === "martial_arts" ? 48 : 24,
+          limit: cueFamily === "hobbies" || cueFamily === "martial_arts" || cueFamily === "plural_names" ? 48 : 24,
           timeStart: options.timeStart,
           timeEnd: options.timeEnd
         })
@@ -729,7 +777,7 @@ export async function queryAnswerableUnits(options: {
   ).slice(
     0,
     cueFamily !== "generic"
-      ? Math.max(options.limit * 10, cueFamily === "martial_arts" || cueFamily === "hobbies" || cueFamily === "allergy_safe_pets" || cueFamily === "social_exclusion" ? 120 : 80)
+      ? Math.max(options.limit * 10, cueFamily === "martial_arts" || cueFamily === "hobbies" || cueFamily === "allergy_safe_pets" || cueFamily === "social_exclusion" || cueFamily === "plural_names" ? 120 : 80)
       : Math.max(options.limit, 8)
   );
 

@@ -362,18 +362,10 @@ function expandEarlierCurrentPeriodToReference(
   unit: "week" | "month" | "year",
   referenceNow?: string
 ): { readonly start: string; readonly end: string } {
-  const fullWindow = expandCurrentPeriodToReference(unit, referenceNow);
-  const startMs = Date.parse(fullWindow.start);
-  const endMs = Date.parse(fullWindow.end);
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
-    return fullWindow;
-  }
-
-  const midpointMs = startMs + Math.max(1, Math.floor((endMs - startMs) / 2));
-  return {
-    start: fullWindow.start,
-    end: new Date(midpointMs).toISOString()
-  };
+  // "Earlier this month/week/year" is still anchored to the current reference instant.
+  // The planner should open the window from the start of the current period through "now",
+  // not truncate it to an arbitrary midpoint.
+  return expandCurrentPeriodToReference(unit, referenceNow);
 }
 
 function seasonWindow(

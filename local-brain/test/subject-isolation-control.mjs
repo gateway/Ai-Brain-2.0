@@ -85,6 +85,27 @@ test("participant turn with foreign speaker is classified as foreign", () => {
   assert.equal(evaluation.status, "foreign_subject");
 });
 
+test("single-subject isolation drops hard foreign participant rows even without owned alternatives", () => {
+  const foreign = makeResult({
+    memoryId: "foreign-stress-buster",
+    memoryType: "episodic_memory",
+    content: "Evan: Yep, it's a great stress-buster. I started doing this a few years back.",
+    subjectName: "Evan",
+    speakerName: "Evan",
+    participantNames: ["Evan"],
+    derivationType: "participant_turn"
+  });
+
+  const retained = retainSubjectIsolatedRecallResults(
+    "What did Sam start doing a few years back as a stress-buster?",
+    [foreign],
+    1
+  );
+
+  assert.equal(retained.results.length, 0);
+  assert.ok(retained.telemetry.subjectIsolationDiscardedForeignCount >= 1);
+});
+
 test("topic segment with both participants is not treated as subject-owned", () => {
   const topic = makeResult({
     memoryId: "topic-mixed",

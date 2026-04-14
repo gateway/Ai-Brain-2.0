@@ -92,6 +92,39 @@ interface FocusEventGraphRow {
   readonly member_role: string;
 }
 
+interface EntityDossierEntityRow {
+  readonly entity_id: string;
+  readonly entity_name: string;
+  readonly entity_type: string;
+}
+
+interface EntityDossierRelationshipRow {
+  readonly relationship_id: string;
+  readonly related_entity_id: string | null;
+  readonly related_name: string;
+  readonly related_type: string;
+  readonly predicate: string;
+  readonly status: string | null;
+  readonly confidence: number | string | null;
+  readonly valid_from: string;
+  readonly valid_until: string | null;
+  readonly source_uri: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+interface EntityDossierTravelRow {
+  readonly travel_id: string;
+  readonly place_entity_id: string | null;
+  readonly place_name: string;
+  readonly place_type: string;
+  readonly predicate: string;
+  readonly detail: string | null;
+  readonly confidence: number | string | null;
+  readonly occurred_at: string;
+  readonly source_uri: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
 interface ClarificationInboxSummaryRow {
   readonly ambiguity_type: string | null;
   readonly total: string;
@@ -234,6 +267,40 @@ export interface OpsRelationshipGraph {
   readonly suggestedMatches?: readonly string[];
   readonly nodes: readonly OpsRelationshipGraphNode[];
   readonly edges: readonly OpsRelationshipGraphEdge[];
+}
+
+export interface OpsEntityDossierItem {
+  readonly id: string;
+  readonly label: string;
+  readonly entityId?: string | null;
+  readonly entityType?: string | null;
+  readonly predicate: string;
+  readonly detail?: string | null;
+  readonly status?: string | null;
+  readonly confidence: number;
+  readonly validFrom: string;
+  readonly validUntil?: string | null;
+  readonly sourceUri?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface OpsEntityDossier {
+  readonly namespaceId: string;
+  readonly entityId: string;
+  readonly entityName: string;
+  readonly entityType: string;
+  readonly sections: {
+    readonly relationships: readonly OpsEntityDossierItem[];
+    readonly lived: readonly OpsEntityDossierItem[];
+    readonly worked: readonly OpsEntityDossierItem[];
+    readonly traveled: readonly OpsEntityDossierItem[];
+  };
+  readonly summary: {
+    readonly relationshipCount: number;
+    readonly livedCount: number;
+    readonly workedCount: number;
+    readonly traveledCount: number;
+  };
 }
 
 export interface OpsClarificationInboxItem {
@@ -411,6 +478,91 @@ function summarizeQueues(rows: readonly QueueStatusRow[]): QueueSummary {
 
 function normalizeEntityLabel(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/gu, " ").trim();
+}
+
+const DOSSIER_PERSON_NOISE_TOKENS = new Set([
+  "a",
+  "an",
+  "and",
+  "anyone",
+  "anybody",
+  "anywhere",
+  "at",
+  "before",
+  "because",
+  "but",
+  "by",
+  "for",
+  "from",
+  "he",
+  "her",
+  "hers",
+  "him",
+  "his",
+  "if",
+  "in",
+  "it",
+  "its",
+  "me",
+  "my",
+  "of",
+  "on",
+  "or",
+  "our",
+  "she",
+  "that",
+  "the",
+  "their",
+  "them",
+  "they",
+  "this",
+  "to",
+  "us",
+  "we",
+  "what",
+  "when",
+  "where",
+  "who",
+  "why",
+  "with",
+  "you",
+  "your"
+]);
+
+const DOSSIER_TRAILING_CONNECTOR_TOKENS = new Set(["a", "an", "and", "at", "by", "for", "from", "in", "of", "on", "or", "the", "to", "with"]);
+
+function sanitizeDossierLabel(label: string, entityType: string): string | null {
+  const trimmed = label.trim().replace(/\s+/gu, " ");
+  if (!trimmed) {
+    return null;
+  }
+
+  const normalized = normalizeEntityLabel(trimmed);
+  if (!normalized) {
+    return null;
+  }
+
+  const tokens = normalized.split(" ").filter(Boolean);
+  const entityTypeNormalized = entityType.trim().toLowerCase();
+  if (
+    (entityTypeNormalized === "person" || entityTypeNormalized === "self") &&
+    tokens.length <= 2 &&
+    tokens.every((token) => DOSSIER_PERSON_NOISE_TOKENS.has(token))
+  ) {
+    return null;
+  }
+
+  const originalTokens = trimmed.split(/\s+/u).filter(Boolean);
+  while (originalTokens.length > 1) {
+    const trailingNormalized = normalizeEntityLabel(originalTokens[originalTokens.length - 1] ?? "");
+    if (!DOSSIER_TRAILING_CONNECTOR_TOKENS.has(trailingNormalized)) {
+      break;
+    }
+    originalTokens.pop();
+  }
+
+  const sanitized = originalTokens.join(" ").trim();
+  return sanitized || null;
 }
 
 function phoneticKey(value: string): string {
@@ -2091,6 +2243,362 @@ export async function getOpsRelationshipGraph(
     suggestedMatches: graphAmbiguity ? parseSuggestedMatches(graphAmbiguity.metadata) : [],
     nodes: graphNodes,
     edges
+  };
+}
+
+function uniqueDossierItems(items: readonly OpsEntityDossierItem[]): readonly OpsEntityDossierItem[] {
+  const seen = new Set<string>();
+  const deduped: OpsEntityDossierItem[] = [];
+  for (const item of items) {
+    const key = `${item.predicate}:${(item.entityId ?? item.label).toLowerCase()}:${item.validFrom}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
+function isDossierItem(item: OpsEntityDossierItem | null): item is OpsEntityDossierItem {
+  return item !== null;
+}
+
+function mapDossierRelationshipItem(row: EntityDossierRelationshipRow): OpsEntityDossierItem | null {
+  const sanitizedLabel = sanitizeDossierLabel(row.related_name, row.related_type);
+  if (!sanitizedLabel) {
+    return null;
+  }
+  return {
+    id: row.relationship_id,
+    label: sanitizedLabel,
+    entityId: row.related_entity_id,
+    entityType: row.related_type,
+    predicate: row.predicate,
+    status: row.status,
+    confidence: Number(row.confidence ?? 0),
+    validFrom: row.valid_from,
+    validUntil: row.valid_until,
+    sourceUri: row.source_uri,
+    metadata: row.metadata
+  };
+}
+
+export async function getOpsEntityDossier(
+  namespaceId: string,
+  entityId: string,
+  options?: {
+    readonly timeStart?: string;
+    readonly timeEnd?: string;
+    readonly limit?: number;
+  },
+  attemptedEntityIds: readonly string[] = []
+): Promise<OpsEntityDossier> {
+  if (attemptedEntityIds.includes(entityId)) {
+    throw new Error(`Entity dossier fallback loop for ${entityId}`);
+  }
+  const limit = Math.max(4, Math.min(options?.limit ?? 8, 24));
+  const [entity] = await queryRows<EntityDossierEntityRow>(
+    `
+      SELECT
+        id::text AS entity_id,
+        canonical_name AS entity_name,
+        entity_type
+      FROM entities
+      WHERE namespace_id = $1
+        AND id = $2::uuid
+        AND merged_into_entity_id IS NULL
+      LIMIT 1
+    `,
+    [namespaceId, entityId]
+  );
+
+  if (!entity) {
+    throw new Error(`Unknown entity ${entityId} in namespace ${namespaceId}`);
+  }
+
+  // The atlas remains broad and cheap; the typed dossier does the expensive,
+  // person-shaped expansion only for the currently focused entity.
+  const [relationshipRows, livedRows, workedRows, travelRows] = await Promise.all([
+    queryRows<EntityDossierRelationshipRow>(
+      `
+        SELECT
+          rm.id::text AS relationship_id,
+          CASE WHEN rm.subject_entity_id = $2::uuid THEN object_entity.id::text ELSE subject_entity.id::text END AS related_entity_id,
+          CASE WHEN rm.subject_entity_id = $2::uuid THEN object_entity.canonical_name ELSE subject_entity.canonical_name END AS related_name,
+          CASE WHEN rm.subject_entity_id = $2::uuid THEN object_entity.entity_type ELSE subject_entity.entity_type END AS related_type,
+          rm.predicate,
+          rm.status,
+          rm.confidence,
+          rm.valid_from::text,
+          rm.valid_until::text,
+          a.uri AS source_uri,
+          rm.metadata
+        FROM relationship_memory rm
+        JOIN entities subject_entity ON subject_entity.id = rm.subject_entity_id
+        JOIN entities object_entity ON object_entity.id = rm.object_entity_id
+        LEFT JOIN relationship_candidates rc ON rc.id = rm.source_candidate_id
+        LEFT JOIN episodic_memory em ON em.id = rc.source_memory_id
+        LEFT JOIN artifacts a ON a.id = em.artifact_id
+        WHERE rm.namespace_id = $1
+          AND (rm.subject_entity_id = $2::uuid OR rm.object_entity_id = $2::uuid)
+          AND rm.status <> 'invalid'
+          AND rm.predicate = ANY($5::text[])
+          AND ($3::timestamptz IS NULL OR COALESCE(rm.valid_until, rm.valid_from) >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR rm.valid_from <= $4::timestamptz)
+        ORDER BY
+          CASE WHEN rm.valid_until IS NULL THEN 0 ELSE 1 END,
+          rm.confidence DESC,
+          rm.valid_from DESC
+        LIMIT $6
+      `,
+      [
+        namespaceId,
+        entityId,
+        options?.timeStart ?? null,
+        options?.timeEnd ?? null,
+        [
+          "friend_of",
+          "significant_other_of",
+          "married_to",
+          "sibling_of",
+          "parent_of",
+          "child_of",
+          "met_through",
+          "was_with",
+          "works_with",
+          "relationship_ended",
+          "relationship_reconnected",
+          "relationship_contact_paused"
+        ],
+        limit
+      ]
+    ),
+    queryRows<EntityDossierRelationshipRow>(
+      `
+        SELECT
+          rm.id::text AS relationship_id,
+          object_entity.id::text AS related_entity_id,
+          object_entity.canonical_name AS related_name,
+          object_entity.entity_type AS related_type,
+          rm.predicate,
+          rm.status,
+          rm.confidence,
+          rm.valid_from::text,
+          rm.valid_until::text,
+          a.uri AS source_uri,
+          rm.metadata
+        FROM relationship_memory rm
+        JOIN entities object_entity ON object_entity.id = rm.object_entity_id
+        LEFT JOIN relationship_candidates rc ON rc.id = rm.source_candidate_id
+        LEFT JOIN episodic_memory em ON em.id = rc.source_memory_id
+        LEFT JOIN artifacts a ON a.id = em.artifact_id
+        WHERE rm.namespace_id = $1
+          AND rm.subject_entity_id = $2::uuid
+          AND rm.status <> 'invalid'
+          AND object_entity.entity_type = 'place'
+          AND rm.predicate = ANY($5::text[])
+          AND ($3::timestamptz IS NULL OR COALESCE(rm.valid_until, rm.valid_from) >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR rm.valid_from <= $4::timestamptz)
+        ORDER BY
+          CASE WHEN rm.valid_until IS NULL THEN 0 ELSE 1 END,
+          rm.valid_from DESC,
+          rm.confidence DESC
+        LIMIT $6
+      `,
+      [namespaceId, entityId, options?.timeStart ?? null, options?.timeEnd ?? null, ["resides_at", "lives_in", "currently_in", "lived_in", "born_in"], limit]
+    ),
+    queryRows<EntityDossierRelationshipRow>(
+      `
+        SELECT
+          rm.id::text AS relationship_id,
+          object_entity.id::text AS related_entity_id,
+          object_entity.canonical_name AS related_name,
+          object_entity.entity_type AS related_type,
+          rm.predicate,
+          rm.status,
+          rm.confidence,
+          rm.valid_from::text,
+          rm.valid_until::text,
+          a.uri AS source_uri,
+          rm.metadata
+        FROM relationship_memory rm
+        JOIN entities object_entity ON object_entity.id = rm.object_entity_id
+        LEFT JOIN relationship_candidates rc ON rc.id = rm.source_candidate_id
+        LEFT JOIN episodic_memory em ON em.id = rc.source_memory_id
+        LEFT JOIN artifacts a ON a.id = em.artifact_id
+        WHERE rm.namespace_id = $1
+          AND rm.subject_entity_id = $2::uuid
+          AND rm.status <> 'invalid'
+          AND object_entity.entity_type IN ('org', 'project')
+          AND rm.predicate = ANY($5::text[])
+          AND ($3::timestamptz IS NULL OR COALESCE(rm.valid_until, rm.valid_from) >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR rm.valid_from <= $4::timestamptz)
+        ORDER BY
+          CASE WHEN rm.valid_until IS NULL THEN 0 ELSE 1 END,
+          rm.valid_from DESC,
+          rm.confidence DESC
+        LIMIT $6
+      `,
+      [namespaceId, entityId, options?.timeStart ?? null, options?.timeEnd ?? null, ["works_at", "worked_at", "works_on", "project_role", "runs", "member_of", "created_by"], limit]
+    ),
+    queryRows<EntityDossierTravelRow>(
+      `
+        WITH selected_events AS (
+          SELECT
+            ne.id::text AS travel_id,
+            COALESCE(ne.time_start, ns.occurred_at, ne.created_at)::text AS occurred_at,
+            ne.event_label,
+            ne.event_kind,
+            ne.metadata,
+            a.uri AS source_uri
+          FROM narrative_events ne
+          LEFT JOIN narrative_scenes ns ON ns.id = ne.source_scene_id
+          LEFT JOIN artifacts a ON a.id = ns.artifact_id
+          WHERE ne.namespace_id = $1
+            AND (
+              ne.primary_subject_entity_id = $2::uuid
+              OR EXISTS (
+                SELECT 1
+                FROM narrative_event_members selected_member
+                WHERE selected_member.event_id = ne.id
+                  AND selected_member.entity_id = $2::uuid
+              )
+            )
+            AND ne.event_kind IN ('travel', 'visit')
+            AND ($3::timestamptz IS NULL OR COALESCE(ne.time_start, ns.occurred_at, ne.created_at) >= $3::timestamptz)
+            AND ($4::timestamptz IS NULL OR COALESCE(ne.time_start, ns.occurred_at, ne.created_at) <= $4::timestamptz)
+          ORDER BY COALESCE(ne.time_start, ns.occurred_at, ne.created_at) DESC
+          LIMIT $5
+        )
+        SELECT DISTINCT ON (COALESCE(place_entity.canonical_name, selected_events.metadata->>'location_text', selected_events.event_label))
+          selected_events.travel_id,
+          place_entity.id::text AS place_entity_id,
+          COALESCE(place_entity.canonical_name, selected_events.metadata->>'location_text', selected_events.event_label) AS place_name,
+          COALESCE(place_entity.entity_type, 'place') AS place_type,
+          'visited'::text AS predicate,
+          selected_events.event_label AS detail,
+          0.72::float AS confidence,
+          selected_events.occurred_at,
+          selected_events.source_uri,
+          selected_events.metadata
+        FROM selected_events
+        LEFT JOIN narrative_event_members place_member
+          ON place_member.event_id::text = selected_events.travel_id
+          AND place_member.member_role = 'location'
+        LEFT JOIN entities place_entity ON place_entity.id = place_member.entity_id
+        WHERE COALESCE(place_entity.canonical_name, selected_events.metadata->>'location_text', selected_events.event_label) <> ''
+        ORDER BY COALESCE(place_entity.canonical_name, selected_events.metadata->>'location_text', selected_events.event_label), selected_events.occurred_at DESC
+      `,
+      [namespaceId, entityId, options?.timeStart ?? null, options?.timeEnd ?? null, limit * 2]
+    )
+  ]);
+
+  const relationships = uniqueDossierItems(relationshipRows.map(mapDossierRelationshipItem).filter(isDossierItem)).slice(0, limit);
+  const lived = uniqueDossierItems(livedRows.map(mapDossierRelationshipItem).filter(isDossierItem)).slice(0, limit);
+  const worked = uniqueDossierItems(workedRows.map(mapDossierRelationshipItem).filter(isDossierItem)).slice(0, limit);
+  const traveled = uniqueDossierItems(
+    travelRows
+      .map((row): OpsEntityDossierItem | null => {
+        const sanitizedLabel = sanitizeDossierLabel(row.place_name, row.place_type);
+        if (!sanitizedLabel) {
+          return null;
+        }
+        return {
+          id: row.travel_id,
+          label: sanitizedLabel,
+          entityId: row.place_entity_id,
+          entityType: row.place_type,
+          predicate: row.predicate,
+          detail: row.detail,
+          confidence: Number(row.confidence ?? 0),
+          validFrom: row.occurred_at,
+          sourceUri: row.source_uri,
+          metadata: row.metadata
+        } satisfies OpsEntityDossierItem;
+      })
+      .filter(isDossierItem)
+  ).slice(0, limit);
+
+  if (
+    entity.entity_type === "person" &&
+    relationships.length === 0 &&
+    lived.length === 0 &&
+    worked.length === 0 &&
+    traveled.length === 0
+  ) {
+    const normalizedEntityName = normalizeEntityLabel(entity.entity_name);
+    const [fallbackEntity] = await queryRows<EntityDossierEntityRow>(
+      `
+        WITH relationship_counts AS (
+          SELECT entity_id::text AS entity_id, COUNT(*)::integer AS relationship_count
+          FROM (
+            SELECT subject_entity_id AS entity_id
+            FROM relationship_memory
+            WHERE namespace_id = $1
+              AND status <> 'invalid'
+            UNION ALL
+            SELECT object_entity_id AS entity_id
+            FROM relationship_memory
+            WHERE namespace_id = $1
+              AND status <> 'invalid'
+          ) rel
+          GROUP BY entity_id
+        ),
+        mention_counts AS (
+          SELECT entity_id::text AS entity_id, COUNT(*)::integer AS mention_count
+          FROM memory_entity_mentions
+          WHERE namespace_id = $1
+          GROUP BY entity_id
+        )
+        SELECT
+          e.id::text AS entity_id,
+          e.canonical_name AS entity_name,
+          e.entity_type
+        FROM entities e
+        LEFT JOIN relationship_counts rc ON rc.entity_id = e.id::text
+        LEFT JOIN mention_counts mc ON mc.entity_id = e.id::text
+        WHERE e.namespace_id = $1
+          AND e.id <> $2::uuid
+          AND e.merged_into_entity_id IS NULL
+          AND e.entity_type IN ('self', 'person')
+          AND (
+            lower(e.canonical_name) = lower($3)
+            OR lower(e.normalized_name) = lower($4)
+            OR lower(e.canonical_name) LIKE lower($4) || ' %'
+          )
+        ORDER BY
+          CASE WHEN e.entity_type = 'self' THEN 0 ELSE 1 END,
+          COALESCE(rc.relationship_count, 0) DESC,
+          COALESCE(mc.mention_count, 0) DESC,
+          e.canonical_name ASC
+        LIMIT 1
+      `,
+      [namespaceId, entityId, entity.entity_name, normalizedEntityName]
+    );
+
+    if (fallbackEntity) {
+      return getOpsEntityDossier(namespaceId, fallbackEntity.entity_id, options, [...attemptedEntityIds, entityId]);
+    }
+  }
+
+  return {
+    namespaceId,
+    entityId: entity.entity_id,
+    entityName: entity.entity_name,
+    entityType: entity.entity_type,
+    sections: {
+      relationships,
+      lived,
+      worked,
+      traveled
+    },
+    summary: {
+      relationshipCount: relationships.length,
+      livedCount: lived.length,
+      workedCount: worked.length,
+      traveledCount: traveled.length
+    }
   };
 }
 

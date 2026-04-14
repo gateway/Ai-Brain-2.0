@@ -164,7 +164,12 @@ export default async function SessionGraphPage({
                     conflicts {relevantConflictCount}
                   </Badge>
                 </div>
-                <RelationshipGraph graph={graph} />
+                <RelationshipGraph
+                  graph={graph}
+                  namespaceId={session.namespaceId}
+                  timeStart={session.createdAt}
+                  timeEnd={new Date().toISOString()}
+                />
               </>
             ) : (
               <div className="rounded-[20px] border border-dashed border-white/12 bg-white/5 p-5 text-sm leading-7 text-slate-300">

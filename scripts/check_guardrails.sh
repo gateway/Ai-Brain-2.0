@@ -22,4 +22,7 @@ if ! rg -n "request.sourceType === \"pdf\" \\|\\| request.sourceType === \"image
   exit 1
 fi
 
+echo "[guardrails] retrieval service boundaries must hold"
+npm run guard:service-boundaries --workspace local-brain >/dev/null
+
 echo "[guardrails] ok"

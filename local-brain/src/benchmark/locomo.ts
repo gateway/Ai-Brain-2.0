@@ -4,7 +4,7 @@ import { get } from "node:https";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { withMaintenanceLock } from "../db/client.js";
+import { withClient, withMaintenanceLock } from "../db/client.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { planRecallQuery } from "../retrieval/planner.js";
 import { rebuildTypedMemoryNamespace } from "../typed-memory/service.js";
@@ -15,9 +15,10 @@ import {
   isSharedCommonalityQuery,
   isTemporalDetailQuery
 } from "../retrieval/query-signals.js";
-import { cleanupPublicBenchmarkNamespaces } from "./public-benchmark-cleanup.js";
+import { cleanupPublicBenchmarkNamespaces, listResidualBenchmarkNamespaces } from "./public-benchmark-cleanup.js";
 import { parseLoCoMoSessionDateTimeToIso } from "./public-memory-date-utils.js";
 import { buildBenchmarkRuntimeMetadata, resolvePublicBenchmarkMode, resolveRequestedSampleCount, type BenchmarkRuntimeMetadata } from "./runtime-metadata.js";
+import { classifyAnswerShapingDiagnosis, type AnswerShapingDiagnosis } from "./answer-shaping-diagnosis.js";
 
 interface TurnRecord {
   readonly speaker: string;
@@ -109,6 +110,108 @@ interface QueryResult {
   readonly subjectIsolationTopResultOwned: boolean;
   readonly globalQueryRouted: boolean;
   readonly summaryRoutingUsed: boolean;
+  readonly branchPruningApplied: boolean;
+  readonly prunedBranches: readonly string[];
+  readonly stageTimingsMs: Readonly<Record<string, number>> | null;
+  readonly dominantStage: string | null;
+  readonly topStageMs: number | null;
+  readonly leafTraversalTriggered: boolean;
+  readonly descentTriggered: boolean;
+  readonly descentStages: readonly string[];
+  readonly initialLaneSufficiency: string | null;
+  readonly finalLaneSufficiency: string | null;
+  readonly reducerFamily: string | null;
+  readonly finalClaimSource: string | null;
+  readonly answerOwnerTrace?: {
+    readonly family?: string | null;
+    readonly winner?: string | null;
+    readonly eligibleOwners?: readonly string[];
+    readonly suppressedOwners?: readonly { readonly owner: string; readonly reason: string }[];
+    readonly candidates?: readonly {
+      readonly owner: string;
+      readonly family: string;
+      readonly eligible: boolean;
+      readonly suppressed: boolean;
+      readonly suppressionReason?: string | null;
+      readonly reasonCodes?: readonly string[];
+      readonly subjectBindingStatus?: string | null;
+      readonly subjectPlanKind?: string | null;
+      readonly sourceTable?: string | null;
+    }[];
+    readonly reasonCodes?: readonly string[];
+    readonly fallbackPath?: readonly string[];
+    readonly abstentionReason?: string | null;
+    readonly resolvedSubject?: {
+      readonly bindingStatus?: string | null;
+      readonly subjectPlanKind?: string | null;
+      readonly subjectId?: string | null;
+      readonly subjectName?: string | null;
+    };
+  } | null;
+  readonly answerShapingTrace?: {
+    readonly selectedFamily?: string | null;
+    readonly shapingMode?: string | null;
+    readonly retrievalPlanFamily?: string | null;
+    readonly retrievalPlanLane?: string | null;
+    readonly retrievalPlanResolvedSubjectEntityId?: string | null;
+    readonly retrievalPlanCandidatePools?: readonly string[];
+    readonly retrievalPlanSuppressionPools?: readonly string[];
+    readonly retrievalPlanRequiredFields?: readonly string[];
+    readonly retrievalPlanTargetedBackfill?: readonly string[];
+    readonly retrievalPlanTargetedBackfillRequests?: readonly {
+      readonly reason?: string | null;
+      readonly requiredFields?: readonly string[];
+      readonly candidatePool?: string | null;
+      readonly maxPasses?: number | null;
+    }[];
+    readonly retrievalPlanQueryExpansionTerms?: readonly string[];
+    readonly retrievalPlanBannedExpansionTerms?: readonly string[];
+    readonly retrievalPlanFamilyConfidence?: number | null;
+    readonly retrievalPlanSupportCompletenessTarget?: number | null;
+    readonly retrievalPlanRescuePolicy?: string | null;
+    readonly ownerEligibilityHints?: readonly string[];
+    readonly suppressionHints?: readonly string[];
+    readonly typedValueUsed?: boolean;
+    readonly generatedProseUsed?: boolean;
+    readonly runtimeResynthesisUsed?: boolean;
+    readonly supportRowsSelected?: number;
+    readonly supportTextsSelected?: number;
+    readonly supportSelectionMode?: string | null;
+    readonly supportObjectsBuilt?: number;
+    readonly supportObjectType?: string | null;
+    readonly supportNormalizationFailures?: readonly string[];
+    readonly renderContractSelected?: string | null;
+    readonly renderContractFallbackReason?: string | null;
+    readonly selectedEventKey?: string | null;
+    readonly selectedEventType?: string | null;
+    readonly selectedTimeGranularity?: string | null;
+    readonly typedSetEntryCount?: number;
+    readonly typedSetEntryType?: string | null;
+    readonly exactDetailSource?: string | null;
+  } | null;
+  readonly shapingDiagnosis?: AnswerShapingDiagnosis | null;
+  readonly fallbackSuppressedReason: string | null;
+  readonly canonicalPathUsed?: boolean;
+  readonly canonicalPredicateFamily?: string | null;
+  readonly canonicalSupportStrength?: string | null;
+  readonly canonicalAbstainReason?: string | null;
+  readonly canonicalSubjectBindingStatus?: string | null;
+  readonly canonicalSubjectId?: string | null;
+  readonly canonicalSubjectName?: string | null;
+  readonly canonicalStatus?: string | null;
+  readonly subjectPlanKind?: string | null;
+  readonly pairPlanUsed?: boolean;
+  readonly canonicalReadTier?: string | null;
+  readonly temporalValiditySource?: string | null;
+  readonly chainSerializerUsed?: boolean;
+  readonly narrativePathUsed?: boolean;
+  readonly narrativeKind?: string | null;
+  readonly reportPathUsed?: boolean;
+  readonly reportKind?: string | null;
+  readonly narrativeSourceTier?: string | null;
+  readonly narrativeCandidateCount?: number;
+  readonly narrativeShadowDecision?: string | null;
+  readonly narrativeCutoverApplied?: boolean;
   readonly latencyMs: number;
   readonly evidenceCount: number;
   readonly sourceCount: number;
@@ -158,6 +261,10 @@ export interface LoCoMoReport {
     readonly exactDetailPrecision: number;
     readonly temporalAnchorHitRate: number;
     readonly commonalityOverlapPrecision: number;
+    readonly nonEmptyAnswerTokenPrecision: number;
+    readonly nonEmptyAnswerTokenRecall: number;
+    readonly nonEmptyAnswerTokenF1: number;
+    readonly shapingDiagnosisBreakdown: Readonly<Record<Exclude<AnswerShapingDiagnosis, "not_applicable">, number>>;
     readonly mixedSubjectDiscardRate: number;
     readonly exactAnswerWindowCount: number;
     readonly exactAnswerSafeWindowCount: number;
@@ -192,6 +299,12 @@ export interface LoCoMoReport {
   };
   readonly results: readonly QueryResult[];
   readonly passed: boolean;
+}
+
+interface TokenOverlapScore {
+  readonly precision: number;
+  readonly recall: number;
+  readonly f1: number;
 }
 
 function shouldSkipPublicBenchmarkCleanup(): boolean {
@@ -236,6 +349,82 @@ function resolvePartialFlushEvery(): number {
     return Math.max(1, Math.floor(raw));
   }
   return 5;
+}
+
+function resolveOptionalDelayMs(envName: string): number {
+  const raw = Number(process.env[envName] ?? "");
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.max(0, Math.floor(raw));
+  }
+  return 0;
+}
+
+function sleepMs(delayMs: number): Promise<void> {
+  if (!Number.isFinite(delayMs) || delayMs <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function shouldSkipPublicBenchmarkPreflight(): boolean {
+  return process.env.BRAIN_PUBLIC_BENCHMARK_SKIP_PREFLIGHT === "1";
+}
+
+function resolveBenchmarkCleanupStatementTimeoutMs(): number {
+  const raw = Number(process.env.BRAIN_BENCHMARK_CLEANUP_TIMEOUT_MS ?? "");
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.max(5_000, Math.floor(raw));
+  }
+  return 60_000;
+}
+
+async function runBenchmarkNamespacePreflight(logger: (message: string) => void): Promise<void> {
+  const residualNamespaces = await listResidualBenchmarkNamespaces("benchmark_");
+  if (residualNamespaces.length === 0) {
+    logger("preflight clean benchmark namespaces=0");
+    return;
+  }
+  logger(`preflight residue detected namespaces=${residualNamespaces.length}`);
+  await cleanupPublicBenchmarkNamespaces(residualNamespaces, {
+    namespaceChunkSize: 1,
+    statementTimeoutMs: resolveBenchmarkCleanupStatementTimeoutMs(),
+    lockTimeoutMs: 2_000,
+    logger: (message) => logger(`preflight cleanup ${message}`)
+  });
+  const remaining = await listResidualBenchmarkNamespaces("benchmark_");
+  if (remaining.length > 0) {
+    throw new Error(
+      `Benchmark preflight cleanup incomplete; residual benchmark namespaces remain (${remaining.length}).`
+    );
+  }
+  logger("preflight cleanup complete benchmark namespaces=0");
+}
+
+async function runBenchmarkSchemaPreflight(logger: (message: string) => void): Promise<void> {
+  const requiredTables = [
+    "canonical_narratives",
+    "canonical_entity_reports",
+    "canonical_pair_reports",
+    "canonical_set_entries",
+    "canonical_temporal_facts"
+  ] as const;
+  const rows = await withClient(async (client) => {
+    const result = await client.query<{ readonly table_name: string; readonly present: string | null }>(
+      `
+        SELECT
+          table_name,
+          to_regclass(table_name)::text AS present
+        FROM unnest($1::text[]) AS table_name
+      `,
+      [requiredTables]
+    );
+    return result.rows;
+  });
+  const missing = rows.filter((row) => !row.present).map((row) => row.table_name);
+  if (missing.length > 0) {
+    throw new Error(`Benchmark schema preflight failed; missing tables: ${missing.join(", ")}`);
+  }
+  logger(`preflight schema ok tables=${requiredTables.length}`);
 }
 
 function resolveGitCommit(): string | null {
@@ -385,6 +574,83 @@ function normalize(value: unknown): string {
     .replace(/\s+/g, " ");
 }
 
+function normalizedTokens(value: unknown): string[] {
+  return normalize(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1);
+}
+
+function tokenOverlapScore(expectedAnswer: string, answerSnippet: string): TokenOverlapScore | null {
+  const expected = normalize(expectedAnswer);
+  if (!expected || expected === "none") {
+    return null;
+  }
+
+  const expectedTokens = normalizedTokens(expectedAnswer);
+  const answerTokens = normalizedTokens(answerSnippet);
+  if (expectedTokens.length === 0) {
+    return null;
+  }
+  if (answerTokens.length === 0) {
+    return { precision: 0, recall: 0, f1: 0 };
+  }
+
+  const expectedCounts = new Map<string, number>();
+  for (const token of expectedTokens) {
+    expectedCounts.set(token, (expectedCounts.get(token) ?? 0) + 1);
+  }
+
+  let hits = 0;
+  for (const token of answerTokens) {
+    const remaining = expectedCounts.get(token) ?? 0;
+    if (remaining > 0) {
+      hits += 1;
+      expectedCounts.set(token, remaining - 1);
+    }
+  }
+
+  const precision = hits / Math.max(1, answerTokens.length);
+  const recall = hits / Math.max(1, expectedTokens.length);
+  const f1 = precision + recall === 0 ? 0 : (2 * precision * recall) / (precision + recall);
+  return {
+    precision: Number(precision.toFixed(3)),
+    recall: Number(recall.toFixed(3)),
+    f1: Number(f1.toFixed(3))
+  };
+}
+
+function compactNormalize(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .trim();
+}
+
+function extractCompactAnswerItems(value: unknown): string[] {
+  return [...new Set(
+    String(value ?? "")
+      .split(/[,\n;]+/g)
+      .map((item) => compactNormalize(item))
+      .filter((item) => item.length > 2)
+  )];
+}
+
+function compactListPass(expectedAnswer: string, compactCandidate: string): boolean {
+  const expectedItems = extractCompactAnswerItems(expectedAnswer);
+  return expectedItems.length >= 2 && expectedItems.every((item) => compactCandidate.includes(item));
+}
+
+function benchmarkExpectedAnswer(qa: { readonly answer?: string | number; readonly category: number }): string {
+  if (typeof qa.answer === "string" && qa.answer.trim().length > 0) {
+    return qa.answer;
+  }
+  if (typeof qa.answer === "number" && Number.isFinite(qa.answer)) {
+    return String(qa.answer);
+  }
+  return qa.category === 5 ? "None" : "";
+}
+
 function resolveRequestedQuestionCount(rawValue: string | undefined, fallback: number): number | "full" {
   if (!rawValue || !rawValue.trim()) {
     return Math.max(1, Math.floor(fallback));
@@ -487,6 +753,7 @@ function selectLoCoMoQuestions(
 }
 
 function toMarkdown(report: LoCoMoReport): string {
+  const slowestResults = [...report.results].sort((left, right) => right.latencyMs - left.latencyMs).slice(0, 20);
   const lines = [
     "# LoCoMo Compatibility Report",
     "",
@@ -503,6 +770,11 @@ function toMarkdown(report: LoCoMoReport): string {
     `- passed: ${report.passed}`,
     `- latency.p50Ms: ${report.latency.p50Ms}`,
     `- latency.p95Ms: ${report.latency.p95Ms}`,
+    `- benchmarkModeNote: ${
+      report.runtime.benchmarkMode === "sampled"
+        ? "sampled locomo10 compatibility run; not the full unsampled corpus"
+        : "full unsampled public corpus run"
+    }`,
     "",
     "## Diagnostics",
     "",
@@ -518,6 +790,10 @@ function toMarkdown(report: LoCoMoReport): string {
     `- exactDetailPrecision: ${report.diagnostics.exactDetailPrecision}`,
     `- temporalAnchorHitRate: ${report.diagnostics.temporalAnchorHitRate}`,
     `- commonalityOverlapPrecision: ${report.diagnostics.commonalityOverlapPrecision}`,
+    `- nonEmptyAnswerTokenPrecision: ${report.diagnostics.nonEmptyAnswerTokenPrecision}`,
+    `- nonEmptyAnswerTokenRecall: ${report.diagnostics.nonEmptyAnswerTokenRecall}`,
+    `- nonEmptyAnswerTokenF1: ${report.diagnostics.nonEmptyAnswerTokenF1}`,
+    `- shapingDiagnosisBreakdown: ${JSON.stringify(report.diagnostics.shapingDiagnosisBreakdown)}`,
     `- mixedSubjectDiscardRate: ${report.diagnostics.mixedSubjectDiscardRate}`,
     `- exactAnswerWindowCount: ${report.diagnostics.exactAnswerWindowCount}`,
     `- exactAnswerSafeWindowCount: ${report.diagnostics.exactAnswerSafeWindowCount}`,
@@ -546,12 +822,37 @@ function toMarkdown(report: LoCoMoReport): string {
     `- subjectIsolationTopResultOwnedRate: ${report.diagnostics.subjectIsolationTopResultOwnedRate}`,
     `- categoryBreakdown: ${JSON.stringify(report.diagnostics.categoryBreakdown)}`,
     "",
-    "## Results",
+    "## Slowest 20",
     ""
   ];
+
+  for (const result of slowestResults) {
+    lines.push(
+      `- ${result.sampleId} category=${result.category} latency=${result.latencyMs} behavior=${result.queryBehavior} dominantStage=${result.dominantStage ?? "n/a"} topStageMs=${result.topStageMs ?? "n/a"} finalClaimSource=${result.finalClaimSource ?? "n/a"}`
+    );
+    lines.push(`  - q: ${result.question}`);
+    if (result.descentStages.length > 0) {
+      lines.push(`  - descentStages: ${result.descentStages.join(" -> ")}`);
+    }
+    if (result.reducerFamily) {
+      lines.push(`  - reducerFamily: ${result.reducerFamily}`);
+    }
+    if (result.fallbackSuppressedReason) {
+      lines.push(`  - fallbackSuppressedReason: ${result.fallbackSuppressedReason}`);
+    }
+    if (result.shapingDiagnosis && result.shapingDiagnosis !== "not_applicable") {
+      lines.push(`  - shapingDiagnosis: ${result.shapingDiagnosis}`);
+    }
+  }
+
+  lines.push(
+    "",
+    "## Results",
+    ""
+  );
   for (const result of report.results) {
     lines.push(
-      `- ${result.sampleId} category=${result.category}: ${result.passed ? "pass" : "fail"} | normalized=${result.normalizedPassed ? "pass" : "fail"} | confidence=${result.confidence ?? "n/a"} | latency=${result.latencyMs} | evidence=${result.evidenceCount} | sources=${result.sourceCount}`
+      `- ${result.sampleId} category=${result.category}: ${result.passed ? "pass" : "fail"} | normalized=${result.normalizedPassed ? "pass" : "fail"} | confidence=${result.confidence ?? "n/a"} | latency=${result.latencyMs} | evidence=${result.evidenceCount} | sources=${result.sourceCount} | dominantStage=${result.dominantStage ?? "n/a"} | finalClaimSource=${result.finalClaimSource ?? "n/a"} | shapingDiagnosis=${result.shapingDiagnosis ?? "n/a"}`
     );
   }
   lines.push("");
@@ -619,10 +920,18 @@ function formatConversationSession(sample: LocomoConversation, sessionKey: strin
 function bestEffortPass(expectedAnswer: string, payload: any): boolean {
   const haystack = normalize(JSON.stringify(payload));
   const expected = normalize(expectedAnswer);
+  const compactHaystack = compactNormalize(JSON.stringify(payload));
+  const compactExpected = compactNormalize(expectedAnswer);
   if (!expected) {
     return false;
   }
   if (haystack.includes(expected)) {
+    return true;
+  }
+  if (compactExpected && compactHaystack.includes(compactExpected)) {
+    return true;
+  }
+  if (compactListPass(expectedAnswer, compactHaystack)) {
     return true;
   }
   const expectedTokens = expected.split(" ").filter((token) => token.length > 2);
@@ -640,11 +949,27 @@ function normalizedAnswerPass(expectedAnswer: string, payload: any): boolean {
   ]
     .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
     .map((item) => normalize(item));
+  const compactCandidates = [
+    payload?.duality?.claim?.text,
+    payload?.summaryText,
+    payload?.claimText,
+    payload?.explanation,
+    ...(Array.isArray(payload?.duality?.evidence) ? payload.duality.evidence.map((item: any) => item?.snippet) : [])
+  ]
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => compactNormalize(item));
   const expected = normalize(expectedAnswer);
+  const compactExpected = compactNormalize(expectedAnswer);
   if (!expected || candidates.length === 0) {
     return false;
   }
   if (candidates.some((candidate) => candidate.includes(expected))) {
+    return true;
+  }
+  if (compactExpected && compactCandidates.some((candidate) => candidate.includes(compactExpected))) {
+    return true;
+  }
+  if (compactCandidates.some((candidate) => compactListPass(expectedAnswer, candidate))) {
     return true;
   }
   const expectedTokens = expected.split(" ").filter((token) => token.length > 2);
@@ -780,8 +1105,15 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
     const queryTimeoutMs = resolveBenchmarkTimeoutMs();
     const heartbeatMs = resolveHeartbeatMs();
     const partialFlushEvery = resolvePartialFlushEvery();
+    const sampleDelayMs = resolveOptionalDelayMs("BRAIN_BENCHMARK_SAMPLE_DELAY_MS");
+    const ingestDelayMs = resolveOptionalDelayMs("BRAIN_BENCHMARK_INGEST_DELAY_MS");
+    const rebuildDelayMs = resolveOptionalDelayMs("BRAIN_BENCHMARK_REBUILD_DELAY_MS");
+    const questionDelayMs = resolveOptionalDelayMs("BRAIN_BENCHMARK_QUESTION_DELAY_MS");
     const gitCommit = resolveGitCommit();
     benchmarkLog(`start runStamp=${runStamp} queryTimeoutMs=${queryTimeoutMs} heartbeatMs=${heartbeatMs} partialFlushEvery=${partialFlushEvery}`);
+    benchmarkLog(
+      `pacing sampleDelayMs=${sampleDelayMs} ingestDelayMs=${ingestDelayMs} rebuildDelayMs=${rebuildDelayMs} questionDelayMs=${questionDelayMs}`
+    );
     const raw = await downloadCached(
       "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
       "locomo10.json"
@@ -825,6 +1157,10 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
         queryTimeoutMs,
         heartbeatMs,
         partialFlushEvery,
+        sampleDelayMs,
+        ingestDelayMs,
+        rebuildDelayMs,
+        questionDelayMs,
         gitCommit
       }
     });
@@ -861,6 +1197,15 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
 
     process.once("SIGINT", signalHandler);
     process.once("SIGTERM", signalHandler);
+
+    if (!shouldSkipPublicBenchmarkPreflight()) {
+      benchmarkLog("preflight start");
+      await runBenchmarkNamespacePreflight(benchmarkLog);
+      await runBenchmarkSchemaPreflight(benchmarkLog);
+      benchmarkLog("preflight complete");
+    } else {
+      benchmarkLog("preflight skipped");
+    }
 
     const buildReport = (): LoCoMoReport => {
       const passRate = Number((results.filter((result) => result.passed).length / Math.max(1, results.length)).toFixed(3));
@@ -900,6 +1245,18 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
       const aliasTargetResults = results.filter((result) => result.failureClass === "pass" || result.failureClass === "alias_entity_resolution");
       const answerShapingResults = results.filter((result) => result.failureClass === "pass" || result.failureClass === "answer_shaping");
       const mixedOrMismatchedResults = results.filter((result) => result.subjectMatch === "mixed" || result.subjectMatch === "mismatched");
+      const nonEmptyTokenScores = results
+        .map((result) => tokenOverlapScore(result.expectedAnswer, result.answerSnippet))
+        .filter((score): score is TokenOverlapScore => score !== null);
+      const avgTokenMetric = (key: keyof TokenOverlapScore): number =>
+        nonEmptyTokenScores.length > 0
+          ? Number(
+              (
+                nonEmptyTokenScores.reduce((sum, score) => sum + score[key], 0) /
+                Math.max(1, nonEmptyTokenScores.length)
+              ).toFixed(3)
+            )
+          : 0;
       return {
         generatedAt: new Date().toISOString(),
         dataset: "locomo10",
@@ -936,6 +1293,22 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
           exactDetailPrecision: rate(exactDetailResults.filter((result) => result.passed).length, exactDetailResults.length),
           temporalAnchorHitRate: rate(temporalResults.filter((result) => result.passed).length, temporalResults.length),
           commonalityOverlapPrecision: rate(commonalityResults.filter((result) => result.passed).length, commonalityResults.length),
+          nonEmptyAnswerTokenPrecision: avgTokenMetric("precision"),
+          nonEmptyAnswerTokenRecall: avgTokenMetric("recall"),
+          nonEmptyAnswerTokenF1: avgTokenMetric("f1"),
+          shapingDiagnosisBreakdown: countBy(
+            results.map((result) => result.shapingDiagnosis),
+            [
+              "wrong_owner",
+              "right_owner_wrong_shape",
+              "right_owner_incomplete_support",
+              "temporal_rendering_wrong",
+              "report_semantics_wrong",
+              "list_set_rendering_wrong",
+              "subject_binding_missing",
+              "honest_abstention_but_support_missing"
+            ]
+          ),
           mixedSubjectDiscardRate: rate(
             mixedOrMismatchedResults.filter((result) => result.sufficiency === "missing" || result.sufficiency === "contradicted").length,
             mixedOrMismatchedResults.length
@@ -1049,6 +1422,9 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
             });
             benchmarkLog(`ingest complete sampleId=${sample.sample_id} session=${sessionKey}`);
             lastProgressAtMs = Date.now();
+            if (ingestDelayMs > 0) {
+              await sleepMs(ingestDelayMs);
+            }
           }
 
           benchmarkLog(`typed rebuild start sampleId=${sample.sample_id} namespaceId=${namespaceId}`);
@@ -1057,6 +1433,9 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
           });
           benchmarkLog(`typed rebuild complete sampleId=${sample.sample_id} namespaceId=${namespaceId}`);
           lastProgressAtMs = Date.now();
+          if (rebuildDelayMs > 0) {
+            await sleepMs(rebuildDelayMs);
+          }
 
           for (const [questionIndex, qa] of entry.questions.entries()) {
             currentQuestionIndex = questionIndex;
@@ -1092,12 +1471,7 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
                 questionIndex,
                 category: qa.category,
                 question: qa.question,
-                expectedAnswer:
-                  typeof qa.answer === "string" && qa.answer.trim().length > 0
-                    ? qa.answer
-                    : qa.category === 5
-                      ? "None"
-                      : "",
+                expectedAnswer: benchmarkExpectedAnswer(qa),
                 queryBehavior,
                 passed: false,
                 normalizedPassed: false,
@@ -1147,6 +1521,26 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
                 subjectIsolationTopResultOwned: false,
                 globalQueryRouted: false,
                 summaryRoutingUsed: false,
+                branchPruningApplied: false,
+                prunedBranches: [],
+                stageTimingsMs: null,
+                dominantStage: null,
+                topStageMs: null,
+                leafTraversalTriggered: false,
+                descentTriggered: false,
+                descentStages: [],
+                initialLaneSufficiency: null,
+                finalLaneSufficiency: null,
+                reducerFamily: null,
+                finalClaimSource: null,
+                answerShapingTrace: null,
+                shapingDiagnosis: "not_applicable",
+                fallbackSuppressedReason: null,
+                subjectPlanKind: null,
+                pairPlanUsed: false,
+                canonicalReadTier: null,
+                temporalValiditySource: null,
+                chainSerializerUsed: false,
                 latencyMs,
                 evidenceCount: 0,
                 sourceCount: 0,
@@ -1157,6 +1551,9 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
               if (completedQuestions % partialFlushEvery === 0) {
                 await flushPartial();
               }
+              if (questionDelayMs > 0) {
+                await sleepMs(questionDelayMs);
+              }
               continue;
             }
 
@@ -1165,16 +1562,11 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
             const sourceCount = evidence.filter(
               (item: any) => typeof item?.artifactId === "string" || typeof item?.sourceUri === "string"
             ).length;
-            const expectedAnswer =
-              typeof qa.answer === "string" && qa.answer.trim().length > 0
-                ? qa.answer
-                : qa.category === 5
-                  ? "None"
-                  : "";
-            const passed = qa.category === 5 && typeof qa.answer !== "string"
+            const expectedAnswer = benchmarkExpectedAnswer(qa);
+            const passed = qa.category === 5 && typeof qa.answer !== "string" && typeof qa.answer !== "number"
               ? adversarialAbstentionPass(payload)
               : bestEffortPass(expectedAnswer, payload);
-            const normalizedPassed = qa.category === 5 && typeof qa.answer !== "string"
+            const normalizedPassed = qa.category === 5 && typeof qa.answer !== "string" && typeof qa.answer !== "number"
               ? adversarialAbstentionPass(payload)
               : normalizedAnswerPass(expectedAnswer, payload);
             const sufficiency =
@@ -1255,6 +1647,363 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
                 ? payload.meta.subjectIsolationDiscardedForeignCount
                 : 0;
             const subjectIsolationTopResultOwned = payload?.meta?.subjectIsolationTopResultOwned === true;
+            const branchPruningApplied = payload?.meta?.branchPruningApplied === true;
+            const prunedBranches = Array.isArray(payload?.meta?.prunedBranches)
+              ? payload.meta.prunedBranches.filter((value: unknown): value is string => typeof value === "string")
+              : [];
+            const stageTimingsMs = (() => {
+              if (!payload?.meta?.stageTimingsMs || typeof payload.meta.stageTimingsMs !== "object") {
+                return null;
+              }
+              const timings: Record<string, number> = {};
+              for (const [key, value] of Object.entries(payload.meta.stageTimingsMs)) {
+                if (typeof key === "string" && typeof value === "number") {
+                  timings[key] = value;
+                }
+              }
+              return timings;
+            })();
+            const dominantStage = typeof payload?.meta?.dominantStage === "string" ? payload.meta.dominantStage : null;
+            const topStageMs = typeof payload?.meta?.topStageMs === "number" ? payload.meta.topStageMs : null;
+            const leafTraversalTriggered = payload?.meta?.leafTraversalTriggered === true;
+            const descentTriggered = payload?.meta?.descentTriggered === true;
+            const descentStages = Array.isArray(payload?.meta?.descentStages)
+              ? payload.meta.descentStages.filter((value: unknown): value is string => typeof value === "string")
+              : [];
+            const initialLaneSufficiency =
+              typeof payload?.meta?.initialLaneSufficiency === "string" ? payload.meta.initialLaneSufficiency : null;
+            const finalLaneSufficiency =
+              typeof payload?.meta?.finalLaneSufficiency === "string" ? payload.meta.finalLaneSufficiency : null;
+            const reducerFamily = typeof payload?.meta?.reducerFamily === "string" ? payload.meta.reducerFamily : null;
+            const finalClaimSource =
+              typeof payload?.meta?.finalClaimSource === "string" ? payload.meta.finalClaimSource : null;
+            const answerOwnerTrace =
+              payload?.meta?.answerOwnerTrace && typeof payload.meta.answerOwnerTrace === "object"
+                ? {
+                    family:
+                      typeof payload.meta.answerOwnerTrace.family === "string"
+                        ? payload.meta.answerOwnerTrace.family
+                        : null,
+                    winner:
+                      typeof payload.meta.answerOwnerTrace.winner === "string"
+                        ? payload.meta.answerOwnerTrace.winner
+                        : null,
+                    eligibleOwners: Array.isArray(payload.meta.answerOwnerTrace.eligibleOwners)
+                      ? payload.meta.answerOwnerTrace.eligibleOwners.filter((value: unknown): value is string => typeof value === "string")
+                      : [],
+                    suppressedOwners: Array.isArray(payload.meta.answerOwnerTrace.suppressedOwners)
+                      ? payload.meta.answerOwnerTrace.suppressedOwners
+                          .filter((value: unknown): value is { readonly owner: string; readonly reason: string } =>
+                            typeof value === "object" &&
+                            value !== null &&
+                            typeof (value as { owner?: unknown }).owner === "string" &&
+                            typeof (value as { reason?: unknown }).reason === "string"
+                          )
+                          .map((value: { readonly owner: string; readonly reason: string }) => ({ owner: value.owner, reason: value.reason }))
+                      : [],
+                    candidates: Array.isArray(payload.meta.answerOwnerTrace.candidates)
+                      ? payload.meta.answerOwnerTrace.candidates
+                          .filter((value: unknown): value is {
+                            readonly owner: string;
+                            readonly family: string;
+                            readonly eligible: boolean;
+                            readonly suppressed: boolean;
+                            readonly suppressionReason?: string;
+                            readonly reasonCodes?: readonly string[];
+                            readonly subjectBindingStatus?: string;
+                            readonly subjectPlanKind?: string;
+                            readonly sourceTable?: string | null;
+                          } =>
+                            typeof value === "object" &&
+                            value !== null &&
+                            typeof (value as { owner?: unknown }).owner === "string" &&
+                            typeof (value as { family?: unknown }).family === "string" &&
+                            typeof (value as { eligible?: unknown }).eligible === "boolean" &&
+                            typeof (value as { suppressed?: unknown }).suppressed === "boolean"
+                          )
+                          .map((value: {
+                            readonly owner: string;
+                            readonly family: string;
+                            readonly eligible: boolean;
+                            readonly suppressed: boolean;
+                            readonly suppressionReason?: string;
+                            readonly reasonCodes?: readonly string[];
+                            readonly subjectBindingStatus?: string;
+                            readonly subjectPlanKind?: string;
+                            readonly sourceTable?: string | null;
+                          }) => ({
+                            owner: value.owner,
+                            family: value.family,
+                            eligible: value.eligible,
+                            suppressed: value.suppressed,
+                            suppressionReason: typeof value.suppressionReason === "string" ? value.suppressionReason : null,
+                            reasonCodes: Array.isArray(value.reasonCodes)
+                              ? value.reasonCodes.filter((code: unknown): code is string => typeof code === "string")
+                              : [],
+                            subjectBindingStatus: typeof value.subjectBindingStatus === "string" ? value.subjectBindingStatus : null,
+                            subjectPlanKind: typeof value.subjectPlanKind === "string" ? value.subjectPlanKind : null,
+                            sourceTable: typeof value.sourceTable === "string" ? value.sourceTable : null
+                          }))
+                      : [],
+                    reasonCodes: Array.isArray(payload.meta.answerOwnerTrace.reasonCodes)
+                      ? payload.meta.answerOwnerTrace.reasonCodes.filter((value: unknown): value is string => typeof value === "string")
+                      : [],
+                    fallbackPath: Array.isArray(payload.meta.answerOwnerTrace.fallbackPath)
+                      ? payload.meta.answerOwnerTrace.fallbackPath.filter((value: unknown): value is string => typeof value === "string")
+                      : [],
+                    abstentionReason:
+                      typeof payload.meta.answerOwnerTrace.abstentionReason === "string"
+                        ? payload.meta.answerOwnerTrace.abstentionReason
+                        : null,
+                    resolvedSubject:
+                      payload.meta.answerOwnerTrace.resolvedSubject && typeof payload.meta.answerOwnerTrace.resolvedSubject === "object"
+                        ? {
+                            bindingStatus:
+                              typeof payload.meta.answerOwnerTrace.resolvedSubject.bindingStatus === "string"
+                                ? payload.meta.answerOwnerTrace.resolvedSubject.bindingStatus
+                                : null,
+                            subjectPlanKind:
+                              typeof payload.meta.answerOwnerTrace.resolvedSubject.subjectPlanKind === "string"
+                                ? payload.meta.answerOwnerTrace.resolvedSubject.subjectPlanKind
+                                : null,
+                            subjectId:
+                              typeof payload.meta.answerOwnerTrace.resolvedSubject.subjectId === "string"
+                                ? payload.meta.answerOwnerTrace.resolvedSubject.subjectId
+                                : null,
+                            subjectName:
+                              typeof payload.meta.answerOwnerTrace.resolvedSubject.subjectName === "string"
+                                ? payload.meta.answerOwnerTrace.resolvedSubject.subjectName
+                                : null
+                          }
+                        : undefined
+                  }
+                : null;
+            const answerShapingTrace =
+              payload?.meta?.answerShapingTrace && typeof payload.meta.answerShapingTrace === "object"
+                ? {
+                    selectedFamily:
+                      typeof payload.meta.answerShapingTrace.selectedFamily === "string"
+                        ? payload.meta.answerShapingTrace.selectedFamily
+                        : null,
+                    shapingMode:
+                      typeof payload.meta.answerShapingTrace.shapingMode === "string"
+                        ? payload.meta.answerShapingTrace.shapingMode
+                        : null,
+                    retrievalPlanFamily:
+                      typeof payload.meta.answerShapingTrace.retrievalPlanFamily === "string"
+                        ? payload.meta.answerShapingTrace.retrievalPlanFamily
+                        : null,
+                    retrievalPlanLane:
+                      typeof payload.meta.answerShapingTrace.retrievalPlanLane === "string"
+                        ? payload.meta.answerShapingTrace.retrievalPlanLane
+                        : null,
+                    retrievalPlanResolvedSubjectEntityId:
+                      typeof payload.meta.answerShapingTrace.retrievalPlanResolvedSubjectEntityId === "string"
+                        ? payload.meta.answerShapingTrace.retrievalPlanResolvedSubjectEntityId
+                        : null,
+                    retrievalPlanCandidatePools: Array.isArray(payload.meta.answerShapingTrace.retrievalPlanCandidatePools)
+                      ? payload.meta.answerShapingTrace.retrievalPlanCandidatePools.filter(
+                          (value: unknown): value is string => typeof value === "string"
+                        )
+                      : [],
+                    retrievalPlanSuppressionPools: Array.isArray(payload.meta.answerShapingTrace.retrievalPlanSuppressionPools)
+                      ? payload.meta.answerShapingTrace.retrievalPlanSuppressionPools.filter(
+                          (value: unknown): value is string => typeof value === "string"
+                        )
+                      : [],
+                    retrievalPlanRequiredFields: Array.isArray(payload.meta.answerShapingTrace.retrievalPlanRequiredFields)
+                      ? payload.meta.answerShapingTrace.retrievalPlanRequiredFields.filter(
+                          (value: unknown): value is string => typeof value === "string"
+                        )
+                      : [],
+                    retrievalPlanTargetedBackfill: Array.isArray(payload.meta.answerShapingTrace.retrievalPlanTargetedBackfill)
+                      ? payload.meta.answerShapingTrace.retrievalPlanTargetedBackfill.filter(
+                          (value: unknown): value is string => typeof value === "string"
+                        )
+                      : [],
+                    retrievalPlanTargetedBackfillRequests: Array.isArray(payload.meta.answerShapingTrace.retrievalPlanTargetedBackfillRequests)
+                      ? payload.meta.answerShapingTrace.retrievalPlanTargetedBackfillRequests.map((request: unknown) => {
+                          const value =
+                            typeof request === "object" && request !== null
+                              ? (request as Record<string, unknown>)
+                              : {};
+                          return {
+                            reason: typeof value.reason === "string" ? value.reason : null,
+                            requiredFields: Array.isArray(value.requiredFields)
+                              ? value.requiredFields.filter((field: unknown): field is string => typeof field === "string")
+                              : [],
+                            candidatePool: typeof value.candidatePool === "string" ? value.candidatePool : null,
+                            maxPasses: typeof value.maxPasses === "number" ? value.maxPasses : null
+                          };
+                        })
+                      : [],
+                    retrievalPlanQueryExpansionTerms: Array.isArray(payload.meta.answerShapingTrace.retrievalPlanQueryExpansionTerms)
+                      ? payload.meta.answerShapingTrace.retrievalPlanQueryExpansionTerms.filter(
+                          (value: unknown): value is string => typeof value === "string"
+                        )
+                      : [],
+                    retrievalPlanBannedExpansionTerms: Array.isArray(payload.meta.answerShapingTrace.retrievalPlanBannedExpansionTerms)
+                      ? payload.meta.answerShapingTrace.retrievalPlanBannedExpansionTerms.filter(
+                          (value: unknown): value is string => typeof value === "string"
+                        )
+                      : [],
+                    retrievalPlanFamilyConfidence:
+                      typeof payload.meta.answerShapingTrace.retrievalPlanFamilyConfidence === "number"
+                        ? payload.meta.answerShapingTrace.retrievalPlanFamilyConfidence
+                        : null,
+                    retrievalPlanSupportCompletenessTarget:
+                      typeof payload.meta.answerShapingTrace.retrievalPlanSupportCompletenessTarget === "number"
+                        ? payload.meta.answerShapingTrace.retrievalPlanSupportCompletenessTarget
+                        : null,
+                    retrievalPlanRescuePolicy:
+                      typeof payload.meta.answerShapingTrace.retrievalPlanRescuePolicy === "string"
+                        ? payload.meta.answerShapingTrace.retrievalPlanRescuePolicy
+                        : null,
+                    ownerEligibilityHints: Array.isArray(payload.meta.answerShapingTrace.ownerEligibilityHints)
+                      ? payload.meta.answerShapingTrace.ownerEligibilityHints.filter(
+                          (value: unknown): value is string => typeof value === "string"
+                        )
+                      : [],
+                    suppressionHints: Array.isArray(payload.meta.answerShapingTrace.suppressionHints)
+                      ? payload.meta.answerShapingTrace.suppressionHints.filter(
+                          (value: unknown): value is string => typeof value === "string"
+                        )
+                      : [],
+                    shapingPipelineEntered: payload.meta.answerShapingTrace.shapingPipelineEntered === true,
+                    supportObjectAttempted: payload.meta.answerShapingTrace.supportObjectAttempted === true,
+                    renderContractAttempted: payload.meta.answerShapingTrace.renderContractAttempted === true,
+                    bypassReason:
+                      typeof payload.meta.answerShapingTrace.bypassReason === "string"
+                        ? payload.meta.answerShapingTrace.bypassReason
+                        : null,
+                    targetedRetrievalAttempted: payload.meta.answerShapingTrace.targetedRetrievalAttempted === true,
+                    targetedRetrievalReason:
+                      typeof payload.meta.answerShapingTrace.targetedRetrievalReason === "string"
+                        ? payload.meta.answerShapingTrace.targetedRetrievalReason
+                        : null,
+                    targetedFieldsRequested: Array.isArray(payload.meta.answerShapingTrace.targetedFieldsRequested)
+                      ? payload.meta.answerShapingTrace.targetedFieldsRequested.filter(
+                          (value: unknown): value is string => typeof value === "string"
+                        )
+                      : [],
+                    targetedRetrievalSatisfied: payload.meta.answerShapingTrace.targetedRetrievalSatisfied === true,
+                    typedValueUsed: payload.meta.answerShapingTrace.typedValueUsed === true,
+                    generatedProseUsed: payload.meta.answerShapingTrace.generatedProseUsed === true,
+                    runtimeResynthesisUsed: payload.meta.answerShapingTrace.runtimeResynthesisUsed === true,
+                    supportRowsSelected:
+                      typeof payload.meta.answerShapingTrace.supportRowsSelected === "number"
+                        ? payload.meta.answerShapingTrace.supportRowsSelected
+                        : 0,
+                    supportTextsSelected:
+                      typeof payload.meta.answerShapingTrace.supportTextsSelected === "number"
+                        ? payload.meta.answerShapingTrace.supportTextsSelected
+                        : 0,
+                    supportSelectionMode:
+                      typeof payload.meta.answerShapingTrace.supportSelectionMode === "string"
+                        ? payload.meta.answerShapingTrace.supportSelectionMode
+                        : null,
+                    supportObjectsBuilt:
+                      typeof payload.meta.answerShapingTrace.supportObjectsBuilt === "number"
+                        ? payload.meta.answerShapingTrace.supportObjectsBuilt
+                        : 0,
+                    supportObjectType:
+                      typeof payload.meta.answerShapingTrace.supportObjectType === "string"
+                        ? payload.meta.answerShapingTrace.supportObjectType
+                        : null,
+                    supportNormalizationFailures: Array.isArray(payload.meta.answerShapingTrace.supportNormalizationFailures)
+                      ? payload.meta.answerShapingTrace.supportNormalizationFailures.filter(
+                          (value: unknown): value is string => typeof value === "string"
+                        )
+                      : [],
+                    renderContractSelected:
+                      typeof payload.meta.answerShapingTrace.renderContractSelected === "string"
+                        ? payload.meta.answerShapingTrace.renderContractSelected
+                        : null,
+                    renderContractFallbackReason:
+                      typeof payload.meta.answerShapingTrace.renderContractFallbackReason === "string"
+                        ? payload.meta.answerShapingTrace.renderContractFallbackReason
+                        : null,
+                    subjectBindingStatus:
+                      typeof payload.meta.answerShapingTrace.subjectBindingStatus === "string"
+                        ? payload.meta.answerShapingTrace.subjectBindingStatus
+                        : null,
+                    subjectBindingReason:
+                      typeof payload.meta.answerShapingTrace.subjectBindingReason === "string"
+                        ? payload.meta.answerShapingTrace.subjectBindingReason
+                        : null,
+                    temporalEventIdentityStatus:
+                      typeof payload.meta.answerShapingTrace.temporalEventIdentityStatus === "string"
+                        ? payload.meta.answerShapingTrace.temporalEventIdentityStatus
+                        : null,
+                    temporalGranularityStatus:
+                      typeof payload.meta.answerShapingTrace.temporalGranularityStatus === "string"
+                        ? payload.meta.answerShapingTrace.temporalGranularityStatus
+                        : null,
+                    selectedEventKey:
+                      typeof payload.meta.answerShapingTrace.selectedEventKey === "string"
+                        ? payload.meta.answerShapingTrace.selectedEventKey
+                        : null,
+                    selectedEventType:
+                      typeof payload.meta.answerShapingTrace.selectedEventType === "string"
+                        ? payload.meta.answerShapingTrace.selectedEventType
+                        : null,
+                    selectedTimeGranularity:
+                      typeof payload.meta.answerShapingTrace.selectedTimeGranularity === "string"
+                        ? payload.meta.answerShapingTrace.selectedTimeGranularity
+                        : null,
+                    typedSetEntryCount:
+                      typeof payload.meta.answerShapingTrace.typedSetEntryCount === "number"
+                        ? payload.meta.answerShapingTrace.typedSetEntryCount
+                        : 0,
+                    typedSetEntryType:
+                      typeof payload.meta.answerShapingTrace.typedSetEntryType === "string"
+                        ? payload.meta.answerShapingTrace.typedSetEntryType
+                        : null,
+                    exactDetailSource:
+                      typeof payload.meta.answerShapingTrace.exactDetailSource === "string"
+                        ? payload.meta.answerShapingTrace.exactDetailSource
+                        : null
+                  }
+                : null;
+            const fallbackSuppressedReason =
+              typeof payload?.meta?.fallbackSuppressedReason === "string" ? payload.meta.fallbackSuppressedReason : null;
+            const canonicalPathUsed = payload?.meta?.canonicalPathUsed === true;
+            const canonicalPredicateFamily =
+              typeof payload?.meta?.canonicalPredicateFamily === "string" ? payload.meta.canonicalPredicateFamily : null;
+            const canonicalSupportStrength =
+              typeof payload?.meta?.canonicalSupportStrength === "string" ? payload.meta.canonicalSupportStrength : null;
+            const canonicalAbstainReason =
+              typeof payload?.meta?.canonicalAbstainReason === "string" ? payload.meta.canonicalAbstainReason : null;
+            const canonicalSubjectBindingStatus =
+              typeof payload?.meta?.canonicalSubjectBindingStatus === "string" ? payload.meta.canonicalSubjectBindingStatus : null;
+            const canonicalSubjectId =
+              typeof payload?.meta?.canonicalSubjectId === "string" ? payload.meta.canonicalSubjectId : null;
+            const canonicalSubjectName =
+              typeof payload?.meta?.canonicalSubjectName === "string" ? payload.meta.canonicalSubjectName : null;
+            const canonicalStatus =
+              typeof payload?.meta?.canonicalStatus === "string" ? payload.meta.canonicalStatus : null;
+            const subjectPlanKind =
+              typeof payload?.meta?.subjectPlanKind === "string" ? payload.meta.subjectPlanKind : null;
+            const pairPlanUsed = payload?.meta?.pairPlanUsed === true;
+            const canonicalReadTier =
+              typeof payload?.meta?.canonicalReadTier === "string" ? payload.meta.canonicalReadTier : null;
+            const temporalValiditySource =
+              typeof payload?.meta?.temporalValiditySource === "string" ? payload.meta.temporalValiditySource : null;
+            const chainSerializerUsed = payload?.meta?.chainSerializerUsed === true;
+            const narrativePathUsed = payload?.meta?.narrativePathUsed === true;
+            const narrativeKind =
+              typeof payload?.meta?.narrativeKind === "string" ? payload.meta.narrativeKind : null;
+            const reportPathUsed = payload?.meta?.reportPathUsed === true;
+            const reportKind =
+              typeof payload?.meta?.reportKind === "string" ? payload.meta.reportKind : null;
+            const narrativeSourceTier =
+              typeof payload?.meta?.narrativeSourceTier === "string" ? payload.meta.narrativeSourceTier : null;
+            const narrativeCandidateCount =
+              typeof payload?.meta?.narrativeCandidateCount === "number" ? payload.meta.narrativeCandidateCount : 0;
+            const narrativeShadowDecision =
+              typeof payload?.meta?.narrativeShadowDecision === "string" ? payload.meta.narrativeShadowDecision : null;
+            const narrativeCutoverApplied = payload?.meta?.narrativeCutoverApplied === true;
+            const failureClass = classifyFailure(queryBehavior, passed, qa.question, sufficiency, subjectMatch, evidence.length, sourceCount);
             results.push({
               sampleId: sample.sample_id,
               questionIndex,
@@ -1264,7 +2013,7 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
               queryBehavior,
               passed,
               normalizedPassed,
-              failureClass: classifyFailure(queryBehavior, passed, qa.question, sufficiency, subjectMatch, evidence.length, sourceCount),
+              failureClass,
               confidence: typeof payload?.duality?.confidence === "string" ? payload.duality.confidence : null,
               sufficiency,
               subjectMatch,
@@ -1310,6 +2059,49 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
               subjectIsolationTopResultOwned,
               globalQueryRouted: payload?.meta?.globalQueryRouted === true,
               summaryRoutingUsed: payload?.meta?.summaryRoutingUsed === true,
+              branchPruningApplied,
+              prunedBranches,
+              stageTimingsMs,
+              dominantStage,
+              topStageMs,
+              leafTraversalTriggered,
+              descentTriggered,
+              descentStages,
+              initialLaneSufficiency,
+              finalLaneSufficiency,
+              reducerFamily,
+              finalClaimSource,
+              answerOwnerTrace,
+              answerShapingTrace,
+              shapingDiagnosis: classifyAnswerShapingDiagnosis({
+                question: qa.question,
+                failureClass,
+                finalClaimSource,
+                answerOwnerTrace,
+                answerShapingTrace
+              }),
+              fallbackSuppressedReason,
+              canonicalPathUsed,
+              canonicalPredicateFamily,
+              canonicalSupportStrength,
+              canonicalAbstainReason,
+              canonicalSubjectBindingStatus,
+              canonicalSubjectId,
+              canonicalSubjectName,
+              canonicalStatus,
+              subjectPlanKind,
+              pairPlanUsed,
+              canonicalReadTier,
+              temporalValiditySource,
+              chainSerializerUsed,
+              narrativePathUsed,
+              narrativeKind,
+              reportPathUsed,
+              reportKind,
+              narrativeSourceTier,
+              narrativeCandidateCount,
+              narrativeShadowDecision,
+              narrativeCutoverApplied,
               latencyMs,
               evidenceCount: evidence.length,
               sourceCount,
@@ -1323,6 +2115,9 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
             if (completedQuestions % partialFlushEvery === 0) {
               await flushPartial();
             }
+            if (questionDelayMs > 0) {
+              await sleepMs(questionDelayMs);
+            }
           }
         } finally {
           benchmarkLog(`cleanup start sampleId=${sample.sample_id} namespaceId=${namespaceId}`);
@@ -1330,6 +2125,9 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
             await cleanupBenchmarkNamespace(namespaceId);
           }
           benchmarkLog(`cleanup complete sampleId=${sample.sample_id} namespaceId=${namespaceId}`);
+        }
+        if (sampleDelayMs > 0) {
+          await sleepMs(sampleDelayMs);
         }
       }
 
