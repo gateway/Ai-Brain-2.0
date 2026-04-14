@@ -1563,8 +1563,21 @@ async function upsertProceduralState(
     `,
     [options.namespaceId, options.stateType, options.stateKey]
   );
+  const versionState = await client.query<{ version: number }>(
+    `
+      SELECT version
+      FROM procedural_memory
+      WHERE namespace_id = $1
+        AND state_type = $2
+        AND state_key = $3
+      ORDER BY version DESC
+      LIMIT 1
+    `,
+    [options.namespaceId, options.stateType, options.stateKey]
+  );
 
   const activeRow = activeState.rows[0];
+  const latestVersion = versionState.rows[0]?.version ?? 0;
   if (activeRow && JSON.stringify(activeRow.state_value) === JSON.stringify(stateValue)) {
     await client.query(
       `
@@ -1609,7 +1622,7 @@ async function upsertProceduralState(
       options.stateType,
       options.stateKey,
       JSON.stringify(stateValue),
-      (activeRow?.version ?? 0) + 1,
+      latestVersion + 1,
       options.occurredAt,
       replaceExisting ? activeRow?.id ?? null : null,
       JSON.stringify(options.metadata)
@@ -1651,6 +1664,18 @@ async function upsertProceduralPreference(
     `,
     [options.namespaceId, options.canonicalKey]
   );
+  const versionState = await client.query<{ version: number }>(
+    `
+      SELECT version
+      FROM procedural_memory
+      WHERE namespace_id = $1
+        AND state_type = 'preference'
+        AND state_key = $2
+      ORDER BY version DESC
+      LIMIT 1
+    `,
+    [options.namespaceId, options.canonicalKey]
+  );
 
   const activeRow = activeState.rows[0];
   if (activeRow) {
@@ -1664,7 +1689,7 @@ async function upsertProceduralPreference(
     );
   }
 
-  const nextVersion = (activeRow?.version ?? 0) + 1;
+  const nextVersion = (versionState.rows[0]?.version ?? 0) + 1;
   await client.query(
     `
       INSERT INTO procedural_memory (
@@ -2771,43 +2796,29 @@ async function promoteGoalCandidate(
       supersededCount += 1;
     }
 
-    await client.query(
-      `
-        INSERT INTO procedural_memory (
-          namespace_id,
-          state_type,
-          state_key,
-          state_value,
-          version,
-          updated_at,
-          valid_from,
-          valid_until,
-          supersedes_id,
-          metadata
-        )
-        VALUES ($1, 'goal', 'current_primary_goal', $2::jsonb, 1, $3, $3, NULL, $4, $5::jsonb)
-      `,
-      [
-        candidate.namespace_id,
-        JSON.stringify({
-          person: personLabel,
-          goal: statement.summary,
-          status: "active",
-          entity_id: typedEntityId,
-          entity_type: typedEntity?.entityType ?? null,
-          source_memory_id: sourceMemoryId
-        }),
-        occurredAt,
-        priorGoalRows.rows[0]?.id ?? null,
-        JSON.stringify({
-          source: "candidate_consolidation",
-          candidate_id: candidate.candidate_id,
-          ontology_phase: "phase4",
-          is_anchor: true
-        })
-      ]
-    );
-    promotedCount += 1;
+    const proceduralResult = await upsertProceduralState(client, {
+      namespaceId: candidate.namespace_id,
+      stateType: "goal",
+      stateKey: "current_primary_goal",
+      stateValue: {
+        person: personLabel,
+        goal: statement.summary,
+        status: "active",
+        entity_id: typedEntityId,
+        entity_type: typedEntity?.entityType ?? null,
+        source_memory_id: sourceMemoryId
+      },
+      occurredAt,
+      sourceMemoryId,
+      metadata: {
+        source: "candidate_consolidation",
+        candidate_id: candidate.candidate_id,
+        ontology_phase: "phase4",
+        is_anchor: true
+      },
+      supersessionMode: "replace"
+    });
+    promotedCount += proceduralResult.promoted ? 1 : 0;
   }
 
   await markCandidate(client, {

@@ -84,11 +84,16 @@ export function createBenchmarkRunId(benchmarkName: BenchmarkJobName): string {
   return `${benchmarkName}-${stamp}`;
 }
 
+export function resolveDedicatedBenchmarkDatabaseUrl(): string {
+  return process.env.BRAIN_BENCHMARK_DATABASE_URL?.trim() || "postgresql:///ai_brain_benchmark";
+}
+
 export function resolveBenchmarkJobTarget(
   benchmarkName: BenchmarkJobName,
   envOverrides: Readonly<Record<string, string>> = {}
 ): BenchmarkJobTarget {
   const baseEnv: Record<string, string> = {};
+  const dedicatedBenchmarkDatabaseUrl = resolveDedicatedBenchmarkDatabaseUrl();
   switch (benchmarkName) {
     case "locomo-mini":
       baseEnv.BRAIN_LOCOMO_SAMPLE_CONVERSATIONS = "4";
@@ -113,6 +118,10 @@ export function resolveBenchmarkJobTarget(
       break;
     default:
       assertNever(benchmarkName);
+  }
+  if (dedicatedBenchmarkDatabaseUrl) {
+    baseEnv.BRAIN_DATABASE_URL = dedicatedBenchmarkDatabaseUrl;
+    baseEnv.BRAIN_BENCHMARK_ISOLATED_DB = "1";
   }
   return {
     benchmarkName,

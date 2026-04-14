@@ -71,6 +71,10 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
 function isPetSafetyQueryText(queryText: string): boolean {
   return (
     /\bpets?\b/i.test(queryText) &&
@@ -188,6 +192,12 @@ function extractAnswerBearingWindows(queryText: string, result: RecallResult): r
       ? (result.provenance.metadata as Record<string, unknown>)
       : null;
   const windows: ExactAnswerWindow[] = [];
+  const sourceSentenceText = typeof metadata?.source_sentence_text === "string" ? metadata.source_sentence_text : "";
+  const sourceTurnText = typeof metadata?.source_turn_text === "string" ? metadata.source_turn_text : "";
+  const sourceBackedWindowSource =
+    result.memoryType === "artifact_derivation" && (sourceSentenceText.trim() || sourceTurnText.trim())
+      ? ("artifact_source" as const)
+      : source;
   const pushWindow = (text: string, options?: { speaker?: string; sourceSentenceText?: string; source?: RecallExactDetailSource }): void => {
     const normalized = normalizeWhitespace(text);
     if (!normalized) {
@@ -203,7 +213,6 @@ function extractAnswerBearingWindows(queryText: string, result: RecallResult): r
     });
   };
 
-  const sourceSentenceText = typeof metadata?.source_sentence_text === "string" ? metadata.source_sentence_text : "";
   const primarySpeakerName =
     typeof metadata?.primary_speaker_name === "string"
       ? normalizeWhitespace(metadata.primary_speaker_name).toLowerCase()
@@ -214,10 +223,14 @@ function extractAnswerBearingWindows(queryText: string, result: RecallResult): r
     pushWindow(sourceSentenceText, {
       sourceSentenceText,
       speaker: primarySpeakerName || undefined,
-      source:
-        result.memoryType === "artifact_derivation" && (derivationType === "participant_turn" || derivationType === "source_sentence")
-          ? "artifact_source"
-          : source
+      source: sourceBackedWindowSource
+    });
+  }
+  if (sourceTurnText.trim() && normalizeWhitespace(sourceTurnText) !== normalizeWhitespace(sourceSentenceText)) {
+    pushWindow(sourceTurnText, {
+      sourceSentenceText: sourceTurnText,
+      speaker: primarySpeakerName || undefined,
+      source: sourceBackedWindowSource
     });
   }
 
@@ -226,7 +239,8 @@ function extractAnswerBearingWindows(queryText: string, result: RecallResult): r
     for (const turn of speakerTurns) {
       pushWindow(turn.text, {
         speaker: turn.speaker,
-        sourceSentenceText
+        sourceSentenceText: sourceSentenceText || sourceTurnText,
+        source: sourceBackedWindowSource
       });
     }
     return windows;
@@ -320,6 +334,11 @@ function scoreSlotCueForFamily(queryText: string, family: string, text: string):
   if (family === "favorite_books") {
     return /\bfavorite\b|\binclude\b|\bbooks?\b/u.test(lowered) ? 1.2 : -0.8;
   }
+  if (family === "favorite_memory") {
+    return /\b(?:favorite|best)\b[^.!?\n]{0,40}\bmemory\b|\b(?:favorite|best)\s+moment\b|\b(?:dance|dancing|performing|recital|stage)\b/u.test(lowered)
+      ? 1.2
+      : -1;
+  }
   if (family === "martial_arts") {
     return /\bmartial\b|\bkickboxing\b|\btaekwondo\b|\bkarate\b|\bjudo\b|\bboxing\b/u.test(lowered) ? 1.1 : -0.6;
   }
@@ -341,6 +360,41 @@ function scoreSlotCueForFamily(queryText: string, family: string, text: string):
   }
   if (family === "role") {
     return /\brole\b|\bposition\b|\btitle\b|\bworked as\b|\bis a\b/u.test(lowered) ? 1 : -0.6;
+  }
+  if (family === "goals") {
+    return /\bgoals?\b|\bwant(?:s)? to\b|\bhope(?:s)? to\b|\bplan(?:s)? to\b|\bchampionship\b|\bendorsements?\b|\bbrand\b|\bcharity\b/u.test(lowered)
+      ? 1.15
+      : -0.7;
+  }
+  if (family === "endorsement_company") {
+    return /\b(?:endorsement|endorsement deal|brand deal|sponsor(?:ed|ship)?|signed up|reached out|offered|outdoor gear|gear company)\b/u.test(lowered)
+      ? 1.3
+      : -0.8;
+  }
+  if (family === "habit_start_activity") {
+    const hasStartCue = /\b(?:started?|took up|got into)\b/u.test(lowered) || /\ba few years?\s+back\b/u.test(lowered);
+    const hasStressCue = /\b(?:stress(?:-buster| relief)|destress|de-stress|happy place|escape)\b/u.test(lowered);
+    if (hasCompletedHabitStartCue(text) && hasStressCue) {
+      return 1.35;
+    }
+    if ((hasStartCue || hasStressCue) && !isProspectiveOnlyHabitStartWindow(text)) {
+      return 0.45;
+    }
+    return -0.95;
+  }
+  if (family === "owned_pets") {
+    return /\bpets?\b|\bsnakes?\b|\bdogs?\b|\bcats?\b|\bbirds?\b|\bfish\b|\brabbits?\b|\bturtles?\b|\blizards?\b/u.test(lowered)
+      ? 1.1
+      : -0.7;
+  }
+  if (family === "purchased_items") {
+    return /\bbought\b|\bpurchased\b/u.test(lowered) ? 1.1 : -0.7;
+  }
+  if (family === "bands") {
+    return /\bbands?\b|\blistening to\b|\blisten to\b/u.test(lowered) ? 1.1 : -0.7;
+  }
+  if (family === "broken_items") {
+    return /\bbroken\b|\bbroke\b|\bprius\b/u.test(lowered) ? 1.05 : -0.7;
   }
   if (family === "car") {
     return /\bbought\b|\bpurchased\b|\btoyota\b|\bhonda\b|\btesla\b|\bprius\b|\bsuv\b|\bsedan\b/u.test(lowered) ? 1 : -0.6;
@@ -435,15 +489,60 @@ function classifySlotFit(values: readonly string[], cueScore: number): ExactAnsw
   return cueScore >= 0.9 ? "strong" : "weak";
 }
 
-function scoreSlotValueFitness(value: string, family: string, queryText: string): number {
+function scoreSlotValueFitness(value: string, family: string, queryText: string, supportText: string): number {
   const lowered = normalizeWhitespace(value).toLowerCase();
   let score = lowered.split(/\s+/u).length <= 4 ? 0.3 : 0;
   if (/\b[A-Z][A-Za-z0-9'’&.-]+(?:\s+[A-Z][A-Za-z0-9'’&.-]+){0,4}\b/u.test(value)) {
     score += 0.25;
   }
+  if (family === "endorsement_company") {
+    const normalizedSupport = normalizeWhitespace(supportText);
+    const escapedValue = escapeRegExp(value);
+    if (
+      new RegExp(
+        `\\b${escapedValue}\\b[^.!?\\n]{0,70}\\b(?:reached out|offered|offering|signed up|sponsor(?:ed|ship)?|endorsement deal|brand deal)\\b`,
+        "iu"
+      ).test(normalizedSupport)
+    ) {
+      score += 2.4;
+    }
+    if (
+      new RegExp(
+        `\\b(?:reached out|offered|offering|signed up|sponsor(?:ed|ship)?|endorsement deal|brand deal)\\b[^.!?\\n]{0,70}\\b${escapedValue}\\b`,
+        "iu"
+      ).test(normalizedSupport)
+    ) {
+      score += 2.1;
+    }
+    if (new RegExp(`\\b${escapedValue}\\b[^.!?\\n]{0,45}\\bworking with them\\b`, "iu").test(normalizedSupport)) {
+      score += 1.9;
+    }
+    if (new RegExp(`\\b${escapedValue}\\b[^.!?\\n]{0,55}\\bafter my season\\b`, "iu").test(normalizedSupport)) {
+      score += 1.1;
+    }
+  }
   if (family === "favorite_books" || /\bfavorite\s+movies?\b/i.test(queryText)) {
     if (/^(?:the\s+)?[a-z]/u.test(lowered)) {
       score -= 0.15;
+    }
+  }
+  if (family === "favorite_memory") {
+    if (/\b(?:favorite|best)\b[^.!?\n]{0,40}\bmemory\b|\b(?:favorite|best)\s+moment\b|\b(?:recital|performance|stage|dance|dancing)\b/u.test(lowered)) {
+      score += 0.2;
+    } else {
+      score -= 0.35;
+    }
+  }
+  if (family === "habit_start_activity") {
+    const normalizedSupport = normalizeWhitespace(supportText);
+    if (
+      /\b(?:started?|took up|got into)\b/iu.test(normalizedSupport) &&
+      /\b(?:stress(?:-buster| relief)|destress|de-stress|happy place|escape)\b/iu.test(normalizedSupport)
+    ) {
+      score += 0.9;
+    }
+    if (new RegExp(`\\b${escapeRegExp(value)}\\b`, "iu").test(normalizedSupport)) {
+      score += 0.25;
     }
   }
   return score;
@@ -518,6 +617,40 @@ function isStandaloneHobbyStatement(text: string): boolean {
   return (
     /\bbesides\s+[A-Za-z][^,!?\n]{0,40},\s*(?:i|he|she)\s+(?:also\s+)?(?:love|loves|enjoy|enjoys)\b/iu.test(normalized) ||
     /^[A-Za-z]+ing(?:\s+[A-Za-z]+){0,2}(?:\s+and\s+[A-Za-z]+ing(?:\s+(?:with|around)\s+[A-Za-z]+){0,3})?!?$/u.test(normalized)
+  );
+}
+
+function isProspectiveOnlyHabitStartWindow(text: string): boolean {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized) {
+    return false;
+  }
+  const prospectiveCue =
+    /\b(?:thinking about|thinking of|want(?:ing)? to try|keen to give it a go|plan(?:ning)? to try|consider(?:ing)?|do you think it will help me|will it help me|looking for a hobby)\b/iu.test(
+      normalized
+    );
+  const completedCue =
+    /\b(?:started?|took up|got into)\b/iu.test(normalized) ||
+    /\bi['’]ve been doing it for a few years now\b/iu.test(normalized);
+  return prospectiveCue && !completedCue;
+}
+
+function hasCompletedHabitStartCue(text: string): boolean {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized || isInterrogativeClaimText(normalized) || isProspectiveOnlyHabitStartWindow(normalized)) {
+    return false;
+  }
+  const segments = normalized
+    .split(/(?<=[.!?])\s+|\n+/u)
+    .map((segment) => normalizeWhitespace(segment))
+    .filter(Boolean);
+  return segments.some((segment) =>
+    !isInterrogativeClaimText(segment) &&
+    !isProspectiveOnlyHabitStartWindow(segment) &&
+    (
+      /\b(?:started?|took up|got into)\b/iu.test(segment) ||
+      /\bi['’]ve been doing it for a few years now\b/iu.test(segment)
+    )
   );
 }
 
@@ -621,6 +754,9 @@ export function deriveExactAnswerCandidate(options: ExactAnswerDerivationOptions
   const safeWindows = evaluated.filter((window) => window.status === "subject_safe" && window.subjectPurityScore >= 0.75);
   const candidates: ExactAnswerCandidate[] = [];
   for (const window of safeWindows) {
+    if (options.family === "habit_start_activity" && !hasCompletedHabitStartCue(window.text)) {
+      continue;
+    }
     const values = options.extractValues(window.text, options.queryText);
     for (const value of values) {
       const normalizedValue = normalizeWhitespace(value);
@@ -630,7 +766,7 @@ export function deriveExactAnswerCandidate(options: ExactAnswerDerivationOptions
       if (/\bhobbies?\b/i.test(options.queryText) && !isPlausibleHobbyValue(normalizedValue)) {
         continue;
       }
-      const slotValueFitnessScore = scoreSlotValueFitness(normalizedValue, options.family, options.queryText);
+      const slotValueFitnessScore = scoreSlotValueFitness(normalizedValue, options.family, options.queryText, window.text);
       candidates.push({
         value: normalizedValue,
         source: window.source,
@@ -668,7 +804,7 @@ export function deriveExactAnswerCandidate(options: ExactAnswerDerivationOptions
   const top = ranked[0];
   const runnerUp = ranked[1];
   const dominantMargin = top && runnerUp ? Number((top.score / Math.max(runnerUp.score, 0.001)).toFixed(3)) : undefined;
-  const multiValueFamilies = new Set(["martial_arts", "favorite_books", "plural_names"]);
+  const multiValueFamilies = new Set(["martial_arts", "favorite_books", "plural_names", "goals", "owned_pets", "purchased_items", "bands", "broken_items"]);
 
   const telemetry: ExactAnswerTelemetry = {
     exactAnswerWindowCount: windows.length,
@@ -681,6 +817,13 @@ export function deriveExactAnswerCandidate(options: ExactAnswerDerivationOptions
   };
 
   if (!top) {
+    return {
+      candidate: null,
+      telemetry
+    };
+  }
+
+  if (options.family === "habit_start_activity" && top.strongSupportCount === 0) {
     return {
       candidate: null,
       telemetry

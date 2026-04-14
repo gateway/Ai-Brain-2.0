@@ -26,9 +26,20 @@ interface PersonalOmiScenarioResult {
   readonly query: string;
   readonly latencyMs: number;
   readonly confidence: string | null;
+  readonly sufficiency: string | null;
+  readonly subjectMatch: string | null;
   readonly claimText: string | null;
   readonly evidenceCount: number;
   readonly sourceLinkCount: number;
+  readonly dominantStage: string | null;
+  readonly topStageMs: number | null;
+  readonly leafTraversalTriggered: boolean;
+  readonly descentTriggered: boolean;
+  readonly descentStages: readonly string[];
+  readonly reducerFamily: string | null;
+  readonly finalClaimSource: string | null;
+  readonly fallbackSuppressedReason: string | null;
+  readonly stageTimingsMs: Readonly<Record<string, number>> | null;
   readonly status: ReviewStatus;
   readonly primaryFailureCategory: ProductionFailureCategory | null;
   readonly failureCategories: readonly ProductionFailureCategory[];
@@ -99,6 +110,19 @@ function sourcePathsFromEvidence(payload: any): readonly string[] {
         .filter((item: string | null): item is string => Boolean(item))
     )
   ];
+}
+
+function stageTimingsFromPayload(payload: any): Readonly<Record<string, number>> | null {
+  if (!payload?.meta?.stageTimingsMs || typeof payload.meta.stageTimingsMs !== "object") {
+    return null;
+  }
+  const timings: Record<string, number> = {};
+  for (const [key, value] of Object.entries(payload.meta.stageTimingsMs)) {
+    if (typeof key === "string" && typeof value === "number") {
+      timings[key] = value;
+    }
+  }
+  return timings;
 }
 
 function confidenceRank(value: string | null): number {
@@ -372,6 +396,8 @@ async function runScenario(namespaceId: string, scenario: PersonalOmiScenario): 
   const claimText = llmStyleAnswer(payload);
   const evidence = evidenceItems(payload);
   const confidence = typeof payload?.duality?.confidence === "string" ? payload.duality.confidence : null;
+  const sufficiency = typeof payload?.meta?.answerAssessment?.sufficiency === "string" ? payload.meta.answerAssessment.sufficiency : null;
+  const subjectMatch = typeof payload?.meta?.answerAssessment?.subjectMatch === "string" ? payload.meta.answerAssessment.subjectMatch : null;
   const failures: string[] = [];
   const notes: string[] = [];
   const sourceLinkCountValue = sourcePathsFromEvidence(payload).length;
@@ -440,9 +466,20 @@ async function runScenario(namespaceId: string, scenario: PersonalOmiScenario): 
     query: scenario.query,
     latencyMs,
     confidence,
+    sufficiency,
+    subjectMatch,
     claimText,
     evidenceCount: evidence.length,
     sourceLinkCount: sourceLinkCountValue,
+    dominantStage: typeof payload?.meta?.dominantStage === "string" ? payload.meta.dominantStage : null,
+    topStageMs: typeof payload?.meta?.topStageMs === "number" ? payload.meta.topStageMs : null,
+    leafTraversalTriggered: payload?.meta?.leafTraversalTriggered === true,
+    descentTriggered: payload?.meta?.descentTriggered === true,
+    descentStages: Array.isArray(payload?.meta?.descentStages) ? payload.meta.descentStages.filter((value: unknown): value is string => typeof value === "string") : [],
+    reducerFamily: typeof payload?.meta?.reducerFamily === "string" ? payload.meta.reducerFamily : null,
+    finalClaimSource: typeof payload?.meta?.finalClaimSource === "string" ? payload.meta.finalClaimSource : null,
+    fallbackSuppressedReason: typeof payload?.meta?.fallbackSuppressedReason === "string" ? payload.meta.fallbackSuppressedReason : null,
+    stageTimingsMs: stageTimingsFromPayload(payload),
     status,
     primaryFailureCategory: failureCategories[0] ?? null,
     failureCategories,
@@ -475,11 +512,22 @@ function toMarkdown(report: PersonalOmiReviewReport): string {
     lines.push(`- category: ${item.category}`);
     lines.push(`- status: ${item.status}`);
     lines.push(`- confidence: ${item.confidence ?? "missing"}`);
+    lines.push(`- sufficiency/subjectMatch: ${item.sufficiency ?? "missing"} / ${item.subjectMatch ?? "missing"}`);
     lines.push(`- latencyMs: ${item.latencyMs}`);
     lines.push(`- query: ${item.query}`);
     lines.push(`- claim: ${item.claimText ?? "none"}`);
     lines.push(`- evidenceCount: ${item.evidenceCount}`);
     lines.push(`- sourceLinkCount: ${item.sourceLinkCount}`);
+    lines.push(`- dominantStage/topStageMs: ${item.dominantStage ?? "n/a"} / ${item.topStageMs ?? "n/a"}`);
+    lines.push(`- leafTraversalTriggered: ${item.leafTraversalTriggered}`);
+    lines.push(`- descentTriggered: ${item.descentTriggered}`);
+    lines.push(`- descentStages: ${item.descentStages.join(" -> ") || "none"}`);
+    lines.push(`- reducerFamily: ${item.reducerFamily ?? "none"}`);
+    lines.push(`- finalClaimSource: ${item.finalClaimSource ?? "none"}`);
+    lines.push(`- fallbackSuppressedReason: ${item.fallbackSuppressedReason ?? "none"}`);
+    if (item.stageTimingsMs) {
+      lines.push(`- stageTimingsMs: ${JSON.stringify(item.stageTimingsMs)}`);
+    }
     lines.push(`- primaryFailureCategory: ${item.primaryFailureCategory ?? "none"}`);
     lines.push(`- failureCategories: ${item.failureCategories.join(", ") || "none"}`);
     lines.push(`- continuityWrongClaimWithGoodEvidence: ${item.continuityWrongClaimWithGoodEvidence}`);

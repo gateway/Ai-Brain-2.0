@@ -286,7 +286,49 @@ test("reader aggregates social-exclusion evidence instead of treating teammates 
   assert.equal(reader.decision, "resolved");
   assert.deepEqual(reader.selectedUnitIds, ["u1", "u2"]);
   assert.match(reader.claimText ?? "", /yes/i);
-  assert.match(reader.claimText ?? "", /teammates on nate's video game team/i);
+  assert.match(reader.claimText ?? "", /teammates on his video game team/i);
+});
+
+test("reader resolves temporal-qualified meal companion units without requiring a date-span anchor", () => {
+  const candidates = [
+    {
+      unit: {
+        id: "meal-1",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m1",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: null,
+        sourceChunkId: "c1",
+        unitType: "participant_turn",
+        contentText: "Maria: My mom and I made some dinner together last night!",
+        ownerEntityHint: "Maria",
+        speakerEntityHint: "Maria",
+        participantNames: ["Maria", "John"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 1
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 1.2,
+      authorityScore: 1,
+      supportScore: 0.5,
+      totalScore: 5.5
+    }
+  ];
+
+  const reader = selectReaderResult("Who did Maria have dinner with on May 3, 2023?", candidates);
+  assert.equal(reader.applied, true);
+  assert.equal(reader.decision, "resolved");
+  assert.deepEqual(reader.selectedUnitIds, ["meal-1"]);
+  assert.equal(reader.claimText, "her mother");
 });
 
 test("companion exclusion query resolves with aggregated social evidence rows", () => {
@@ -360,7 +402,7 @@ test("companion exclusion query resolves with aggregated social evidence rows", 
   const reader = selectReaderResult("Is it likely that Nate has friends besides Joanna?", candidates);
   assert.equal(reader.decision, "resolved");
   assert.equal(reader.recallResults.length, 2);
-  assert.match(reader.claimText ?? "", /old friends|outside his usual circle/i);
+  assert.match(reader.claimText ?? "", /teammates on his video game team/i);
 });
 
 test("reader reduces allergy-safe pet families to explicit safe alternatives", () => {
@@ -426,6 +468,79 @@ test("reader reduces allergy-safe pet families to explicit safe alternatives", (
       authorityScore: 1,
       supportScore: 0,
       totalScore: 4.5
+    }
+  ];
+
+  const reader = selectReaderResult("What pets wouldn't cause any discomfort to Joanna?", candidates);
+  assert.equal(reader.decision, "resolved");
+  assert.match(reader.claimText ?? "", /hairless cats/i);
+  assert.match(reader.claimText ?? "", /pigs/i);
+  assert.match(reader.claimText ?? "", /don't have fur/i);
+});
+
+test("reader infers allergy-safe pets from fur and reptile constraints when explicit options are absent", () => {
+  const candidates = [
+    {
+      unit: {
+        id: "u_safe_infer_1",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m_safe_infer_1",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: "obs_safe_1",
+        sourceChunkId: "c_safe_1",
+        unitType: "participant_turn",
+        contentText: "Joanna: I used to have a dog back in Michigan with that name, but then I got allergic and we had to get rid of her.",
+        ownerEntityHint: "Joanna",
+        speakerEntityHint: "Joanna",
+        participantNames: ["Joanna"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 0.9
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 0,
+      authorityScore: 1,
+      supportScore: 0,
+      totalScore: 4.8
+    },
+    {
+      unit: {
+        id: "u_safe_infer_2",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m_safe_infer_2",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: "obs_safe_2",
+        sourceChunkId: "c_safe_2",
+        unitType: "participant_turn",
+        contentText: "Joanna: I wish I wasn't allergic! I would get two turtles today if I could!",
+        ownerEntityHint: "Joanna",
+        speakerEntityHint: "Joanna",
+        participantNames: ["Joanna"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 0.85
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 0,
+      authorityScore: 1,
+      supportScore: 0,
+      totalScore: 4.7
     }
   ];
 
@@ -505,4 +620,285 @@ test("reader promotes the first declarative owned unit when the lexical top hit 
   assert.equal(reader.decision, "resolved");
   assert.equal(reader.claimText, "Nate: I went with blue this time.");
   assert.deepEqual(reader.selectedUnitIds, ["u_answer"]);
+});
+
+test("reader prefers family-supported hobby units over generic media chatter", () => {
+  const candidates = [
+    {
+      unit: {
+        id: "u_media",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m_media",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: null,
+        sourceChunkId: "c1",
+        unitType: "participant_turn",
+        contentText: "Joanna: I'm all about dramas and romcoms. I love getting immersed in the feelings and plots.",
+        ownerEntityHint: "Joanna",
+        speakerEntityHint: "Joanna",
+        participantNames: ["Joanna"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 1
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 0,
+      authorityScore: 1,
+      supportScore: 0,
+      totalScore: 6
+    },
+    {
+      unit: {
+        id: "u_hobby_1",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m_hobby_1",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: null,
+        sourceChunkId: "c2",
+        unitType: "source_sentence",
+        contentText: "Besides writing, I also enjoy reading, watching movies, and exploring nature.",
+        ownerEntityHint: "Joanna",
+        speakerEntityHint: "Joanna",
+        participantNames: ["Joanna"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 0.6
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 0,
+      authorityScore: 1,
+      supportScore: 0,
+      totalScore: 3.4
+    },
+    {
+      unit: {
+        id: "u_hobby_2",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m_hobby_2",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: null,
+        sourceChunkId: "c3",
+        unitType: "participant_turn",
+        contentText: "Joanna: Writing and hanging with friends!",
+        ownerEntityHint: "Joanna",
+        speakerEntityHint: "Joanna",
+        participantNames: ["Joanna"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 0.55
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 0,
+      authorityScore: 1,
+      supportScore: 0,
+      totalScore: 3.1
+    }
+  ];
+
+  const reader = selectReaderResult("What are Joanna's hobbies?", candidates);
+  assert.equal(reader.decision, "resolved");
+  assert.match(reader.claimText ?? "", /writing/i);
+  assert.match(reader.claimText ?? "", /reading/i);
+  assert.match(reader.claimText ?? "", /exploring nature/i);
+  assert.doesNotMatch(reader.claimText ?? "", /feelings and plots/i);
+});
+
+test("reader reduces live-style hobby signals into canonical values", () => {
+  const candidates = [
+    {
+      unit: {
+        id: "u_live_hobby_1",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m_live_hobby_1",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: null,
+        sourceChunkId: "c_live_1",
+        unitType: "participant_turn",
+        contentText: "Joanna: It reminded me why I love writing.",
+        ownerEntityHint: "Joanna",
+        speakerEntityHint: "Joanna",
+        participantNames: ["Joanna"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 0.72
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 0,
+      authorityScore: 1,
+      supportScore: 0,
+      totalScore: 4.1
+    },
+    {
+      unit: {
+        id: "u_live_hobby_2",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m_live_hobby_2",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: null,
+        sourceChunkId: "c_live_2",
+        unitType: "participant_turn",
+        contentText: "Hiking has opened up a whole new world for me, I feel like a different person now.",
+        ownerEntityHint: "Joanna",
+        speakerEntityHint: "Joanna",
+        participantNames: ["Joanna"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 0.7
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 0,
+      authorityScore: 1,
+      supportScore: 0,
+      totalScore: 4
+    },
+    {
+      unit: {
+        id: "u_live_hobby_3",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m_live_hobby_3",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: null,
+        sourceChunkId: "c_live_3",
+        unitType: "participant_turn",
+        contentText: "Joanna: Cooking and baking are my creative outlets.",
+        ownerEntityHint: "Joanna",
+        speakerEntityHint: "Joanna",
+        participantNames: ["Joanna"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 0.71
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 0,
+      authorityScore: 1,
+      supportScore: 0,
+      totalScore: 4.05
+    }
+  ];
+
+  const reader = selectReaderResult("What are Joanna's hobbies?", candidates);
+  assert.equal(reader.decision, "resolved");
+  assert.match(reader.claimText ?? "", /\bwriting\b/i);
+  assert.match(reader.claimText ?? "", /\bexploring nature\b/i);
+  assert.match(reader.claimText ?? "", /\bcooking\b/i);
+  assert.match(reader.claimText ?? "", /\bbaking\b/i);
+});
+
+test("reader aggregates plural-name family even when generic chatter scores higher", () => {
+  const candidates = [
+    {
+      unit: {
+        id: "u_generic",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m_generic",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: null,
+        sourceChunkId: "c1",
+        unitType: "participant_turn",
+        contentText: "Deborah: Yep, I do running and yoga. Cool, Deb.",
+        ownerEntityHint: "Deborah",
+        speakerEntityHint: "Deborah",
+        participantNames: ["Deborah"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 1
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 0,
+      authorityScore: 1,
+      supportScore: 0,
+      totalScore: 6
+    },
+    {
+      unit: {
+        id: "u_names",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m_names",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: null,
+        sourceChunkId: "c2",
+        unitType: "source_sentence",
+        contentText: "Deborah's snakes are named Jasper and Onyx.",
+        ownerEntityHint: "Deborah",
+        speakerEntityHint: null,
+        participantNames: ["Deborah"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 0.5
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 0,
+      authorityScore: 1,
+      supportScore: 0,
+      totalScore: 3.2
+    }
+  ];
+
+  const reader = selectReaderResult("What are the names of Deborah's snakes?", candidates);
+  assert.equal(reader.decision, "resolved");
+  assert.equal(reader.claimText, "Jasper, Onyx");
 });

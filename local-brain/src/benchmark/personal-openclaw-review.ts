@@ -55,12 +55,23 @@ interface ContinuityScenarioResult {
   readonly query: string;
   readonly latencyMs: number;
   readonly confidence: string | null;
+  readonly sufficiency: string | null;
+  readonly subjectMatch: string | null;
   readonly continuityPackSize: number;
   readonly continuityEvidenceCount: number;
   readonly continuitySourceLinkCount: number;
   readonly continuityTaskCount: number;
   readonly continuityCalendarCount: number;
   readonly continuityClarificationSuggested: boolean;
+  readonly dominantStage: string | null;
+  readonly topStageMs: number | null;
+  readonly leafTraversalTriggered: boolean;
+  readonly descentTriggered: boolean;
+  readonly descentStages: readonly string[];
+  readonly reducerFamily: string | null;
+  readonly finalClaimSource: string | null;
+  readonly fallbackSuppressedReason: string | null;
+  readonly stageTimingsMs: Readonly<Record<string, number>> | null;
   readonly summaryText: string | null;
   readonly sourcePaths: readonly string[];
   readonly status: ReviewStatus;
@@ -210,6 +221,19 @@ function continuitySummary(payload: any, tool: ReviewTool): string | null {
     return payload.explanation.trim();
   }
   return null;
+}
+
+function stageTimingsFromPayload(payload: any): Readonly<Record<string, number>> | null {
+  if (!payload?.meta?.stageTimingsMs || typeof payload.meta.stageTimingsMs !== "object") {
+    return null;
+  }
+  const timings: Record<string, number> = {};
+  for (const [key, value] of Object.entries(payload.meta.stageTimingsMs)) {
+    if (typeof key === "string" && typeof value === "number") {
+      timings[key] = value;
+    }
+  }
+  return timings;
 }
 
 function sourceShapeChecks(): readonly SourceShapeCheck[] {
@@ -472,6 +496,8 @@ async function runScenario(namespaceId: string, scenario: ContinuityScenario): P
   const sourcePaths = sourcePathsFromPayload(payload);
   const summaryText = continuitySummary(payload, scenario.tool);
   const confidence = typeof payload?.confidence === "string" ? payload.confidence : null;
+  const sufficiency = typeof payload?.meta?.answerAssessment?.sufficiency === "string" ? payload.meta.answerAssessment.sufficiency : null;
+  const subjectMatch = typeof payload?.meta?.answerAssessment?.subjectMatch === "string" ? payload.meta.answerAssessment.subjectMatch : null;
   const taskCount = Array.isArray(payload?.tasks) ? payload.tasks.length : 0;
   const calendarCount = Array.isArray(payload?.commitments) ? payload.commitments.length : 0;
   const failures: string[] = [];
@@ -541,12 +567,23 @@ async function runScenario(namespaceId: string, scenario: ContinuityScenario): P
     query: scenario.prompt,
     latencyMs,
     confidence,
+    sufficiency,
+    subjectMatch,
     continuityPackSize: (summaryText ?? "").length,
     continuityEvidenceCount: evidence.length,
     continuitySourceLinkCount: sourceLinkCount(evidence),
     continuityTaskCount: taskCount,
     continuityCalendarCount: calendarCount,
     continuityClarificationSuggested: clarificationSuggested,
+    dominantStage: typeof payload?.meta?.dominantStage === "string" ? payload.meta.dominantStage : null,
+    topStageMs: typeof payload?.meta?.topStageMs === "number" ? payload.meta.topStageMs : null,
+    leafTraversalTriggered: payload?.meta?.leafTraversalTriggered === true,
+    descentTriggered: payload?.meta?.descentTriggered === true,
+    descentStages: Array.isArray(payload?.meta?.descentStages) ? payload.meta.descentStages.filter((value: unknown): value is string => typeof value === "string") : [],
+    reducerFamily: typeof payload?.meta?.reducerFamily === "string" ? payload.meta.reducerFamily : null,
+    finalClaimSource: typeof payload?.meta?.finalClaimSource === "string" ? payload.meta.finalClaimSource : null,
+    fallbackSuppressedReason: typeof payload?.meta?.fallbackSuppressedReason === "string" ? payload.meta.fallbackSuppressedReason : null,
+    stageTimingsMs: stageTimingsFromPayload(payload),
     summaryText,
     sourcePaths,
     status: failures.length === 0 ? "pass" : "fail",
@@ -592,12 +629,23 @@ function toMarkdown(report: PersonalOpenClawReviewReport): string {
     lines.push(`- tool: ${scenario.tool}`);
     lines.push(`- status: ${scenario.status}`);
     lines.push(`- confidence: ${scenario.confidence ?? "missing"}`);
+    lines.push(`- sufficiency/subjectMatch: ${scenario.sufficiency ?? "missing"} / ${scenario.subjectMatch ?? "missing"}`);
     lines.push(`- continuityPackSize: ${scenario.continuityPackSize}`);
     lines.push(`- continuityEvidenceCount: ${scenario.continuityEvidenceCount}`);
     lines.push(`- continuitySourceLinkCount: ${scenario.continuitySourceLinkCount}`);
     lines.push(`- continuityTaskCount: ${scenario.continuityTaskCount}`);
     lines.push(`- continuityCalendarCount: ${scenario.continuityCalendarCount}`);
     lines.push(`- continuityClarificationSuggested: ${scenario.continuityClarificationSuggested}`);
+    lines.push(`- dominantStage/topStageMs: ${scenario.dominantStage ?? "n/a"} / ${scenario.topStageMs ?? "n/a"}`);
+    lines.push(`- leafTraversalTriggered: ${scenario.leafTraversalTriggered}`);
+    lines.push(`- descentTriggered: ${scenario.descentTriggered}`);
+    lines.push(`- descentStages: ${scenario.descentStages.join(" -> ") || "none"}`);
+    lines.push(`- reducerFamily: ${scenario.reducerFamily ?? "none"}`);
+    lines.push(`- finalClaimSource: ${scenario.finalClaimSource ?? "none"}`);
+    lines.push(`- fallbackSuppressedReason: ${scenario.fallbackSuppressedReason ?? "none"}`);
+    if (scenario.stageTimingsMs) {
+      lines.push(`- stageTimingsMs: ${JSON.stringify(scenario.stageTimingsMs)}`);
+    }
     lines.push(`- primaryFailureCategory: ${scenario.primaryFailureCategory ?? "none"}`);
     lines.push(`- failureCategories: ${scenario.failureCategories.join(", ") || "none"}`);
     lines.push(`- query: ${scenario.query}`);

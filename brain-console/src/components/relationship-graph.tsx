@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import cytoscape, { type Core, type ElementDefinition, type LayoutOptions, type StylesheetCSS } from "cytoscape";
 import type { NodeSingular } from "cytoscape";
-import type { OpsRelationshipGraph, OpsRelationshipGraphEdge, OpsRelationshipGraphNode } from "@/lib/brain-runtime";
+import type { OpsEntityDossier, OpsEntityDossierItem, OpsRelationshipGraph, OpsRelationshipGraphEdge, OpsRelationshipGraphNode } from "@/lib/brain-runtime";
 
 type GraphDepth = 1 | 2 | "all";
 type DensityMode = "compact" | "balanced" | "spread";
@@ -23,6 +23,10 @@ function normalizeEntityType(entityType: string): string {
 
 function isSyntheticClusterId(nodeId: string): boolean {
   return nodeId.startsWith("cluster:");
+}
+
+function isSyntheticDetailNodeId(nodeId: string): boolean {
+  return isSyntheticClusterId(nodeId) || nodeId.startsWith("event:") || nodeId.startsWith("eventmeta:");
 }
 
 function densityMultiplier(mode: DensityMode): number {
@@ -103,6 +107,18 @@ function formatConfidence(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
+function shortPredicate(predicate: string): string {
+  return predicate.replace(/_/g, " ");
+}
+
+function shortSourceLabel(value?: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const segments = value.split("/").filter(Boolean);
+  return segments.slice(-2).join("/") || value;
+}
+
 function relationshipStatusLabel(edge: OpsRelationshipGraphEdge): string {
   const normalized = edge.status?.trim().toLowerCase() ?? "";
   if (normalized === "historical" || normalized === "superseded" || Boolean(edge.validUntil)) {
@@ -166,6 +182,24 @@ function edgeCountForNode(graph: OpsRelationshipGraph, nodeId: string | null): n
     return 0;
   }
   return graph.edges.filter((edge) => edge.subjectId === nodeId || edge.objectId === nodeId).length;
+}
+
+function dossierSectionConfig(key: keyof OpsEntityDossier["sections"]): {
+  readonly title: string;
+  readonly empty: string;
+} {
+  switch (key) {
+    case "relationships":
+      return { title: "Relationships", empty: "No person-bound relationships in this window yet." };
+    case "lived":
+      return { title: "Lived", empty: "No residence history surfaced yet." };
+    case "worked":
+      return { title: "Worked", empty: "No work history surfaced yet." };
+    case "traveled":
+      return { title: "Traveled", empty: "No travel history surfaced yet." };
+    default:
+      return { title: key, empty: "No items." };
+  }
 }
 
 function visibleLeafClusters(
@@ -401,7 +435,17 @@ function layoutForState(
   };
 }
 
-export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGraph }) {
+export function RelationshipGraph({
+  graph,
+  namespaceId,
+  timeStart,
+  timeEnd
+}: {
+  readonly graph: OpsRelationshipGraph;
+  readonly namespaceId: string;
+  readonly timeStart: string;
+  readonly timeEnd: string;
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<Core | null>(null);
   const initialFocusId = useMemo(
@@ -416,8 +460,18 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
   const [density, setDensity] = useState<DensityMode>("balanced");
   const [detailMode, setDetailMode] = useState<DetailMode>(focusId ? "detail" : "overview");
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [dossierState, setDossierState] = useState<{
+    readonly entityId: string;
+    readonly dossier: OpsEntityDossier | null;
+    readonly error: string | null;
+  } | null>(null);
 
   const focusNode = nodeById(graph, focusId);
+  const focusNodeId = focusNode?.id ?? null;
+  const shouldLoadDossier = Boolean(focusNodeId && !isSyntheticDetailNodeId(focusNodeId));
+  const visibleDossier = shouldLoadDossier && dossierState?.entityId === focusNodeId ? dossierState.dossier : null;
+  const visibleDossierError = shouldLoadDossier && dossierState?.entityId === focusNodeId ? dossierState.error : null;
+  const visibleDossierLoading = Boolean(shouldLoadDossier && focusNodeId && dossierState?.entityId !== focusNodeId);
   const selectedEdge = graph.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const visibleIds = useMemo(() => visibleNodeIds(graph, focusId, depth), [graph, focusId, depth]);
   const visibleNodeCount = [...visibleIds].length;
@@ -427,6 +481,52 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
   useEffect(() => {
     detailModeRef.current = detailMode;
   }, [detailMode]);
+
+  useEffect(() => {
+    if (!focusNodeId || !shouldLoadDossier) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      namespace_id: namespaceId,
+      entity_id: focusNodeId,
+      time_start: timeStart,
+      time_end: timeEnd,
+      limit: "8"
+    });
+
+    fetch(`/api/ops/entity-dossier?${params.toString()}`, {
+      cache: "no-store",
+      signal: controller.signal
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`entity dossier returned ${response.status}`);
+        }
+        return (await response.json()) as OpsEntityDossier;
+      })
+      .then((payload) => {
+        if (!controller.signal.aborted) {
+          setDossierState({
+            entityId: focusNodeId,
+            dossier: payload,
+            error: null
+          });
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setDossierState({
+            entityId: focusNodeId,
+            dossier: null,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      });
+
+    return () => controller.abort();
+  }, [focusNodeId, namespaceId, shouldLoadDossier, timeStart, timeEnd]);
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -799,6 +899,69 @@ export function RelationshipGraph({ graph }: { readonly graph: OpsRelationshipGr
             <p className="mt-4 text-sm leading-7 text-slate-300">
               Hover a node for its full label, click to re-root, and zoom in to reveal the finer leaf structure hidden in the overview.
             </p>
+          </div>
+
+          <div className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(13,18,31,0.98)_0%,_rgba(8,11,20,0.98)_100%)] p-5">
+            <p className="font-mono text-[11px] uppercase tracking-[0.34em] text-slate-500">Typed dossier</p>
+            <h4 className="mt-3 text-lg font-semibold text-white">
+              {focusNode ? `${focusNode.name} across relationship, place, travel, and work lanes` : "Select a real entity"}
+            </h4>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
+              This panel stays subject-bound and typed so clicking a person expands their neighborhood without forcing the whole atlas into a dense leaf scan.
+            </p>
+
+            {visibleDossierLoading ? <p className="mt-4 text-sm text-slate-400">Loading typed entity neighborhood…</p> : null}
+            {visibleDossierError ? <p className="mt-4 text-sm text-rose-200">{visibleDossierError}</p> : null}
+
+            {!visibleDossierLoading && !visibleDossierError && visibleDossier ? (
+              <div className="mt-4 grid gap-3">
+                {(Object.entries(visibleDossier.sections) as Array<[keyof OpsEntityDossier["sections"], readonly OpsEntityDossierItem[]]>).map(
+                  ([key, items]) => {
+                    const config = dossierSectionConfig(key);
+                    return (
+                      <div key={key} className="rounded-[20px] border border-white/8 bg-black/15 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs uppercase tracking-[0.24em] text-slate-400">{config.title}</p>
+                          <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-slate-300">
+                            {items.length}
+                          </span>
+                        </div>
+                        {items.length > 0 ? (
+                          <div className="mt-3 space-y-3">
+                            {items.map((item) => (
+                              <div key={`${key}:${item.id}:${item.label}`} className="rounded-[16px] border border-white/8 bg-white/5 p-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-sm font-medium text-white">{item.label}</p>
+                                  <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-300">
+                                    {shortPredicate(item.predicate)}
+                                  </span>
+                                  {item.status ? (
+                                    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-300">
+                                      {item.status}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-400">
+                                  <span>confidence {formatConfidence(item.confidence)}</span>
+                                  <span>{new Date(item.validFrom).toLocaleDateString()}</span>
+                                  {item.validUntil ? <span>until {new Date(item.validUntil).toLocaleDateString()}</span> : null}
+                                  {item.detail ? <span>{item.detail}</span> : null}
+                                </div>
+                                {shortSourceLabel(item.sourceUri) ? (
+                                  <p className="mt-2 break-all text-[11px] leading-5 text-slate-500">source {shortSourceLabel(item.sourceUri)}</p>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-sm leading-6 text-slate-400">{config.empty}</p>
+                        )}
+                      </div>
+                    );
+                  }
+                )}
+              </div>
+            ) : null}
           </div>
 
           <div className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,_rgba(13,18,31,0.98)_0%,_rgba(8,11,20,0.98)_100%)] p-5">

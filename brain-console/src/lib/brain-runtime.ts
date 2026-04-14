@@ -262,6 +262,40 @@ export interface OpsRelationshipGraph {
   readonly edges: readonly OpsRelationshipGraphEdge[];
 }
 
+export interface OpsEntityDossierItem {
+  readonly id: string;
+  readonly label: string;
+  readonly entityId?: string | null;
+  readonly entityType?: string | null;
+  readonly predicate: string;
+  readonly detail?: string | null;
+  readonly status?: string | null;
+  readonly confidence: number;
+  readonly validFrom: string;
+  readonly validUntil?: string | null;
+  readonly sourceUri?: string | null;
+  readonly metadata: Record<string, unknown>;
+}
+
+export interface OpsEntityDossier {
+  readonly namespaceId: string;
+  readonly entityId: string;
+  readonly entityName: string;
+  readonly entityType: string;
+  readonly sections: {
+    readonly relationships: readonly OpsEntityDossierItem[];
+    readonly lived: readonly OpsEntityDossierItem[];
+    readonly worked: readonly OpsEntityDossierItem[];
+    readonly traveled: readonly OpsEntityDossierItem[];
+  };
+  readonly summary: {
+    readonly relationshipCount: number;
+    readonly livedCount: number;
+    readonly workedCount: number;
+    readonly traveledCount: number;
+  };
+}
+
 export interface OpsClarificationInboxItem {
   readonly candidateId: string;
   readonly claimType: string;
@@ -539,6 +573,31 @@ export async function getRelationshipGraph(input: {
   }
 
   return fetchJson<OpsRelationshipGraph>("/ops/graph", params);
+}
+
+export async function getEntityDossier(input: {
+  readonly namespaceId: string;
+  readonly entityId: string;
+  readonly timeStart?: string;
+  readonly timeEnd?: string;
+  readonly limit?: string;
+}): Promise<OpsEntityDossier> {
+  const params = new URLSearchParams({
+    namespace_id: input.namespaceId,
+    entity_id: input.entityId
+  });
+
+  if (input.timeStart) {
+    params.set("time_start", input.timeStart);
+  }
+  if (input.timeEnd) {
+    params.set("time_end", input.timeEnd);
+  }
+  if (input.limit) {
+    params.set("limit", input.limit);
+  }
+
+  return fetchJson<OpsEntityDossier>("/ops/entity-dossier", params);
 }
 
 export async function getClarificationInbox(input: {

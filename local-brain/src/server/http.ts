@@ -14,7 +14,7 @@ import { ProducerRequestError, ingestDiscordRelayRequest, ingestSlackEventsReque
 import { ingestWebhookPayload } from "../producers/webhook.js";
 import { getArtifactDetail, getRelationships, searchMemory, timelineMemory } from "../retrieval/service.js";
 import { isActiveRelationshipQuery, preferredRelationshipPredicates } from "../retrieval/query-signals.js";
-import { getOpsAmbiguityWorkbench, getOpsClarificationInbox, getOpsIdentityConflictHistory, getOpsNamespaceCatalog, getOpsOverview, getOpsRelationshipGraph, getOpsTimelineView } from "../ops/service.js";
+import { getOpsAmbiguityWorkbench, getOpsClarificationInbox, getOpsEntityDossier, getOpsIdentityConflictHistory, getOpsNamespaceCatalog, getOpsOverview, getOpsRelationshipGraph, getOpsTimelineView } from "../ops/service.js";
 import { resolveEmbeddingRuntimeSelection } from "../providers/embedding-config.js";
 import { getProviderAdapter } from "../providers/registry.js";
 import { createSession, getSessionDetail, getSessionReview, getSessionTimeline, ingestSessionFile, ingestSessionText, listSessions, updateSession } from "../ops/session-service.js";
@@ -641,6 +641,23 @@ async function handleRequest(request: IncomingMessage): Promise<JsonResponse> {
       timeEnd: optionalString(url.searchParams.get("time_end")),
       limit: optionalNumber(url.searchParams.get("limit")) ?? 36
     });
+
+    return {
+      statusCode: 200,
+      body: result
+    };
+  }
+
+  if (request.method === "GET" && url.pathname === "/ops/entity-dossier") {
+    const result = await getOpsEntityDossier(
+      requireString(url.searchParams.get("namespace_id"), "namespace_id"),
+      requireString(url.searchParams.get("entity_id"), "entity_id"),
+      {
+        timeStart: optionalString(url.searchParams.get("time_start")),
+        timeEnd: optionalString(url.searchParams.get("time_end")),
+        limit: optionalNumber(url.searchParams.get("limit")) ?? 8
+      }
+    );
 
     return {
       statusCode: 200,

@@ -92,7 +92,7 @@ export default async function RelationshipsPage({ searchParams }: { readonly sea
   const entityName = readParam(params.entity);
   const timeStart = readParam(params.time_start, defaults.timeStart);
   const timeEnd = readParam(params.time_end, defaults.timeEnd);
-  const limit = readParam(params.limit, "24");
+  const limit = readParam(params.limit, "36");
 
   let graph;
   let error: string | undefined;
@@ -538,7 +538,7 @@ export default async function RelationshipsPage({ searchParams }: { readonly sea
                   show atlas / click root / expand / reset
                 </Badge>
               </div>
-              <RelationshipGraph graph={graph} />
+              <RelationshipGraph graph={graph} namespaceId={namespaceId} timeStart={timeStart} timeEnd={timeEnd} />
             </CardContent>
           </Card>
 

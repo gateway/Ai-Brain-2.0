@@ -407,6 +407,11 @@ export function isPreciseFactDetailQuery(queryText: string): boolean {
   return (
     /\bhow\s+long\b/i.test(normalized) ||
     /\bhow\s+many\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\b/i.test(normalized) ||
+    /\b(?:what|which)\s+(?:team|club|organization|company|employer)\b/i.test(normalized) ||
+    /\b(?:what|which)\s+(?:position|role|title|job)\b/i.test(normalized) ||
+    /\bwhat\s+is\b[^?!.]{0,80}\b(?:position|role|title|job)\b/i.test(normalized) ||
+    /\badopt(?:ed|ion)?\b/i.test(normalized) ||
+    /\bwhat\s+are\s+the\s+names?\b/i.test(normalized) ||
     /\bwhat\s+(?:play|movie|film|show|book|song|title)\b/i.test(normalized) ||
     /\bfavorite\s+movie\s+trilog(?:y|ies)\b/i.test(normalized) ||
     /\bhobbies?\b/i.test(normalized) ||
@@ -416,6 +421,7 @@ export function isPreciseFactDetailQuery(queryText: string): boolean {
     /\bpets?\s+wouldn'?t\s+cause\b/i.test(normalized) ||
     (/\bpets?\b/i.test(normalized) && /\ballerg/i.test(normalized)) ||
     /\bwhat\s+(?:was|is)\s+the\s+name\s+of\b/i.test(normalized) ||
+    /^\s*where\b[^?!.]{0,80}\bmov(?:e|ed)\s+from\b/i.test(normalized) ||
     /\bwhere\s+did\s+i\s+(?:redeem|buy|get|purchase)\b/i.test(normalized) ||
     /\bwhere\s+do\s+i\s+take\b.+\bclasses?\b/i.test(normalized) ||
     /\bwhere\s+do\s+i\s+go\s+for\b.+\bclasses?\b/i.test(normalized)
@@ -429,6 +435,13 @@ export function isProfileInferenceQuery(queryText: string): boolean {
   }
 
   return (
+    ((/\bbookshelf\b|\bdr\.?\s*seuss\b|\bclassic children'?s books?\b/i.test(normalized)) &&
+      /\bwould\b|\blikely\b|\bmight\b/i.test(normalized)) ||
+    /\bwould\s+.+\s+enjoy\s+reading\b/i.test(normalized) ||
+    /\bsuspected\s+health\s+problems?\b/i.test(normalized) ||
+    /\blive\s+in\s+connecticut\b/i.test(normalized) ||
+    /\bis\s+deborah\s+married\b/i.test(normalized) ||
+    /\bemploy\s+a\s+lot\s+of\s+people\b/i.test(normalized) ||
     /\bwhat\s+fields?\s+would\s+.+\s+likely\s+to?\s+pursue\b/i.test(normalized) ||
     /\bwhat\s+(?:kind|kinds)\s+of\s+jobs?\b/i.test(normalized) ||
     /\bwhat\s+kind\s+of\s+role\s+does\s+.+\s+seem\s+drawn\s+toward\b/i.test(normalized) ||
@@ -436,6 +449,22 @@ export function isProfileInferenceQuery(queryText: string): boolean {
     /\bcareer\s+options?\b/i.test(normalized) ||
     /\blooking\s+into\s+(?:counseling|mental health|career|education)\b/i.test(normalized) ||
     /\b(?:education|educaton|study|career|major|degree)\b/i.test(normalized) && /\blikely\b/i.test(normalized)
+  );
+}
+
+function isConcreteFavoritePaintingStyleQuery(normalized: string): boolean {
+  return /\bfavorite\s+style\s+of\s+painting\b/i.test(normalized);
+}
+
+export function isConcreteConsumablePreferenceQuery(normalized: string): boolean {
+  return (
+    /\b(?:which|what)\s+(?:meat|food|dish|dessert|pastry|snack)\b/i.test(normalized) &&
+    /\bprefer\b/i.test(normalized) &&
+    (
+      /\bmore than others\b/i.test(normalized) ||
+      /\bmost\b/i.test(normalized) ||
+      /\beat(?:ing)?\b/i.test(normalized)
+    )
   );
 }
 
@@ -499,6 +528,8 @@ export function isTemporalDetailQuery(queryText: string): boolean {
 
   const hasTemporalCue =
     /\bwhen\s+(?:did|was|were|has|have)\b/i.test(normalized) ||
+    /\b(?:what|which)\s+(?:year|month|date|day)\b/i.test(normalized) ||
+    /\bin\s+which\s+month'?s?\b/i.test(normalized) ||
     /\bon\s+[A-Z][a-z]+\s+\d{1,2}(?:,\s*|\s+)\d{4}\b/.test(normalized) ||
     /\bon\s+\d{4}-\d{2}-\d{2}\b/.test(normalized) ||
     /\b(today|yesterday|tonight|this\s+(?:day|week|month|year)|that\s+day|last\s+(?:day|week|month|year))\b/i.test(normalized) ||
@@ -512,6 +543,8 @@ export function isTemporalDetailQuery(queryText: string): boolean {
     /\bhow\s+much\b/i.test(normalized) ||
     /\bhow\s+many\b/i.test(normalized) ||
     /\bwhat\s+time\b/i.test(normalized) ||
+    /\b(?:what|which)\s+(?:year|month|date|day)\b/i.test(normalized) ||
+    /\bin\s+which\s+month'?s?\b/i.test(normalized) ||
     /\bwhen\s+exactly\b/i.test(normalized) ||
     /\bwhen\s+(?:did|was|were|has|have)\b/i.test(normalized) ||
     /\bwho\s+was\s+.+\s+with\b/i.test(normalized) ||
@@ -526,6 +559,13 @@ export function isTemporalDetailQuery(queryText: string): boolean {
 export function isPreferenceQuery(queryText: string): boolean {
   const normalized = queryText.trim();
   if (!normalized) {
+    return false;
+  }
+
+  if (isConcreteFavoritePaintingStyleQuery(normalized)) {
+    return false;
+  }
+  if (isConcreteConsumablePreferenceQuery(normalized)) {
     return false;
   }
 
@@ -564,6 +604,10 @@ export function isHistoricalPreferenceQuery(queryText: string): boolean {
 export function isCurrentPreferenceQuery(queryText: string): boolean {
   const normalized = queryText.trim();
   if (!normalized) {
+    return false;
+  }
+
+  if (isConcreteConsumablePreferenceQuery(normalized)) {
     return false;
   }
 

@@ -229,7 +229,7 @@ export function retainSubjectIsolatedRecallResults(
   const targetHints = parseQueryEntityFocus(queryText).primaryHints
     .map((value) => normalizeWhitespace(value).toLowerCase())
     .filter(Boolean);
-  if (targetHints.length !== 1 || results.length <= 1) {
+  if (targetHints.length !== 1) {
     return {
       results,
       telemetry: {
@@ -279,6 +279,17 @@ export function retainSubjectIsolatedRecallResults(
     }
     if (evaluation.isFallbackRow && evaluation.status !== "subject_owned") {
       score -= 2.5;
+    }
+
+    const hardForeignParticipantRow =
+      evaluation.status === "foreign_subject" &&
+      (evaluation.derivationType === "participant_turn" || evaluation.derivationType === "source_sentence") &&
+      evaluation.primarySpeakerTurnCount === 0 &&
+      !evaluation.targetSignalHit &&
+      !evaluation.hasSourceSentenceTargetHit;
+    if (hardForeignParticipantRow) {
+      discardedForeignCount += 1;
+      return [];
     }
 
     if (ownedCount > 0) {

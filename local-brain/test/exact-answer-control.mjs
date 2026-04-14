@@ -464,6 +464,120 @@ test("allergy-safe pets prefer explicit alternatives over generic allergy compla
   assert.ok(result.candidate?.text.includes("pigs"));
 });
 
+test("goals aggregate only the query-relevant career lane", () => {
+  const result = runExactAnswer({
+    queryText: "What are John's goals for his career that are not related to his basketball skills?",
+    family: "goals",
+    results: [
+      makeResult({
+        memoryId: "g1",
+        content: "John: I want to improve my shooting percentage and win a championship.",
+        subjectName: "John",
+        speakerName: "John",
+        participantNames: ["John"],
+        derivationType: "participant_turn"
+      }),
+      makeResult({
+        memoryId: "g2",
+        content: "John: I also want to get endorsements, build my brand, and do charity work.",
+        subjectName: "John",
+        speakerName: "John",
+        participantNames: ["John"],
+        derivationType: "participant_turn"
+      })
+    ],
+    extractValues: (text, queryText) => {
+      const values = [];
+      if (/shooting percentage/i.test(text)) values.push("improve shooting percentage");
+      if (/championship/i.test(text)) values.push("win a championship");
+      if (/endorsements/i.test(text)) values.push("get endorsements");
+      if (/build my brand/i.test(text)) values.push("build my brand");
+      if (/charity work/i.test(text)) values.push("do charity work");
+      if (/not related/i.test(queryText)) {
+        return values.filter((value) => /endorsements|brand|charity/i.test(value));
+      }
+      return values;
+    }
+  });
+
+  assert.match(result.candidate?.text ?? "", /endorsements/i);
+  assert.match(result.candidate?.text ?? "", /brand/i);
+  assert.match(result.candidate?.text ?? "", /charity/i);
+  assert.doesNotMatch(result.candidate?.text ?? "", /championship/i);
+});
+
+test("purchased items aggregate distinct bought values from a single list statement", () => {
+  const result = runExactAnswer({
+    queryText: "What items did Calvin buy in March 2023?",
+    family: "purchased_items",
+    results: [
+      makeResult({
+        memoryId: "p1",
+        content: "Calvin bought a mansion in Japan and a Ferrari 488 GTB in March 2023.",
+        subjectName: "Calvin",
+        speakerName: "Calvin",
+        participantNames: ["Calvin"],
+        derivationType: "participant_turn"
+      })
+    ],
+    extractValues: (text) => {
+      const values = [];
+      if (/mansion in Japan/i.test(text)) values.push("mansion in Japan");
+      if (/Ferrari 488 GTB/i.test(text)) values.push("Ferrari 488 GTB");
+      return values;
+    }
+  });
+
+  assert.match(result.candidate?.text ?? "", /mansion in Japan/i);
+  assert.match(result.candidate?.text ?? "", /Ferrari 488 GTB/i);
+});
+
+test("bands aggregate multiple listened-to acts from strong windows", () => {
+  const result = runExactAnswer({
+    queryText: "Which bands has Dave enjoyed listening to?",
+    family: "bands",
+    results: [
+      makeResult({
+        memoryId: "b1",
+        content: "Dave: I've enjoyed listening to Aerosmith and The Fireworks lately.",
+        subjectName: "Dave",
+        speakerName: "Dave",
+        participantNames: ["Dave"],
+        derivationType: "participant_turn"
+      })
+    ],
+    extractValues: (text) => {
+      const values = [];
+      if (/Aerosmith/i.test(text)) values.push("Aerosmith");
+      if (/The Fireworks/i.test(text)) values.push("The Fireworks");
+      return values;
+    }
+  });
+
+  assert.match(result.candidate?.text ?? "", /Aerosmith/i);
+  assert.match(result.candidate?.text ?? "", /The Fireworks/i);
+});
+
+test("owned pets returns the supported species instead of falling through to generic snippets", () => {
+  const result = runExactAnswer({
+    queryText: "What pets does Jolene have?",
+    family: "owned_pets",
+    results: [
+      makeResult({
+        memoryId: "pet1",
+        content: "Jolene: I have two snakes at home.",
+        subjectName: "Jolene",
+        speakerName: "Jolene",
+        participantNames: ["Jolene"],
+        derivationType: "participant_turn"
+      })
+    ],
+    extractValues: (text) => (/snakes/i.test(text) ? ["snakes"] : [])
+  });
+
+  assert.equal(result.candidate?.text, "snakes");
+});
+
 test("temporary job abstains to None when the role is unspecified", () => {
   const result = runExactAnswer({
     queryText: "What temporary job did Jon take to cover expenses?",

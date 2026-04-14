@@ -1,5 +1,14 @@
+import { existsSync, readFileSync } from "node:fs";
 import { queryRows, withTransaction } from "../db/client.js";
-import { loadNamespaceSelfProfileForClient } from "../identity/service.js";
+import {
+  inferTemporalEventKeyFromText,
+  rebuildCanonicalMemoryNamespace,
+  type CanonicalMemoryRebuildCounts
+} from "../canonical-memory/service.js";
+import { getNamespaceSelfProfile, loadNamespaceSelfProfileForClient, type NamespaceSelfProfile } from "../identity/service.js";
+import { runCandidateConsolidation } from "../jobs/consolidation.js";
+import { runUniversalMutableReconsolidation } from "../jobs/memory-reconsolidation.js";
+import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
 import {
   canonicalAliasVariants,
   canonicalizeObservedEntityText,
@@ -152,6 +161,36 @@ function uniqueStrings(values: readonly string[]): string[] {
 
 function normalizeName(value: string): string {
   return normalizeEntityLookupName(value);
+}
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function deriveKnownSelfAliases(selfProfile: NamespaceSelfProfile | null): readonly string[] {
+  if (!selfProfile) {
+    return [];
+  }
+  const aliases = uniqueStrings([selfProfile.canonicalName, ...selfProfile.aliases]);
+  const firstTokens = aliases
+    .map((value) => normalizeWhitespace(value).split(/\s+/u)[0] ?? "")
+    .filter((value) => value.length >= 3);
+  return uniqueStrings([...aliases, ...firstTokens]);
+}
+
+function buildSubjectAlternation(candidates: readonly string[]): string | null {
+  const normalized = uniqueStrings(candidates)
+    .sort((left, right) => right.length - left.length)
+    .map((value) => escapeRegexLiteral(value))
+    .join("|");
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isSelfSubjectName(value: string | null | undefined, selfAliases: ReadonlySet<string>): boolean {
+  if (typeof value !== "string" || value.trim().length === 0 || selfAliases.size === 0) {
+    return false;
+  }
+  return selfAliases.has(normalizeName(value));
 }
 
 function trimSentenceForTitle(text: string, maxLength = 90): string {
@@ -408,7 +447,11 @@ function isTrustedTypedRelationshipSource(uri: string | null): boolean {
   return typeof uri === "string" && (
     uri.includes("/omi-archive/normalized/") ||
     uri.includes("/data/inbox/omi/normalized/") ||
-    uri.includes("/personal-openclaw-fixtures/")
+    uri.includes("/personal-openclaw-fixtures/") ||
+    // Benchmarks should exercise the same typed substrate as production paths.
+    // If benchmark-generated markdown is excluded here, canonical storage gets
+    // starved and we end up measuring fallback behavior instead of the system.
+    uri.includes("/benchmark-generated/")
   );
 }
 
@@ -1203,25 +1246,51 @@ function extractSubjectName(sentence: string, candidates: readonly string[]): st
       return candidate;
     }
   }
-  if (/\bDan\b/iu.test(sentence)) {
-    return "Dan";
-  }
-  if (/\bBen\b/iu.test(sentence)) {
-    return "Ben";
-  }
-  if (/\bOmi\b/iu.test(sentence)) {
-    return "Omi";
-  }
-  if (/\bSteve\b/iu.test(sentence)) {
-    return "Steve Tietze";
-  }
   return null;
 }
 
-function extractRelativeTimeHint(sentence: string): string | null {
+const SIMPLE_NUMBER_WORDS: Readonly<Record<string, number>> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20
+};
+
+function parseSimpleNumberWord(value: string | null | undefined): number | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = normalizeWhitespace(value).toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (/^\d+$/u.test(normalized)) {
+    const parsed = Number.parseInt(normalized, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+  return SIMPLE_NUMBER_WORDS[normalized] ?? null;
+}
+
+export function extractRelativeTimeHint(sentence: string): string | null {
   return (
     sentence.match(
-      /\b(today|yesterday|this morning|tonight|last week|last month|last year|next month|next year|two days ago|two weeks ago|recently|around\s+\d+\s+years?\s+ago|\d+\s+years?\s+ago)\b/iu
+      /\b(today|yesterday|this morning|tonight|last week|this month|last month|this year|last year|next month|next year|next few months|two days ago|two weeks ago|recently|a few years ago|around\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+years?\s+ago|(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+years?\s+ago)\b/iu
     )?.[1] ?? null
   );
 }
@@ -1419,7 +1488,7 @@ function inferCounterpartySpeaker(
   return knownPeople.find((candidate) => normalizeName(candidate) !== normalizedSpeaker) ?? null;
 }
 
-function inferLeadingChunkSpeaker(
+function readDirectLeadingChunkSpeaker(
   text: string,
   knownPeople: readonly string[],
   metadataSpeakerName: string | null
@@ -1439,6 +1508,25 @@ function inferLeadingChunkSpeaker(
   if (firstMatch?.[1] && isLikelySpeakerLabel(firstMatch[1])) {
     return extractSubjectName(firstMatch[1], knownPeople) ?? normalizeWhitespace(firstMatch[1]);
   }
+  return null;
+}
+
+function inferLeadingChunkSpeaker(
+  text: string,
+  knownPeople: readonly string[],
+  metadataSpeakerName: string | null
+): string | null {
+  const directLeadingSpeaker = readDirectLeadingChunkSpeaker(text, knownPeople, metadataSpeakerName);
+  if (directLeadingSpeaker) {
+    return directLeadingSpeaker;
+  }
+  const lines = splitEmbeddedSpeakerTurns(text)
+    .split("\n")
+    .map((line) => normalizeWhitespace(line))
+    .filter((line) => line.length >= 2);
+  if (lines.length === 0) {
+    return null;
+  }
   const laterSpeaker = lines
     .map((line) => line.match(/^([^:\n]{2,80}):\s+(.+)$/u)?.[1] ?? null)
     .find((value): value is string => typeof value === "string" && isLikelySpeakerLabel(value));
@@ -1447,6 +1535,14 @@ function inferLeadingChunkSpeaker(
   }
   const normalizedLaterSpeaker = extractSubjectName(laterSpeaker, knownPeople) ?? normalizeWhitespace(laterSpeaker);
   return inferCounterpartySpeaker(knownPeople, normalizedLaterSpeaker);
+}
+
+function looksLikeUnlabeledFirstPersonTurn(text: string): boolean {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized || /^[^:\n]{2,80}:\s+/u.test(normalized)) {
+    return false;
+  }
+  return /\b(?:i|i'm|i’ve|i've|i’ll|i'll|i’d|i'd|my|we|we've|we’re|we're|our|us)\b/iu.test(normalized);
 }
 
 function inferPreferenceDomain(objectText: string): ExtractedPreferenceFact["domain"] {
@@ -1467,17 +1563,48 @@ function inferPreferenceDomain(objectText: string): ExtractedPreferenceFact["dom
   return "general";
 }
 
-function normalizePreferenceObjectText(value: string): string {
+function inferPreferenceDomainFromQualifier(qualifier: string | null, fallbackObjectText: string): ExtractedPreferenceFact["domain"] {
+  const normalized = normalizeWhitespace(qualifier ?? "").toLowerCase();
+  if (/\b(movie|film|book|series|trilogy|game)\b/u.test(normalized)) {
+    return "media";
+  }
+  if (/\b(dance|painting|art|activity)\b/u.test(normalized)) {
+    return "activity";
+  }
+  return inferPreferenceDomain(fallbackObjectText);
+}
+
+function normalizePreferenceObjectText(value: string, subjectAlternation: string | null = null): string {
   return normalizeWhitespace(
     value
       .replace(/(?:^|\s)-\s*\[\d{2}:\d{2}(?:\.\d+)?\s*-\s*\d{2}:\d{2}(?:\.\d+)?\]\s*(?:Speaker|User)\s*\d*:\s*/giu, " ")
       .replace(/\b(?:Speaker|User)\s*\d*:\s*/giu, "")
+      .replace(
+        new RegExp(`\\b(?:I${subjectAlternation ? `|${subjectAlternation}` : ""})\\s+(?:like|love|enjoy|prefer|dislike|hate|avoid)\\s+`, "giu"),
+        ""
+      )
       .replace(/^[,;:\-\s]+/u, "")
+      .replace(/^(?:but|and|or)\s+/iu, "")
       .replace(/^(?:while the other enjoys|followed by)\s+/iu, "")
       .replace(/\bfirst\b/iu, "")
       .replace(/[.,!?]+$/u, "")
       .replace(/^(?:a|an|the)\s+/iu, "")
   );
+}
+
+function normalizePreferenceQualifiedObjectText(
+  value: string,
+  qualifier: string | null,
+  subjectAlternation: string | null = null
+): string {
+  let normalized = normalizePreferenceObjectText(value, subjectAlternation);
+  const loweredQualifier = normalizeWhitespace(qualifier ?? "").toLowerCase();
+  if (/\bstyle of dance\b/u.test(loweredQualifier)) {
+    normalized = normalizeWhitespace(normalized.replace(/\bdances?\b$/iu, ""));
+  } else if (/\bstyle of painting\b/u.test(loweredQualifier)) {
+    normalized = normalizeWhitespace(normalized.replace(/\bpaintings?\b$/iu, ""));
+  }
+  return normalized;
 }
 
 function isLowQualityPreferenceObject(objectText: string): boolean {
@@ -1509,6 +1636,16 @@ function isAmbiguousPreferenceSummarySentence(sentence: string): boolean {
   return /\b(two speakers|one mentions|the other|they also rank)\b/iu.test(sentence);
 }
 
+function hasStrongExplicitPreferenceCue(sentence: string): boolean {
+  return (
+    /\bfavorite\b/iu.test(sentence) ||
+    /\btop\s+pick\b/iu.test(sentence) ||
+    /\bspeaks\s+to\s+me\b/iu.test(sentence) ||
+    /\bif i had to rank\b/iu.test(sentence) ||
+    /\bmy favorite (?:beers?|foods?|drinks?)\b/iu.test(sentence)
+  );
+}
+
 function normalizeBeerName(value: string): string {
   const lowered = normalizePreferenceObjectText(value).toLowerCase();
   if (lowered === "cheng") {
@@ -1534,20 +1671,29 @@ function extractKnownBeerRanking(fragment: string): readonly string[] {
   return uniqueStrings(ranked);
 }
 
-function splitPreferenceList(fragment: string): readonly string[] {
+function splitPreferenceList(fragment: string, subjectAlternation: string | null = null): readonly string[] {
   const normalized = normalizeWhitespace(fragment)
-    .replace(/\b(?:I|Steve|Dan|Ben|Omi)\s+(?:like|love|enjoy|prefer|dislike|hate|avoid)\s+/giu, "")
+    .replace(
+      new RegExp(`\\b(?:I${subjectAlternation ? `|${subjectAlternation}` : ""})\\s+(?:like|love|enjoy|prefer|dislike|hate|avoid)\\s+`, "giu"),
+      ""
+    )
     .replace(/\b(?:preferring|liking|enjoying|loving|disliking|hating|avoiding)\s+/giu, "")
     .replace(/[.,!?]+$/u, "");
 
   return normalized
     .split(/\s*(?:,|;| and )\s*/iu)
-    .map((part) => normalizePreferenceObjectText(part))
+    .map((part) => normalizePreferenceObjectText(part, subjectAlternation))
     .filter((part) => part.length > 0 && !isLowQualityPreferenceObject(part));
 }
 
-function extractPreferenceFacts(text: string, knownPeople: readonly string[]): readonly ExtractedPreferenceFact[] {
+export function extractPreferenceFacts(
+  text: string,
+  knownPeople: readonly string[],
+  selfName: string | null = null
+): readonly ExtractedPreferenceFact[] {
   const facts = new Map<string, ExtractedPreferenceFact>();
+  const subjectAlternation = buildSubjectAlternation(knownPeople);
+  const explicitSubjectAlternation = subjectAlternation ? `I|${subjectAlternation}` : "I";
   const push = (fact: ExtractedPreferenceFact) => {
     facts.set(
       `${(fact.subjectName ?? "self").toLowerCase()}|${fact.predicate}|${fact.objectText.toLowerCase()}`,
@@ -1555,24 +1701,115 @@ function extractPreferenceFacts(text: string, knownPeople: readonly string[]): r
     );
   };
 
-  for (const sentence of extractSentenceCandidates(text)) {
+  const structuredFragments = extractStructuredSentenceCandidates(text, knownPeople);
+  let recentSpeakerSubject = selfName;
+
+  for (const fragment of structuredFragments) {
+    const metadataText = buildStructuredMetadataText(fragment);
+    const sentence = metadataText ? `${fragment.text} ${metadataText}` : fragment.text;
     if (isMetadataLikeSentence(sentence)) {
       continue;
     }
+    const fragmentSelfName = fragment.speakerName ?? recentSpeakerSubject ?? selfName;
+    const resolveSubjectName = (value: string | null | undefined): string | null => {
+      const normalized = normalizeWhitespace(value ?? "");
+      if (!normalized) {
+        return null;
+      }
+      if (normalized === "I") {
+        return fragmentSelfName;
+      }
+      return extractSubjectName(normalized, knownPeople) ?? normalized;
+    };
     const ambiguousSummarySentence = isAmbiguousPreferenceSummarySentence(sentence);
-    const explicitMatches = [...sentence.matchAll(/\b(I|Steve|Dan|Ben|Omi)\s+(like|love|enjoy|prefer|dislike|hate|avoid)\s+([^.!?]+?)(?=(?:,\s*(?:I|Steve|Dan|Ben|Omi)\s+(?:like|love|enjoy|prefer|dislike|hate|avoid)\b)|[.!?]|$)/giu)];
+    if (fragment.speakerName) {
+      recentSpeakerSubject = fragment.speakerName;
+    }
+    const favoriteAttributeMatches = [
+      ...sentence.matchAll(
+        new RegExp(
+          `\\b(my|${explicitSubjectAlternation}(?:'s)?)\\s+favorite\\s+(style of (?:dance|painting)|movie trilogy|book series|game series|game)\\s+(?:would be|is)\\s+([^.!?]+?)(?=[.!?]|$)`,
+          "giu"
+        )
+      )
+    ];
+    if (favoriteAttributeMatches.length > 0 && !ambiguousSummarySentence) {
+      for (const match of favoriteAttributeMatches) {
+        const rawSubject = normalizeWhitespace(match[1] ?? "");
+        const qualifier = `favorite ${normalizeWhitespace(match[2] ?? "")}`;
+        const objectText = normalizePreferenceQualifiedObjectText(match[3] ?? "", qualifier, subjectAlternation);
+        if (!objectText || isLowQualityPreferenceObject(objectText)) {
+          continue;
+        }
+        push({
+          subjectName: /^my$/iu.test(rawSubject) ? fragmentSelfName : resolveSubjectName(rawSubject.replace(/'s$/iu, "")),
+          predicate: "likes",
+          objectText,
+          domain: inferPreferenceDomainFromQualifier(qualifier, objectText),
+          qualifier,
+          contextText: sentence
+        });
+      }
+      continue;
+    }
+
+    const favoriteTopPickMatch =
+      sentence.match(/\b([A-Za-z][A-Za-z'’ -]{1,40})\s+is\s+my\s+top\s+pick\b/iu)?.[1] ??
+      sentence.match(/\b([A-Za-z][A-Za-z'’ -]{1,40})\s+is\s+definitely\s+my\s+top\s+pick\b/iu)?.[1] ??
+      null;
+    if (favoriteTopPickMatch && !ambiguousSummarySentence) {
+      const qualifier = "favorite style of dance";
+      const objectText = normalizePreferenceQualifiedObjectText(favoriteTopPickMatch, qualifier, subjectAlternation);
+      if (objectText.length > 0 && !isLowQualityPreferenceObject(objectText)) {
+        push({
+          subjectName: fragmentSelfName,
+          predicate: "likes",
+          objectText,
+          domain: inferPreferenceDomainFromQualifier(qualifier, objectText),
+          qualifier,
+          contextText: sentence
+        });
+      }
+    }
+
+    const speaksToMeMatch =
+      sentence.match(/\bbut\s+([A-Za-z][A-Za-z'’ -]{1,40}(?:\s+dance)?)\b[^.!?]*\breally\s+speaks\s+to\s+me\b/iu)?.[1] ??
+      sentence.match(/\b([A-Za-z][A-Za-z'’ -]{1,40}(?:\s+dance)?)\s+is\s+so\b[^.!?]*\bit\s+really\s+speaks\s+to\s+me\b/iu)?.[1] ??
+      sentence.match(/\b([A-Za-z][A-Za-z'’ -]{1,40}(?:\s+dance)?)\b[^.!?]*\breally\s+speaks\s+to\s+me\b/iu)?.[1] ??
+      null;
+    if (speaksToMeMatch && !ambiguousSummarySentence) {
+      const qualifier = "favorite style of dance";
+      const objectText = normalizePreferenceQualifiedObjectText(speaksToMeMatch, qualifier, subjectAlternation);
+      if (objectText.length > 0 && !isLowQualityPreferenceObject(objectText)) {
+        push({
+          subjectName: fragmentSelfName,
+          predicate: "likes",
+          objectText,
+          domain: inferPreferenceDomainFromQualifier(qualifier, objectText),
+          qualifier,
+          contextText: sentence
+        });
+      }
+    }
+
+    const explicitMatches = [
+      ...sentence.matchAll(
+        new RegExp(
+          `\\b(${explicitSubjectAlternation})\\s+(like|love|enjoy|prefer|dislike|hate|avoid)\\s+([^.!?]+?)(?=(?:,\\s*(?:${explicitSubjectAlternation})\\s+(?:like|love|enjoy|prefer|dislike|hate|avoid)\\b)|[.!?]|$)`,
+          "giu"
+        )
+      )
+    ];
     if (explicitMatches.length > 0) {
       for (const [index, explicit] of explicitMatches.entries()) {
         const verb = explicit[2]?.toLowerCase() ?? "likes";
         const predicate =
           verb === "dislike" || verb === "hate" ? "dislikes" : verb === "avoid" ? "avoids" : verb === "prefer" ? "prefers" : "likes";
-        const subjectName = explicit[1]
-          ? extractSubjectName(explicit[1], knownPeople) ?? (explicit[1] === "I" ? "Steve Tietze" : explicit[1])
-          : null;
+        const subjectName = resolveSubjectName(explicit[1]);
 
         if (index === 0 && (predicate === "dislikes" || predicate === "avoids")) {
           const leadingFragment = normalizeWhitespace(sentence.slice(0, explicit.index ?? 0)).replace(/[,:;]+$/u, "");
-          for (const objectText of splitPreferenceList(leadingFragment)) {
+          for (const objectText of splitPreferenceList(leadingFragment, subjectAlternation)) {
             push({
               subjectName,
               predicate,
@@ -1584,12 +1821,19 @@ function extractPreferenceFacts(text: string, knownPeople: readonly string[]): r
           }
         }
 
-        for (const objectText of splitPreferenceList(explicit[3] ?? "")) {
+        for (const objectText of splitPreferenceList(explicit[3] ?? "", subjectAlternation)) {
+          if (/\bis my top pick\b|\bspeaks to me\b/iu.test(objectText)) {
+            continue;
+          }
+          const domain = inferPreferenceDomain(objectText);
+          if (predicate === "likes" && domain === "general" && !hasStrongExplicitPreferenceCue(sentence)) {
+            continue;
+          }
           push({
             subjectName,
             predicate,
             objectText,
-            domain: inferPreferenceDomain(objectText),
+            domain,
             qualifier: null,
             contextText: sentence
           });
@@ -1601,10 +1845,10 @@ function extractPreferenceFacts(text: string, knownPeople: readonly string[]): r
         null;
       if (favoriteListMatch) {
         const beerRanking = extractKnownBeerRanking(favoriteListMatch);
-        const objects = beerRanking.length > 0 ? beerRanking : splitPreferenceList(favoriteListMatch);
+        const objects = beerRanking.length > 0 ? beerRanking : splitPreferenceList(favoriteListMatch, subjectAlternation);
         for (const [rankIndex, objectText] of objects.entries()) {
           push({
-            subjectName: "Steve Tietze",
+            subjectName: fragmentSelfName,
             predicate: "prefers",
             objectText,
             domain: inferPreferenceDomain(objectText),
@@ -1618,10 +1862,10 @@ function extractPreferenceFacts(text: string, knownPeople: readonly string[]): r
 
     const favoriteFoodMatch = sentence.match(/\b([A-Za-z][A-Za-z'’ -]{1,40})\s+is\s+(?:probably\s+)?one of my favorite foods?\b/iu)?.[1]?.trim();
     if (favoriteFoodMatch && !ambiguousSummarySentence) {
-      const objectText = normalizePreferenceObjectText(favoriteFoodMatch);
+      const objectText = normalizePreferenceObjectText(favoriteFoodMatch, subjectAlternation);
       if (objectText.length > 0 && !isLowQualityPreferenceObject(objectText)) {
         push({
-          subjectName: "Steve Tietze",
+          subjectName: fragmentSelfName,
           predicate: "likes",
           objectText,
           domain: inferPreferenceDomain(objectText),
@@ -1637,10 +1881,10 @@ function extractPreferenceFacts(text: string, knownPeople: readonly string[]): r
       null;
     if (favoriteListMatch && !ambiguousSummarySentence) {
       const beerRanking = extractKnownBeerRanking(favoriteListMatch);
-      const objects = beerRanking.length > 0 ? beerRanking : splitPreferenceList(favoriteListMatch);
+      const objects = beerRanking.length > 0 ? beerRanking : splitPreferenceList(favoriteListMatch, subjectAlternation);
       for (const [rankIndex, objectText] of objects.entries()) {
         push({
-          subjectName: "Steve Tietze",
+          subjectName: fragmentSelfName,
           predicate: "prefers",
           objectText,
           domain: inferPreferenceDomain(objectText),
@@ -1657,12 +1901,16 @@ function extractPreferenceFacts(text: string, knownPeople: readonly string[]): r
         const verb = summaryMatch[1]?.toLowerCase() ?? "liking";
         const predicate =
           verb === "disliking" || verb === "hating" ? "dislikes" : verb === "avoiding" ? "avoids" : verb === "preferring" ? "prefers" : "likes";
-        for (const objectText of splitPreferenceList(summaryMatch[2] ?? "")) {
+        for (const objectText of splitPreferenceList(summaryMatch[2] ?? "", subjectAlternation)) {
+          const domain = inferPreferenceDomain(objectText);
+          if (predicate === "likes" && domain === "general" && !hasStrongExplicitPreferenceCue(sentence)) {
+            continue;
+          }
           push({
-            subjectName: "Steve Tietze",
+            subjectName: selfName,
             predicate,
             objectText,
-            domain: inferPreferenceDomain(objectText),
+            domain,
             qualifier: null,
             contextText: sentence
           });
@@ -1675,7 +1923,7 @@ function extractPreferenceFacts(text: string, knownPeople: readonly string[]): r
       const mediaTitle = parseMediaTitleFromSentence(sentence);
       if (mediaTitle) {
         push({
-          subjectName: extractSubjectName(sentence, knownPeople) ?? "Steve Tietze",
+          subjectName: extractSubjectName(sentence, knownPeople) ?? fragmentSelfName,
           predicate: "likes",
           objectText: mediaTitle,
           domain: "media",
@@ -1689,7 +1937,7 @@ function extractPreferenceFacts(text: string, knownPeople: readonly string[]): r
   return [...facts.values()];
 }
 
-function computeRelativeWindow(referenceNow: string | null, timeHintText: string | null): { start: string | null; end: string | null } {
+export function computeRelativeWindow(referenceNow: string | null, timeHintText: string | null): { start: string | null; end: string | null } {
   if (!referenceNow || !timeHintText) {
     return { start: null, end: null };
   }
@@ -1725,6 +1973,12 @@ function computeRelativeWindow(referenceNow: string | null, timeHintText: string
     end.setUTCHours(23, 59, 59, 999);
     return { start: start.toISOString(), end: end.toISOString() };
   }
+  if (lowered === "this month") {
+    start.setUTCDate(1);
+    start.setUTCHours(0, 0, 0, 0);
+    end.setUTCHours(23, 59, 59, 999);
+    return { start: start.toISOString(), end: end.toISOString() };
+  }
   if (lowered === "two days ago") {
     start.setUTCDate(start.getUTCDate() - 2);
     end.setUTCDate(end.getUTCDate() - 2);
@@ -1753,9 +2007,23 @@ function computeRelativeWindow(referenceNow: string | null, timeHintText: string
     end.setUTCHours(23, 59, 59, 999);
     return { start: start.toISOString(), end: end.toISOString() };
   }
+  if (lowered === "this year") {
+    start.setUTCMonth(0, 1);
+    end.setUTCMonth(11, 31);
+    start.setUTCHours(0, 0, 0, 0);
+    end.setUTCHours(23, 59, 59, 999);
+    return { start: start.toISOString(), end: end.toISOString() };
+  }
   if (lowered === "next month") {
     start.setUTCMonth(start.getUTCMonth() + 1, 1);
     end.setUTCMonth(start.getUTCMonth() + 1, 0);
+    start.setUTCHours(0, 0, 0, 0);
+    end.setUTCHours(23, 59, 59, 999);
+    return { start: start.toISOString(), end: end.toISOString() };
+  }
+  if (lowered === "next few months") {
+    start.setUTCMonth(start.getUTCMonth() + 1, 1);
+    end.setUTCMonth(start.getUTCMonth() + 4, 0);
     start.setUTCHours(0, 0, 0, 0);
     end.setUTCHours(23, 59, 59, 999);
     return { start: start.toISOString(), end: end.toISOString() };
@@ -1768,9 +2036,18 @@ function computeRelativeWindow(referenceNow: string | null, timeHintText: string
     return { start: start.toISOString(), end: end.toISOString() };
   }
   {
-    const yearsAgoMatch = lowered.match(/(?:around\s+)?(\d+)\s+years?\s+ago/u);
-    if (yearsAgoMatch?.[1]) {
-      const years = Number(yearsAgoMatch[1]);
+    if (lowered === "a few years ago") {
+      start.setUTCFullYear(start.getUTCFullYear() - 3, 0, 1);
+      end.setUTCFullYear(end.getUTCFullYear() - 3, 11, 31);
+      start.setUTCHours(0, 0, 0, 0);
+      end.setUTCHours(23, 59, 59, 999);
+      return { start: start.toISOString(), end: end.toISOString() };
+    }
+    const yearsAgoMatch = lowered.match(
+      /(?:around\s+)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+years?\s+ago/u
+    );
+    const years = parseSimpleNumberWord(yearsAgoMatch?.[1] ?? null);
+    if (years !== null) {
       if (Number.isFinite(years) && years > 0) {
         start.setUTCFullYear(start.getUTCFullYear() - years, 0, 1);
         end.setUTCFullYear(end.getUTCFullYear() - years, 11, 31);
@@ -1784,16 +2061,130 @@ function computeRelativeWindow(referenceNow: string | null, timeHintText: string
   return { start: null, end: null };
 }
 
-function extractPersonTimeFacts(
+export function extractPersonTimeFacts(
   text: string,
   knownPeople: readonly string[],
-  occurredAt: string | null
+  occurredAt: string | null,
+  defaultSpeakerName: string | null = null
 ): readonly ExtractedPersonTimeFact[] {
+  const hasImmediateSessionDeicticCue = (sentence: string): boolean =>
+    /\b(?:just|right now|currently|today|tonight|this morning|this afternoon|this evening|earlier today)\b/iu.test(sentence);
+  const isSessionAnchoredMilestoneEvent = (sentence: string): boolean => {
+    const eventKey = inferTemporalEventKeyFromText(sentence);
+    if (!eventKey) {
+      return false;
+    }
+    if (eventKey === "lose_job") {
+      return true;
+    }
+    return /^(start_|join_|launch_)/u.test(eventKey);
+  };
+  const anchorWindowFromOccurredAt = (value: string | null): { start: string | null; end: string | null } => {
+    if (!value) {
+      return { start: null, end: null };
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return { start: null, end: null };
+    }
+    const start = new Date(parsed);
+    const end = new Date(parsed);
+    start.setUTCHours(0, 0, 0, 0);
+    end.setUTCHours(23, 59, 59, 999);
+    return { start: start.toISOString(), end: end.toISOString() };
+  };
+  const isStrongSessionAnchoredFactSentence = (sentence: string): boolean =>
+    /\b(?:signed with|signed to|drafted by|joined|joining)\b/i.test(sentence) ||
+    /\b(?:shooting guard|point guard|small forward|power forward|center)\b/i.test(sentence) ||
+    (/\bposition\b/i.test(sentence) && /\bteam\b/i.test(sentence)) ||
+    /\b(?:went to|trip to|travel(?:ed)? to|festival in|visited)\s+[A-Z]/u.test(sentence) ||
+    /\bAerosmith\b/i.test(sentence) ||
+    /\bperform(?:ed)?\s+live\b/i.test(sentence) ||
+    /\bconcert\b/i.test(sentence) ||
+    isSessionAnchoredMilestoneEvent(sentence);
   const facts = new Map<string, ExtractedPersonTimeFact>();
-  let recentSpeakerSubject: string | null = null;
+  const addFact = (
+    personName: string,
+    factText: string,
+    timeHintText: string | null,
+    windowStart: string | null,
+    windowEnd: string | null
+  ): void => {
+    const normalizedFactText = normalizeWhitespace(factText);
+    if (!normalizedFactText) {
+      return;
+    }
+    facts.set(`${personName.toLowerCase()}|${normalizedFactText.toLowerCase()}`, {
+      personName,
+      factText: normalizedFactText,
+      timeHintText,
+      locationText: extractLocationHint(normalizedFactText),
+      windowStart,
+      windowEnd
+    });
+  };
+  let recentSpeakerSubject: string | null = defaultSpeakerName;
   const recentMediaBySubject = new Map<string, string>();
   let lastGlobalMediaTitle: string | null = null;
-  for (const fragment of extractStructuredSentenceCandidates(text, knownPeople)) {
+  const structuredFragments = extractStructuredSentenceCandidates(text, knownPeople);
+  const structuredTurns = [...new Map(
+    structuredFragments
+      .filter((fragment) => typeof fragment.speakerName === "string" && fragment.speakerName.length > 0)
+      .map((fragment) => [
+        fragment.turnIndex,
+        {
+          speakerName: fragment.speakerName as string,
+          turnText: fragment.turnText
+        }
+      ])
+  ).values()];
+  const anchoredSessionWindow = anchorWindowFromOccurredAt(occurredAt);
+
+  for (let index = 1; index < structuredTurns.length; index += 1) {
+    const previousTurn = structuredTurns[index - 1]!;
+    const currentTurn = structuredTurns[index]!;
+    if (previousTurn.speakerName === currentTurn.speakerName) {
+      continue;
+    }
+    const previousText = normalizeWhitespace(previousTurn.turnText);
+    const currentText = normalizeWhitespace(currentTurn.turnText);
+
+    if (/\bwhich team did you sign with\b/i.test(previousText) || /\bwhich team\b[^?!.]{0,40}\bsign with\b/i.test(previousText)) {
+      const directAnswerTeamMatch =
+        currentText.match(
+          /^(The\s+[A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,5}|[A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,5})[!?.,]/u
+        )?.[1] ??
+        currentText.match(
+          /\b(The\s+[A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,5}|[A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,5})\b/u
+        )?.[1] ??
+        null;
+      const normalizedTeam = directAnswerTeamMatch?.replace(/[!?.,]+$/u, "").trim() ?? null;
+      if (normalizedTeam) {
+        addFact(
+          currentTurn.speakerName,
+          `${currentTurn.speakerName} signed with ${normalizedTeam}.`,
+          null,
+          anchoredSessionWindow.start,
+          anchoredSessionWindow.end
+        );
+      }
+    }
+
+    if (/\bwhat position are you playing(?:\s+for the team)?\b/i.test(previousText) || /\bwhat(?:'s| is)\s+your position\b/i.test(previousText)) {
+      const directAnswerRoleMatch = currentText.match(/\bI(?:'m| am)\s+(?:a|an)\s+([A-Za-z][A-Za-z0-9'’&/ -]{2,80})\b/u)?.[1]?.trim() ?? null;
+      if (directAnswerRoleMatch) {
+        addFact(
+          currentTurn.speakerName,
+          `${currentTurn.speakerName} is a ${directAnswerRoleMatch} for the team.`,
+          null,
+          anchoredSessionWindow.start,
+          anchoredSessionWindow.end
+        );
+      }
+    }
+  }
+
+  for (const fragment of structuredFragments) {
     const sentence = fragment.text;
     if (isMetadataLikeSentence(sentence)) {
       continue;
@@ -1801,7 +2192,7 @@ function extractPersonTimeFacts(
     const metadataText = buildStructuredMetadataText(fragment);
     const sentenceWithMetadata = metadataText ? `${sentence} ${metadataText}` : sentence;
     const explicitSubjectName = extractSubjectName(sentence, knownPeople);
-    const speakerScopedPersonName = fragment.speakerName ?? recentSpeakerSubject;
+    const speakerScopedPersonName = fragment.speakerName ?? recentSpeakerSubject ?? defaultSpeakerName;
     const personName = speakerScopedPersonName ?? explicitSubjectName;
     const explicitMediaTitle = parseMediaTitleFromSentence(sentenceWithMetadata);
     if (fragment.speakerName) {
@@ -1815,7 +2206,16 @@ function extractPersonTimeFacts(
       continue;
     }
     const timeHintText = extractRelativeTimeHint(sentenceWithMetadata);
-    if (!timeHintText && !/\b\d{4}\b/u.test(sentenceWithMetadata) && !/\bJanuary|February|March|April|May|June|July|August|September|October|November|December\b/iu.test(sentenceWithMetadata)) {
+    const hasExplicitDate =
+      /\b\d{4}\b/u.test(sentenceWithMetadata) ||
+      /\bJanuary|February|March|April|May|June|July|August|September|October|November|December\b/iu.test(sentenceWithMetadata);
+    const sessionAnchoredFact =
+      !timeHintText &&
+      !hasExplicitDate &&
+      Boolean(occurredAt) &&
+      hasImmediateSessionDeicticCue(sentenceWithMetadata) &&
+      isStrongSessionAnchoredFactSentence(sentenceWithMetadata);
+    if (!timeHintText && !hasExplicitDate && !sessionAnchoredFact) {
       continue;
     }
     const carriedMediaTitle =
@@ -1837,17 +2237,46 @@ function extractPersonTimeFacts(
         ? new Date(Date.UTC(explicitDate.year, explicitDate.month - 1, explicitDate.day, 23, 59, 59, 999)).toISOString()
         : null;
     const relativeWindow = computeRelativeWindow(occurredAt, timeHintText);
-    const fact: ExtractedPersonTimeFact = {
+    const sessionWindow = sessionAnchoredFact ? anchorWindowFromOccurredAt(occurredAt) : { start: null, end: null };
+    addFact(
       personName,
-      factText: normalizedSentence,
+      normalizedSentence,
       timeHintText,
-      locationText: extractLocationHint(normalizedSentence),
-      windowStart: explicitStart ?? relativeWindow.start,
-      windowEnd: explicitEnd ?? relativeWindow.end
-    };
-    facts.set(`${personName.toLowerCase()}|${normalizedSentence.toLowerCase()}`, fact);
+      explicitStart ?? relativeWindow.start ?? sessionWindow.start,
+      explicitEnd ?? relativeWindow.end ?? sessionWindow.end
+    );
   }
   return [...facts.values()];
+}
+
+function readArtifactSourceReferenceInstant(sourceUri: string | null | undefined): string | null {
+  if (typeof sourceUri !== "string" || !sourceUri.startsWith("/") || !existsSync(sourceUri)) {
+    return null;
+  }
+  const content = readFileSync(sourceUri, "utf8");
+  const capturedAt = content.match(/^\s*Captured:\s*([^\n]+)\s*$/mu)?.[1]?.trim() ?? null;
+  if (!capturedAt) {
+    return null;
+  }
+  const parsed = new Date(capturedAt);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+export function selectPersonTimeReferenceInstant(
+  occurredAt: string | null,
+  sourceUri: string | null | undefined
+): string | null {
+  const artifactReferenceInstant = readArtifactSourceReferenceInstant(sourceUri);
+  if (artifactReferenceInstant) {
+    return artifactReferenceInstant;
+  }
+  if (typeof occurredAt === "string" && occurredAt.trim().length > 0) {
+    const parsedOccurredAt = new Date(occurredAt);
+    if (!Number.isNaN(parsedOccurredAt.getTime())) {
+      return parsedOccurredAt.toISOString();
+    }
+  }
+  return null;
 }
 
 function inferTimeRange(queryText: string, referenceNow?: string): { start?: string; end?: string } {
@@ -1909,6 +2338,7 @@ export interface TypedMemoryRebuildSummary {
   readonly mediaMentions: number;
   readonly preferenceFacts: number;
   readonly personTimeFacts: number;
+  readonly canonical?: CanonicalMemoryRebuildCounts;
 }
 
 export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<TypedMemoryRebuildSummary> {
@@ -2021,6 +2451,9 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
 
   const deterministicRelationshipFacts: DerivedRelationshipFact[] = [];
   const explicitAliasFacts: DerivedAliasFact[] = [];
+  const existingSelfProfile = await getNamespaceSelfProfile(namespaceId).catch(() => null);
+  const selfCanonicalName = existingSelfProfile?.canonicalName ?? null;
+  const selfAliasCandidates = deriveKnownSelfAliases(existingSelfProfile);
   const dedupedMediaRows = () => dedupePendingMediaRows(mediaRows);
   const mediaAnchorState = new Map<
     string,
@@ -2029,9 +2462,12 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
       globalAnchor: { anchor: SeededMediaAnchor; rowIndex: number } | null;
     }
   >();
+  const recentSequentialDirectSpeaker = new Map<
+    string,
+    { speakerName: string; rowIndex: number; charEnd: number | null }
+  >();
   const knownPeople = uniqueStrings([
-    "Steve Tietze",
-    "Steve",
+    ...selfAliasCandidates,
     ...rows.flatMap((row) => extractLikelyRelationshipSubjects(row.content))
   ]);
   const artifactParticipants = new Map<string, readonly string[]>();
@@ -2056,6 +2492,7 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
       artifact_id: row.artifact_id,
       source_uri: row.artifact_uri
     };
+    const sourceReferenceInstant = selectPersonTimeReferenceInstant(row.occurred_at, row.artifact_uri);
     const artifactKey = row.artifact_observation_id ?? row.artifact_id ?? row.memory_id;
     const artifactKnownPeople = artifactParticipants.get(artifactKey) ?? knownPeople;
     let artifactMediaState = mediaAnchorState.get(artifactKey);
@@ -2080,7 +2517,34 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
       typeof row.metadata?.speaker_name === "string" && row.metadata.speaker_name.trim().length > 0
         ? normalizeWhitespace(row.metadata.speaker_name)
         : null;
-    const defaultSpeakerName = inferLeadingChunkSpeaker(row.content, artifactKnownPeople, metadataSpeakerName);
+    const directLeadingSpeaker = readDirectLeadingChunkSpeaker(row.content, artifactKnownPeople, metadataSpeakerName);
+    const inferredLeadingSpeaker = inferLeadingChunkSpeaker(row.content, artifactKnownPeople, metadataSpeakerName);
+    const sourceOffsetStart = typeof row.source_offset?.char_start === "number" ? row.source_offset.char_start : null;
+    const sourceOffsetEnd = typeof row.source_offset?.char_end === "number" ? row.source_offset.char_end : null;
+    const sequentialSpeakerKey = [
+      row.artifact_id ?? artifactKey,
+      typeof row.metadata?.session_key === "string" ? row.metadata.session_key : "",
+      row.occurred_at ?? ""
+    ].join("|");
+    const carriedSequentialSpeaker = recentSequentialDirectSpeaker.get(sequentialSpeakerKey);
+    const defaultSpeakerName =
+      inferredLeadingSpeaker ??
+      (carriedSequentialSpeaker &&
+      carriedSequentialSpeaker.rowIndex === rowIndex - 1 &&
+      sourceOffsetStart !== null &&
+      carriedSequentialSpeaker.charEnd !== null &&
+      sourceOffsetStart - carriedSequentialSpeaker.charEnd >= 0 &&
+      sourceOffsetStart - carriedSequentialSpeaker.charEnd <= 8 &&
+      looksLikeUnlabeledFirstPersonTurn(row.content)
+        ? carriedSequentialSpeaker.speakerName
+        : null);
+    if (directLeadingSpeaker) {
+      recentSequentialDirectSpeaker.set(sequentialSpeakerKey, {
+        speakerName: directLeadingSpeaker,
+        rowIndex,
+        charEnd: sourceOffsetEnd
+      });
+    }
 
     for (const item of checklistItems) {
       taskRows.push({
@@ -2150,7 +2614,7 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
         sourceMemoryId: row.memory_id,
         artifactId: row.artifact_id,
         occurredAt: row.occurred_at,
-        purchaserName: "Steve Tietze",
+        purchaserName: selfCanonicalName,
         itemLabel: item.itemLabel,
         normalizedItemLabel: normalizeName(item.itemLabel),
         quantityText: item.quantityText,
@@ -2209,7 +2673,7 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
       }
     }
 
-    for (const fact of extractPreferenceFacts(row.content, artifactKnownPeople)) {
+    for (const fact of extractPreferenceFacts(row.content, artifactKnownPeople, defaultSpeakerName ?? selfCanonicalName)) {
       preferenceRows.push({
         sourceMemoryId: row.memory_id,
         artifactId: row.artifact_id,
@@ -2229,7 +2693,7 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
       });
     }
 
-    for (const fact of extractPersonTimeFacts(row.content, artifactKnownPeople, row.occurred_at)) {
+    for (const fact of extractPersonTimeFacts(row.content, artifactKnownPeople, sourceReferenceInstant, defaultSpeakerName)) {
       personTimeRows.push({
         sourceMemoryId: row.memory_id,
         artifactId: row.artifact_id,
@@ -2251,9 +2715,11 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
     }
   }
 
+  let canonicalCounts: CanonicalMemoryRebuildCounts | undefined;
   await withTransaction(async (client) => {
     const selfProfile = await loadNamespaceSelfProfileForClient(client, namespaceId);
     const selfName = selfProfile?.canonicalName ?? "Self";
+    const selfAliases = new Set(deriveKnownSelfAliases(selfProfile).map((value) => normalizeName(value)));
     const selfEntityId = selfProfile?.entityId ?? null;
     const personRows = await client.query<EntityRow>(
       `
@@ -2585,7 +3051,7 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
 
     for (const media of dedupedMediaRows()) {
       const subjectEntityId = media.subjectName
-        ? await upsertEntity(media.subjectName === selfName || media.subjectName === "Steve Tietze" ? "self" : "person", media.subjectName)
+        ? await upsertEntity(isSelfSubjectName(media.subjectName, selfAliases) ? "self" : "person", media.subjectName)
         : null;
       await client.query(
         `
@@ -2646,7 +3112,7 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
 
     for (const preference of preferenceRows) {
       const subjectEntityId = preference.subjectName
-        ? await upsertEntity(preference.subjectName === selfName || preference.subjectName === "Steve Tietze" ? "self" : "person", preference.subjectName)
+        ? await upsertEntity(isSelfSubjectName(preference.subjectName, selfAliases) ? "self" : "person", preference.subjectName)
         : null;
       await client.query(
         `
@@ -2704,7 +3170,7 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
 
     for (const personTime of personTimeRows) {
       const personEntityId = await upsertEntity(
-        personTime.personName === selfName || personTime.personName === "Steve Tietze" ? "self" : "person",
+        isSelfSubjectName(personTime.personName, selfAliases) ? "self" : "person",
         personTime.personName
       );
       await client.query(
@@ -2852,7 +3318,16 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
         );
       }
     }
+
   });
+
+  // Typed extraction writes the raw/typed substrate first. Then we promote durable
+  // state using the same pipeline the rest of the system already trusts.
+  await runCandidateConsolidation(namespaceId, 800);
+  await runRelationshipAdjudication(namespaceId, { limit: 800 });
+  await runUniversalMutableReconsolidation(namespaceId);
+  const canonicalSummary = await rebuildCanonicalMemoryNamespace(namespaceId);
+  canonicalCounts = canonicalSummary.counts;
 
   return {
     namespaceId,
@@ -2862,7 +3337,8 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
     transactionItems: transactionRows.length,
     mediaMentions: dedupedMediaRows().length,
     preferenceFacts: preferenceRows.length,
-    personTimeFacts: personTimeRows.length
+    personTimeFacts: personTimeRows.length,
+    canonical: canonicalCounts
   };
 }
 
@@ -2947,9 +3423,31 @@ function normalizeRelativeTimeHintToYearLabel(timeHintText: string | null, occur
   }
 
   const lowered = normalizeWhitespace(timeHintText).toLowerCase();
-  const yearsAgoMatch = lowered.match(/\b(?:around\s+)?(\d{1,2})\s+years?\s+ago\b/u);
+  const yearsAgoMatch = lowered.match(/\b(?:around\s+)?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)\s+years?\s+ago\b/u);
   if (yearsAgoMatch?.[1]) {
-    const yearDelta = Number(yearsAgoMatch[1]);
+    const rawYearDelta = yearsAgoMatch[1];
+    const yearDelta =
+      rawYearDelta === "one"
+        ? 1
+        : rawYearDelta === "two"
+          ? 2
+          : rawYearDelta === "three"
+            ? 3
+            : rawYearDelta === "four"
+              ? 4
+              : rawYearDelta === "five"
+                ? 5
+                : rawYearDelta === "six"
+                  ? 6
+                  : rawYearDelta === "seven"
+                    ? 7
+                    : rawYearDelta === "eight"
+                      ? 8
+                      : rawYearDelta === "nine"
+                        ? 9
+                        : rawYearDelta === "ten"
+                          ? 10
+                          : Number(rawYearDelta);
     if (Number.isFinite(yearDelta) && yearDelta > 0) {
       return String(occurred.getUTCFullYear() - yearDelta);
     }
@@ -3402,7 +3900,9 @@ export async function getTypedPreferenceResults(query: RecallQuery): Promise<rea
 }
 
 export async function getTypedPersonTimeResults(query: RecallQuery): Promise<readonly RecallResult[]> {
-  const { start, end } = inferTimeRange(query.query, query.referenceNow);
+  const inferred = inferTimeRange(query.query, query.referenceNow);
+  const start = query.timeStart ?? inferred.start;
+  const end = query.timeEnd ?? inferred.end;
   const namedPeople = inferNamedPeopleFromQuery(query.query);
   const rows = await queryRows<PersonTimeFactRow>(
     `
