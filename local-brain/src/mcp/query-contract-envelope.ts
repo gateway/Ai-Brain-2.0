@@ -1,6 +1,7 @@
 import { queryCatalogEntryForContract } from "../retrieval/query-catalog-v1.js";
 import { inferQueryContract } from "../retrieval/query-contract-router.js";
 import { persistQueryReviewUnknownCandidate } from "../retrieval/query-review-backlog.js";
+import { buildOperatorActionPrompt } from "./operator-action-prompt.js";
 
 type QueryToolName = "memory.search" | "memory.recap" | "memory.extract_tasks" | "memory.extract_calendar";
 type ClaimFamily =
@@ -704,6 +705,13 @@ export async function attachStableQueryContractEnvelope(params: {
   const sourceMemoryIds = uniqueStrings(sourceTrail.flatMap((item) => normalizeArray(item.sourceMemoryIds)));
   const sourceChunkIds = uniqueStrings(sourceTrail.flatMap((item) => normalizeArray(item.sourceChunkIds)));
   const sourceSceneIds = uniqueStrings(sourceTrail.flatMap((item) => normalizeArray(item.sourceSceneIds)));
+  const operatorActionPrompt = buildOperatorActionPrompt({
+    queryText: params.queryText,
+    evidenceCount,
+    abstentionReason,
+    sourceAuditTarget: meta.memoryQueryPlanSourceAuditTarget,
+    privacyBlocked: params.payload?.sourcePrivacy?.blocked === true
+  });
 
   const shouldRecordReviewUnknown = queryContractName === "review_only" || retrievalDomain === "review_unknown";
   let recordedReviewUnknown = false;
@@ -743,6 +751,7 @@ export async function attachStableQueryContractEnvelope(params: {
     followUpAction,
     abstentionReason,
     blockedFallbacks,
+    operatorActionPrompt,
     reviewUnknown: {
       shouldRecord: shouldRecordReviewUnknown,
       recorded: recordedReviewUnknown,

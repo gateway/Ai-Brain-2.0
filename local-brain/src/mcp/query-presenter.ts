@@ -66,7 +66,9 @@ function isSourceAuditQuestion(query: string, payload: any): boolean {
   const normalized = query.toLowerCase();
   return (
     payload?.queryContract === "source_audit" ||
-    /\b(?:where did|where was|sources?|evidence|come from|came from|provenance|why do you think|why does)\b/u.test(normalized)
+    /\b(?:where did|where was).{0,80}\b(?:come from|source|evidence)\b/u.test(normalized) ||
+    /\b(?:show|list).{0,40}\bsources?\b/u.test(normalized) ||
+    /\b(?:source trail|provenance|evidence for|came from|come from|why do you think|why does)\b/u.test(normalized)
   );
 }
 

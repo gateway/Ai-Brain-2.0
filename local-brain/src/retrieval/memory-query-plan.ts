@@ -199,7 +199,7 @@ function extractProjects(queryText: string): readonly string[] {
 function detectSourceScope(queryText: string): MemoryQueryPlanSourceScope {
   if (/\b(?:most\s+recent|latest|last)\s+(?:omi\s+)?note\b/iu.test(queryText)) return "latest_omi_note";
   if (/\brecent\b[\s\S]{0,80}\bnotes?\b/iu.test(queryText)) return "recent_notes";
-  if (/\b(?:source|sources|evidence|where\s+did\s+(?:that|the)?(?:\s+answer)?\s*come\s+from|come\s+from|audit)\b/iu.test(queryText)) return "source_audit_target";
+  if (isSourceAuditQuery(queryText)) return "source_audit_target";
   return "none";
 }
 
@@ -287,8 +287,15 @@ function detectTimeWindow(queryText: string): MemoryQueryPlanTimeWindow | null {
   return null;
 }
 
+function isSourceAuditQuery(queryText: string): boolean {
+  return (
+    /\b(?:where\s+did\s+(?:that|the)?(?:\s+answer)?\s*come\s+from|come\s+from|came\s+from|provenance|show\s+(?:me\s+)?(?:the\s+)?sources?|list\s+(?:the\s+)?sources?|source\s+trail|evidence\s+for|audit\s+that\s+answer)\b/iu.test(queryText) ||
+    /\b(?:sources|evidence)\b[\s\S]{0,60}\b(?:answer|claim|section|where|came|from)\b/iu.test(queryText)
+  );
+}
+
 function detectSourceAuditTarget(queryText: string, people: readonly string[], places: readonly string[], projects: readonly string[]): MemoryQueryPlanSourceAuditTarget | null {
-  if (!/\b(?:source|sources|evidence|where\s+did\s+(?:that|the)?(?:\s+answer)?\s*come\s+from|come\s+from|audit)\b/iu.test(queryText)) {
+  if (!isSourceAuditQuery(queryText)) {
     return null;
   }
   let family: MemoryQueryPlanSourceAuditTarget["family"] = "unknown";

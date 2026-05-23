@@ -444,6 +444,8 @@ export async function readPackageProcedureCorpus(params: {
   if (!projection) return null;
   const targetScript = /mcp\s+query\s+taxonomy\s+gold|mcp-query-taxonomy-gold/iu.test(params.queryText)
     ? "benchmark:mcp-query-taxonomy-gold"
+    : /source[-\s]+audit\s+cross[-\s]+family|source-audit-cross-family/iu.test(params.queryText)
+    ? "benchmark:source-audit-cross-family-pack"
     : /production\s+readiness|production-readiness/iu.test(params.queryText)
     ? "benchmark:production-readiness"
     : /reset\s+a?\s*namespace|namespace\s+reset|namespace:reset/iu.test(params.queryText)

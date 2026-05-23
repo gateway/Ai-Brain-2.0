@@ -6464,7 +6464,8 @@ function isHabitConstraintQueryText(queryText: string): boolean {
   return (
     /\bwhat\s+(?:habits?\s+or\s+constraints?|constraints?\s+or\s+habits?)\b/i.test(queryText) ||
     /\bwhat\s+habits?\s+matter\s+right\s+now\b/i.test(queryText) ||
-    /\bwhat\s+constraints?\s+matter\s+right\s+now\b/i.test(queryText)
+    /\bwhat\s+constraints?\s+matter\s+right\s+now\b/i.test(queryText) ||
+    /\b(?:can|should|could)\s+i\s+(?:have|eat|drink)\b[\s\S]{0,80}\b(?:now|current|constraint|dinner|lunch|breakfast)\b/i.test(queryText)
   );
 }
 
@@ -28484,7 +28485,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         return preferredProfileRouteResponse;
       }
     }
-    if (queryContract.contractName !== "source_audit") {
+    if (queryContract.contractName !== "source_audit" && !isHabitConstraintQueryText(queryText)) {
       const aliasCurrentStateProjectionResponse = await buildAliasCurrentStateProjectionResponse(query, queryText, limit, queryContract); if (aliasCurrentStateProjectionResponse) return aliasCurrentStateProjectionResponse; const recapProfileProjectionResponse = await buildRecapProfileProjectionResponse(query, queryText, limit, queryContract); if (recapProfileProjectionResponse) return recapProfileProjectionResponse;
       const continuityProjectionResponse = await buildContinuityCurrentStateProjectionResponse(query, queryText, limit, queryContract);
       if (continuityProjectionResponse) {
@@ -36211,7 +36212,10 @@ export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtracti
       };
     }
   }
-  if (taskScopeMode === "source_scope" || memoryPlan.taskScope === "travel") {
+  if (
+    (taskScopeMode === "source_scope" && /\b(?:most\s+recent|latest|last)\s+(?:omi\s+)?note\b/iu.test(query.query)) ||
+    memoryPlan.taskScope === "travel"
+  ) {
     const typedTasks = await getTypedTaskItems(query);
     const typedTaskResults = typedTasks.length > 0 ? await getTypedTaskResults(query) : [];
     const scopedTasks = memoryPlan.taskScope === "travel" ? filterTravelTaskItems(typedTasks) : typedTasks;
@@ -36249,6 +36253,49 @@ export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtracti
           ...memoryQueryPlanTelemetry(memoryPlan)
         },
         tasks: scopedTasks.slice(0, 12)
+      };
+    }
+  }
+  if (
+    memoryPlan.intent === "task_list" &&
+    memoryPlan.taskScope !== "none" &&
+    !/\b(?:query\s+contract|this\s+note|action\s+items?)\b/iu.test(query.query)
+  ) {
+    const typedTasks = await getTypedTaskItems(query);
+    const typedTaskResults = typedTasks.length > 0 ? await getTypedTaskResults(query) : [];
+    if (typedTasks.length > 0 && typedTaskResults.length > 0) {
+      const resolvedWindow = resolveRecapWindow(query);
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "task_extraction",
+        resolvedWindow,
+        focus: buildRecapFocus(query),
+        confidence: "confident",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: buildEvidenceBundle(typedTaskResults),
+        retrievalPlan: {
+          intent: "task_extraction",
+          probes: [query.query],
+          groupedBy: "result_order",
+          queryDecompositionApplied: false,
+          queryDecompositionSubqueries: [],
+          scopeMode: "lifecycle_scope",
+          sourceConstraintUri: undefined,
+          usedEventWindow: Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd),
+          usedCapturedAtOnly: false,
+          ...buildSingleStageLatencyMeta({
+            stageName: "typed_task_extraction_general_fast_path",
+            startedAt: extractionStartedAt,
+            candidateCount: typedTasks.length,
+            rowsScanned: typedTaskResults.length,
+            earlyStopReason: "typed_task_support_selected_before_recap_pipeline",
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        tasks: typedTasks.slice(0, 12)
       };
     }
   }
