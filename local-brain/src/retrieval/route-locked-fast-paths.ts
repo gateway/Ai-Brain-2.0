@@ -4855,7 +4855,8 @@ async function buildDocumentLookupDirectResponse(params: {
     seedPattern: topicPattern,
     topicPattern,
     tier: params.queryContract.contractName === "procedure_lookup" ? "procedure_projection" : "document_section_projection",
-    limit: Math.max(params.limit, 4),
+    limit: Math.max(params.limit, requestedDocumentSourceExtensions(params.queryText).length > 1 ? 12 : 4),
+    seedArtifactLimit: requestedDocumentSourceExtensions(params.queryText).length > 1 ? 12 : undefined,
     queryEmbedding: queryEmbeddingResult.embedding
   });
   const requestedExtensions = requestedDocumentSourceExtensions(params.queryText);

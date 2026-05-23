@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { PoolClient } from "pg";
 import type { ArtifactRecord, SourceType } from "../types.js";
+import { sidecarDocumentExtractionProvider } from "./document-extraction.js";
 
 export interface ArtifactObservation {
   readonly artifactId: string;
@@ -76,7 +77,12 @@ function isTextLike(sourceType: SourceType, mimeType: string, uri: string): bool
   return [".md", ".markdown", ".txt", ".json"].includes(ext);
 }
 
-async function readPdfTextProxy(absolutePath: string, metadata?: Record<string, unknown>): Promise<string | null> {
+async function readExtractedTextProxy(absolutePath: string, metadata?: Record<string, unknown>): Promise<string | null> {
+  const providerResult = await sidecarDocumentExtractionProvider.extract({ absolutePath, metadata });
+  if (providerResult?.extractedText) {
+    return providerResult.extractedText;
+  }
+
   const inline = metadata?.extracted_text;
   if (typeof inline === "string" && inline.trim().length > 0) {
     return inline;
@@ -147,10 +153,10 @@ export async function registerArtifactObservation(
   const [buffer, fileStats] = await Promise.all([readFile(absolutePath), stat(absolutePath)]);
   const checksumSha256 = sha256(buffer);
   const textLike = isTextLike(options.sourceType, mimeType, absolutePath);
-  const pdfTextProxy = options.sourceType === "pdf" ? await readPdfTextProxy(absolutePath, options.metadata) : null;
+  const extractedTextProxy = textLike ? null : await readExtractedTextProxy(absolutePath, options.metadata);
   const source = {
-    textContent: textLike ? buffer.toString("utf8") : pdfTextProxy ?? "",
-    hasTextContent: textLike || Boolean(pdfTextProxy),
+    textContent: textLike ? buffer.toString("utf8") : extractedTextProxy ?? "",
+    hasTextContent: textLike || Boolean(extractedTextProxy),
     uri: absolutePath,
     byteSize: fileStats.size,
     modifiedAt: fileStats.mtime.toISOString(),
