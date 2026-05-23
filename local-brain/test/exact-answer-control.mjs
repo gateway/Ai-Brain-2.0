@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { deriveExactAnswerCandidate } from "../dist/retrieval/exact-answer-control.js";
+import {
+  getExactDetailFamilySpec,
+  inferExactDetailQuestionFamily,
+  isAggressiveExactDetailCutoverFamily
+} from "../dist/retrieval/exact-detail-question-family.js";
+import { extractRecallResultSubjectSignals } from "../dist/retrieval/recall-content.js";
 
 function makeResult({
   memoryId,
@@ -129,6 +135,26 @@ test("favorite movie prefers favorite-cue sentence over generic mention", () => 
   });
 
   assert.equal(result.candidate?.text, "Inception");
+});
+
+test("aggressive exact-detail cutover families expose deterministic reader specs", () => {
+  const petNameFamily = inferExactDetailQuestionFamily("What is the name of my cat?");
+  const speedFamily = inferExactDetailQuestionFamily("What speed is my internet plan?");
+  const certificationFamily = inferExactDetailQuestionFamily("What certification did I complete last month?");
+  const venueFamily = inferExactDetailQuestionFamily("Where did I attend for my study abroad program?");
+
+  assert.equal(petNameFamily, "pet_name");
+  assert.equal(speedFamily, "speed");
+  assert.equal(certificationFamily, "certification");
+  assert.equal(venueFamily, "venue");
+  assert.equal(isAggressiveExactDetailCutoverFamily(petNameFamily), true);
+  assert.equal(isAggressiveExactDetailCutoverFamily(speedFamily), true);
+  assert.equal(getExactDetailFamilySpec(petNameFamily)?.queryFamily, "exact_detail");
+  assert.equal(getExactDetailFamilySpec(speedFamily)?.queryFamily, "current_state");
+  assert.equal(getExactDetailFamilySpec(speedFamily)?.readerPriority, "current_state_first");
+  assert.equal(getExactDetailFamilySpec(certificationFamily)?.readerPriority, "event_first");
+  assert.equal(getExactDetailFamilySpec(venueFamily)?.selfOwned, true);
+  assert.ok((getExactDetailFamilySpec(venueFamily)?.eventPredicateFamilies ?? []).length > 0);
 });
 
 test("hobbies only extracts from hobby-bearing cues", () => {
@@ -556,6 +582,60 @@ test("bands aggregate multiple listened-to acts from strong windows", () => {
 
   assert.match(result.candidate?.text ?? "", /Aerosmith/i);
   assert.match(result.candidate?.text ?? "", /The Fireworks/i);
+});
+
+test("favorite-band queries classify to favorite_band before broad bands history", () => {
+  assert.equal(
+    inferExactDetailQuestionFamily("Which band was Dave's favorite at the music festival in April 2023?"),
+    "favorite_band"
+  );
+});
+
+test("bands aggregate favorite and headliner evidence across separate rows", () => {
+  const result = runExactAnswer({
+    queryText: "Which bands has Dave enjoyed listening to?",
+    family: "bands",
+    results: [
+      makeResult({
+        memoryId: "b2",
+        content: "Dave: If I had to pick a favorite, it would definitely be Aerosmith.",
+        subjectName: "Dave",
+        speakerName: "Dave",
+        participantNames: ["Dave"],
+        derivationType: "participant_turn"
+      }),
+      makeResult({
+        memoryId: "b3",
+        content: "Dave: The Fireworks headlined the festival.",
+        subjectName: "Dave",
+        speakerName: "Dave",
+        participantNames: ["Dave"],
+        derivationType: "participant_turn"
+      })
+    ],
+    extractValues: (text) => {
+      const values = [];
+      if (/Aerosmith/i.test(text)) values.push("Aerosmith");
+      if (/The Fireworks/i.test(text)) values.push("The Fireworks");
+      return values;
+    }
+  });
+
+  assert.match(result.candidate?.text ?? "", /Aerosmith/i);
+  assert.match(result.candidate?.text ?? "", /The Fireworks/i);
+});
+
+test("subject signal extraction prefers inline speaker names over interrogative prompts", () => {
+  const signals = extractRecallResultSubjectSignals(makeResult({
+    memoryId: "subject-inline",
+    content: "Who was the headliner? Dave: The Fireworks headlined the festival.",
+    subjectName: null,
+    speakerName: null,
+    participantNames: []
+  }));
+
+  assert.ok(signals.includes("dave"));
+  assert.ok(!signals.includes("who"));
 });
 
 test("owned pets returns the supported species instead of falling through to generic snippets", () => {

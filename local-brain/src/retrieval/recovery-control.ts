@@ -1,8 +1,12 @@
 import {
+  isConcreteValueSlotQuery,
+  isConstraintQuery,
+  isCurrentPreferenceQuery,
   isIdentityProfileQuery,
   isPreciseFactDetailQuery,
   isProfileInferenceQuery,
   isRelationshipStyleExactQuery,
+  isRoutineSummaryQuery,
   isSharedCommonalityQuery,
   isTemporalDetailQuery
 } from "./query-signals.js";
@@ -49,6 +53,7 @@ export function inferQueryModeHint(queryText: string, planner: RecallPlan): Reca
 
   if (
     isPreciseFactDetailQuery(queryText) ||
+    isConcreteValueSlotQuery(queryText) ||
     (planner.queryClass === "direct_fact" &&
       structuredExactCue &&
       !/\b(?:currently|now|still|lately|overall|compare|common|share|why)\b/i.test(queryText))
@@ -63,6 +68,13 @@ export function inferQueryModeHint(queryText: string, planner: RecallPlan): Reca
   }
   if (isProfileInferenceQuery(queryText) || isIdentityProfileQuery(queryText)) {
     return "broad_profile";
+  }
+  if (
+    isRoutineSummaryQuery(queryText) ||
+    isConstraintQuery(queryText) ||
+    isCurrentPreferenceQuery(queryText)
+  ) {
+    return "current_state";
   }
   if (
     /\b(talk about|discuss|conversation|recap|summary|summarize|going on|overall|lately|recently|current picture)\b/i.test(queryText)

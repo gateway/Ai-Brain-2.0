@@ -226,6 +226,425 @@ export function isDecisionQuery(queryText: string): boolean {
   );
 }
 
+export function isConcreteEnumerativeListQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    isConcretePaintedItemQuery(normalized) ||
+    isConcretePotteryItemQuery(normalized) ||
+    isConcreteInstrumentInventoryQuery(normalized) ||
+    isConcreteMusicArtistHistoryQuery(normalized) ||
+    isConcreteSymbolInventoryQuery(normalized) ||
+    /^\s*what\s+items?\s+(?:has|have|did)\b.+\b(?:buy|bought|purchase|purchased)\b/i.test(normalized)
+  );
+}
+
+export function isConcretePaintedItemQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /^\s*what\s+has\b.+\bpaint(?:ed|ing)\b/i.test(normalized) ||
+    /^\s*what\s+subject\b.+\bboth\b.+\bpaint(?:ed|ing)\b/i.test(normalized) ||
+    /^\s*what\s+subject\s+have\b.+\bboth\b.+\bpaint(?:ed|ing)\b/i.test(normalized)
+  );
+}
+
+export function isConcretePotteryItemQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /^\s*what\s+types?\s+of\s+pottery\b/i.test(normalized) ||
+    /^\s*what\s+(?:pottery|ceramic)\s+(?:items?|pieces?)\b/i.test(normalized)
+  );
+}
+
+export function isConcreteInstrumentInventoryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /^\s*what\s+instruments?\b/i.test(normalized) ||
+    /^\s*which\s+instruments?\b/i.test(normalized)
+  );
+}
+
+export function isConcreteMusicArtistHistoryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /\bmusical artists?\/bands?\b/i.test(normalized) ||
+    /\bwhat\s+bands?\b/i.test(normalized) ||
+    /\bwhich\s+bands?\b/i.test(normalized)
+  );
+}
+
+export function isConcretePetNameQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /\b(?:pet|pets|dog|dogs|cat|cats|turtle|turtles)\b/i.test(normalized) &&
+    (
+      /\bnames?\b/i.test(normalized) ||
+      /\bwhat\s+is\s+the\s+name\s+of\b/i.test(normalized) ||
+      /\bwhat's\s+the\s+name\s+of\b/i.test(normalized)
+    )
+  );
+}
+
+export function isConcreteSymbolInventoryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /^\s*what\s+symbols?\b/i.test(normalized) ||
+    /\bsymbols?\s+are\s+important\b/i.test(normalized)
+  );
+}
+
+export function isConcreteUtteranceFactQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /^\s*what\s+did\b.+\bsay\s+about\b/i.test(normalized) ||
+    /^\s*what\s+was\s+said\s+about\b/i.test(normalized)
+  );
+}
+
+export function isConcreteBookHistoryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  if (/\bfavorite\s+book\s+series\b/i.test(normalized) && /\babout\b/i.test(normalized)) {
+    return false;
+  }
+
+  return (
+    /\bwhat\s+books?\b/i.test(normalized) ||
+    /\bwhat\s+book\b[^?!.]{0,80}\b(?:read|recommend)\b/i.test(normalized) ||
+    /\bauthors?\b[^?!.]{0,40}\bread\b/i.test(normalized) ||
+    /\bfavorite\s+books?\b/i.test(normalized) ||
+    /\bfavorite\b[^?!.]{0,40}\bbook\b/i.test(normalized)
+  );
+}
+
+export function isConcreteLocationHistoryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bwhere\b[^?!.]{0,80}\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went|camp(?:ed|ing)?)\b/i.test(normalized) ||
+    /\bwhat\s+(?:states|areas|places)\b/i.test(normalized)
+  );
+}
+
+export function isConcreteEventInventoryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    /\b(?:dogs?|pets?)\b/i.test(normalized) &&
+    /\b(?:classes?|groups?)\b/i.test(normalized) &&
+    /\b(?:care|take better care|better care)\b/i.test(normalized)
+  ) {
+    return false;
+  }
+
+  return (
+    /\bwhat\s+(?:[a-z0-9+&'’ -]+\s+)?events?\b/i.test(normalized) ||
+    /\bwhat\s+activities?\b/i.test(normalized) ||
+    /\bwhat\s+did\b.+\b(?:do|discuss)\b[^?!.]{0,60}\b(?:with (?:her|his|their)\s+family|with the family|on hikes|while camping|during (?:the )?(?:camping trip|workshop))\b/i.test(normalized) ||
+    /\bwhat\s+(?:other|additional)\s+(?:[a-z0-9+&'’ -]+\s+)?activities?\b/i.test(normalized) ||
+    /\bwhich\s+(?:other|additional)?\s*(?:[a-z0-9+&'’ -]+\s+)?activities?\b/i.test(normalized) ||
+    /\bwhat\s+(?:kind|types?)\s+of\b[^?!.]{0,40}\bactivities?\b/i.test(normalized) ||
+    /\bwhat\s+(?:kind|types?)\s+of\b[^?!.]{0,40}\bclasses?\b/i.test(normalized) ||
+    /\bwhat\s+(?:kind|types?)\s+of\b[^?!.]{0,40}\bworkshops?\b/i.test(normalized) ||
+    /\bwhat\s+does\b.+\bdo\s+to\s+(?:de-?stress|destress|relax|chill)\b/i.test(normalized) ||
+    /\bhow\s+does\b.+\b(?:de-?stress|destress|relax|chill)\b/i.test(normalized) ||
+    /\bwhat\s+music\s+events?\b/i.test(normalized) ||
+    /\bwhat\s+classes?\b/i.test(normalized) ||
+    /\bwhat\s+writing\s+classes?\b/i.test(normalized) ||
+    /\bwhat\s+workshop\b/i.test(normalized) ||
+    /\bin what ways\b/i.test(normalized) && /\bparticipat(?:e|ed|es|ing)\b/i.test(normalized)
+  );
+}
+
+export function isFamilyActivityInventoryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /\bwhat\s+did\b.+\bdo\b[^?!.]{0,60}\bwith (?:her|his|their)\s+family\b/i.test(normalized) ||
+    /\bwhat\s+does\b.+\bdo\b[^?!.]{0,60}\bwith (?:her|his|their)\s+family\b/i.test(normalized) ||
+    /\bwhat\s+did\b.+\bdo\b[^?!.]{0,60}\bon hikes?\b/i.test(normalized) ||
+    /\bwhat\s+did\b.+\bdo\b[^?!.]{0,60}\bwhile camping\b/i.test(normalized) ||
+    /\bwhat\s+was\s+discussed\b[^?!.]{0,80}\bworkshop\b/i.test(normalized)
+  );
+}
+
+export function isConcreteSupportNetworkQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /^\s*who\s+supports?\b/i.test(normalized) ||
+    /\bsupport network\b/i.test(normalized) ||
+    (/\bfriends?\b/i.test(normalized) && /\bbesides\b/i.test(normalized))
+  );
+}
+
+export function isConcreteValueSlotQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  const explicitLocationSlot =
+    /^\s*where\s+do\b.+\b(?:take|go to)\b.+\bclasses?\b/i.test(normalized) ||
+    /^\s*where\s+did\b.+\battend\b[^?!.]{0,80}\b(?:study abroad|program|university|college|school|wedding)\b/i.test(normalized) ||
+    /^\s*where\s+did\b.+\bcomplete\b[^?!.]{0,80}\b(?:degree|bachelor|certification|program)\b/i.test(normalized) ||
+    /^\s*where\s+did\b.+\b(?:buy|bought|purchase|purchased|redeem|redeemed)\b[^?!.]{0,80}\b(?:from|at)\b/i.test(normalized);
+  if (
+    !explicitLocationSlot &&
+    (
+      isConcreteEventInventoryQuery(normalized) ||
+      /\bactivities?\b/i.test(normalized) ||
+      /\bevents?\b/i.test(normalized) ||
+      /\bclasses?\b/i.test(normalized) ||
+      /\bworkshops?\b/i.test(normalized)
+    )
+  ) {
+    return false;
+  }
+
+  return (
+    /^\s*what\s+(?:kind|type)\s+of\b/i.test(normalized) ||
+    /^\s*what\s+breed\b/i.test(normalized) ||
+    /^\s*what\s+brand\b/i.test(normalized) ||
+    /^\s*what\s+is\s+the\s+name\s+of\b/i.test(normalized) ||
+    /^\s*what\s+speed\b/i.test(normalized) ||
+    /^\s*what\s+certification\b/i.test(normalized) ||
+    /^\s*what\s+was\b.+\bprevious\s+occupation\b/i.test(normalized) ||
+    /^\s*how\s+many\b/i.test(normalized) ||
+    /^\s*how\s+much\s+ram\b/i.test(normalized) ||
+    /^\s*what\s+time\b/i.test(normalized) ||
+    explicitLocationSlot ||
+    /^\s*what\s+does\b.+\b(?:offer|symboli(?:ze|zes)|focus on|plan to do at)\b/i.test(normalized) ||
+    /^\s*what\s+did\b.+\b(?:design|find|receive|win)\b/i.test(normalized) ||
+    /^\s*what\s+was\b.+\bfocus\b/i.test(normalized) ||
+    /^\s*what\s+kind\s+of\s+online\s+group\b/i.test(normalized) ||
+    /^\s*what\s+kind\s+of\s+art\b/i.test(normalized)
+  );
+}
+
+export function isRelationshipProfileQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\brelationship status\b/i.test(normalized) ||
+    /\b(?:is|are)\b.+\b(?:single|dating|married|engaged|divorced)\b/i.test(normalized) ||
+    /\bwho\s+(?:is|are)\s+.+\s+dating\b/i.test(normalized)
+  );
+}
+
+export function isBroadPreferenceProfileQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\bpolitical leaning\b/i.test(normalized) ||
+    isChildScopedPreferenceProfileQuery(normalized) ||
+    /\bwhat\s+does\b.+\blike\b/i.test(normalized)
+  );
+}
+
+export function isChildScopedPreferenceProfileQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  return /\bwhat\s+do\b.+\bkids?\s+like\b/i.test(normalized) || /\bwhat\s+do\b.+\bchildren\b.+\blike\b/i.test(normalized);
+}
+
+export function isProfileTraitJudgmentQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    /\bperform(?:ing)?\b/i.test(normalized) ||
+    /\bstage\b/i.test(normalized) ||
+    /\bvenue\b/i.test(normalized) ||
+    /\bconcert\b/i.test(normalized) ||
+    /\bhollywood bowl\b/i.test(normalized) ||
+    /\bbooks?\s+by\b/i.test(normalized) ||
+    /\bread(?:ing)?\b/i.test(normalized)
+  ) {
+    return false;
+  }
+  return (
+    /\bwould\b.+\b(?:enjoy|like|love|prefer|want|move back|go on another)\b/i.test(normalized) ||
+    /\bconsidered religious\b/i.test(normalized) ||
+    /\bconsidered\b[^?!.]{0,40}\bpatriotic\b/i.test(normalized) ||
+    /\bconsidered\b[^?!.]{0,50}\b(?:spiritual|atheist|agnostic|political|supportive|an?\s+ally)\b/i.test(normalized) ||
+    /\bwhat personality traits\b/i.test(normalized) ||
+    /\bwhat traits\b/i.test(normalized) ||
+    /\bwhat values?\b/i.test(normalized) ||
+    /\bpolitical leaning\b/i.test(normalized) ||
+    /\b(?:is|are|was|were)\b[^?!.]{0,50}\b(?:an?\s+ally|supportive|religious|spiritual|atheist|agnostic|political)\b/i.test(normalized)
+  );
+}
+
+export function isMadeItemInventoryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /^\s*what\s+kind\s+of\s+art\b/i.test(normalized) ||
+    /^\s*what\s+art\b[^?!.]{0,80}\bmake\b/i.test(normalized) ||
+    /^\s*what\s+has\b.+\b(?:made|designed)\b/i.test(normalized)
+  );
+}
+
+export function isMadeItemPairInventoryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /\bwhat\s+did\b.+\band\b.+\b(?:paint|make|made|design|designed)\b/i.test(normalized) ||
+    /\bwhat\s+types?\s+of\s+pottery\b.+\band\b.+\bmade\b/i.test(normalized) ||
+    /\bwhat\s+has\b.+\band\b.+\bpaint(?:ed|ing)\b/i.test(normalized)
+  );
+}
+
+export function isPetInventoryQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (isConcretePetNameQuery(normalized)) {
+    return false;
+  }
+  return (
+    /\bwhat\s+pet\b/i.test(normalized) ||
+    /\bwhat\s+pets\b/i.test(normalized) ||
+    /\bwhat\s+kind\s+of\s+pet\b/i.test(normalized) ||
+    /\bwhat\s+animals?\b.+\bhave\b/i.test(normalized)
+  );
+}
+
+export function isConcreteFavoriteDomainQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (/\bfavorite\b[^?!.]{0,40}\bstyle\b/i.test(normalized)) {
+    return false;
+  }
+
+  return (
+    /\bfavorite\b[^?!.]{0,40}\b(?:book|movie|memory|band|dj|style|series|trilogy)\b/i.test(normalized) ||
+    /\bwhat\s+was\b[^?!.]{0,80}\bfavorite\b/i.test(normalized)
+  );
+}
+
+export function isConcreteReasonValueQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /^\s*what\s+(?:is|was)\b.+\breason\b.+\bfor\b/i.test(normalized) ||
+    /^\s*what\s+reason\b.+\bfor\b/i.test(normalized)
+  );
+}
+
+export function isBenefitReasonSlotQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /^\s*what\s+motivated\b/i.test(normalized) ||
+    /^\s*what\s+inspired\b/i.test(normalized) ||
+    /^\s*what\s+does\b.+\bsay\b.+\bhas been great for\b/i.test(normalized) ||
+    /^\s*what\s+has\b.+\bbeen great for\b/i.test(normalized) ||
+    /^\s*what\s+did\b.+\btake away from\b/i.test(normalized)
+  );
+}
+
+export function isConcreteCountryOriginQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /\b(?:what|which|in what)\s+country\b/i.test(normalized) &&
+    (
+      /\b(?:grandma|grandmother|grandpa|grandfather|mother|mom|father|dad|daughter|son)\b/i.test(normalized) ||
+      /\bbuy\b.+\b(?:snake|dog|cat|pet|seraphim)\b/i.test(normalized)
+    )
+  );
+}
+
+export function isBroadDirectFactPressureQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /^\s*what\s+country\s+is\b.+\bfrom\b/i.test(normalized) ||
+    isConcreteSupportNetworkQuery(normalized) ||
+    isConcreteLocationHistoryQuery(normalized) ||
+    isConcreteBookHistoryQuery(normalized) ||
+    isConcreteEventInventoryQuery(normalized) ||
+    isFamilyActivityInventoryQuery(normalized) ||
+    isConcreteUtteranceFactQuery(normalized) ||
+    isConcreteValueSlotQuery(normalized) ||
+    isBenefitReasonSlotQuery(normalized) ||
+    isConcreteFavoriteDomainQuery(normalized) ||
+    /^\s*what\s+items?\s+(?:has|have|did)\b/i.test(normalized) ||
+    isConcreteEnumerativeListQuery(normalized) ||
+    isConcreteReasonValueQuery(normalized) ||
+    isMadeItemPairInventoryQuery(normalized) ||
+    isPetInventoryQuery(normalized) ||
+    isProfileTraitJudgmentQuery(normalized)
+  );
+}
+
 export function isEventBoundedQuery(queryText: string): boolean {
   const normalized = queryText.trim();
   if (!normalized) {
@@ -391,6 +810,10 @@ export function isPersonTimeFactQuery(queryText: string): boolean {
     return false;
   }
 
+  if (isDailyLifeSummaryQuery(normalized)) {
+    return false;
+  }
+
   return (
     /\bwhat\s+did\s+.+\s+(?:talk about|mention|discuss)\b/i.test(normalized) ||
     /\bwhat\s+was\s+i\s+talking\s+about\s+with\b/i.test(normalized) ||
@@ -446,6 +869,8 @@ export function isProfileInferenceQuery(queryText: string): boolean {
     /\bwhat\s+(?:kind|kinds)\s+of\s+jobs?\b/i.test(normalized) ||
     /\bwhat\s+kind\s+of\s+role\s+does\s+.+\s+seem\s+drawn\s+toward\b/i.test(normalized) ||
     /\bwhat\s+role\s+does\s+.+\s+seem\s+drawn\s+toward\b/i.test(normalized) ||
+    /\bwould\b[^?!.]{0,120}\bpursue\b/i.test(normalized) &&
+      /\b(?:career|job|field|work|role|writing|counseling|counselling|mental health|therapy)\b/i.test(normalized) ||
     /\bcareer\s+options?\b/i.test(normalized) ||
     /\blooking\s+into\s+(?:counseling|mental health|career|education)\b/i.test(normalized) ||
     /\b(?:education|educaton|study|career|major|degree)\b/i.test(normalized) && /\blikely\b/i.test(normalized)
@@ -495,6 +920,18 @@ export function isIdentityProfileQuery(queryText: string): boolean {
     /\bwho\s+is\s+.+\s+really\b/i.test(normalized) ||
     /\bwhat\s+kind\s+of\s+person\s+is\s+.+\b/i.test(normalized) ||
     /\b(?:identity|transgender|nonbinary|gender\s+identity)\b/i.test(normalized) && /\bwhat|who\b/i.test(normalized)
+  );
+}
+
+export function isCommunityParticipationQuery(queryText: string): boolean {
+  const normalized = queryText.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /\bin what ways\b/i.test(normalized) &&
+    /\bparticipat(?:e|ed|es|ing)\b/i.test(normalized) &&
+    /\blgbtq\+?\b|\btransgender\b|\bpride\b|\bcommunity\b/i.test(normalized)
   );
 }
 
@@ -843,6 +1280,13 @@ export function preferredRelationshipPredicates(queryText: string): readonly str
     /\bwho\s+(?:am|is|are)\s+.+\s+dating(?:\s+now)?\b/i.test(normalized)
   ) {
     return ["significant_other_of", "was_with", "friend_of", "relationship_ended", "relationship_reconnected"];
+  }
+
+  if (
+    /\brelationship status\b/i.test(normalized) ||
+    /\b(?:is|are)\b.+\b(?:single|dating|married|engaged|divorced)\b/i.test(normalized)
+  ) {
+    return ["significant_other_of", "former_partner_of", "relationship_ended", "relationship_reconnected", "was_with", "friend_of"];
   }
 
   if (

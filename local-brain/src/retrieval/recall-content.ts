@@ -109,8 +109,9 @@ export function extractInlineSubjectSignalsFromText(value: string | null | undef
   if (!normalized) {
     return [];
   }
+  const interrogativeSignals = new Set(["who", "what", "when", "where", "why", "how", "which"]);
   const matches = [
-    ...normalized.matchAll(/(?:^|[\n\r])\s*([A-Z][A-Za-z.'-]{1,40}(?:\s+[A-Z][A-Za-z.'-]{1,40}){0,2})\s*:/gu),
+    ...normalized.matchAll(/(?:^|[\n\r]|[.!?]\s+)\s*([A-Z][A-Za-z.'-]{1,40}(?:\s+[A-Z][A-Za-z.'-]{1,40}){0,2})\s*:/gu),
     ...normalized.matchAll(
       /\b([A-Z][A-Za-z.'-]{1,40}(?:\s+[A-Z][A-Za-z.'-]{1,40}){0,2})\s+(?:started|began|joined|achieved|scored|performed|went|was|is|had)\b/gu
     ),
@@ -118,7 +119,7 @@ export function extractInlineSubjectSignalsFromText(value: string | null | undef
   ]
     .map((match) => match[1] ?? "")
     .map((candidate) => normalize(candidate))
-    .filter(Boolean);
+    .filter((candidate) => candidate && !interrogativeSignals.has(candidate.toLowerCase()));
   return uniqueNormalized(matches).map((candidate) => normalizeEntityLookupName(candidate));
 }
 

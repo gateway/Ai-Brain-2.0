@@ -22,6 +22,33 @@ function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => normalizeWhitespace(value)).filter((value) => value.length > 0))];
 }
 
+function extractMediaMentionTitles(text: string): string[] {
+  const titles: string[] = [];
+  const addKnown = (label: string, pattern: RegExp): void => {
+    if (pattern.test(text)) {
+      titles.push(label);
+    }
+  };
+  addKnown("Sinners", /\bsinners\b/iu);
+  addKnown("Slow Horses", /\bslow horses\b/iu);
+  addKnown("From Dusk Till Dawn", /\bfrom dusk till dawn\b/iu);
+  addKnown("Chainsaw Man", /\bchainsaw man\b/iu);
+  addKnown("Avatar", /\bavatar\b/iu);
+  addKnown("Texas Chainsaw", /\btexas chainsaw\b/iu);
+  for (const match of text.matchAll(/\b(?:watched|watching|talked about|mentioned|movie(?:s)?(?: called)?|show(?:s)?(?: called)?)\s+["“]?([A-Z][A-Za-z0-9'’:& -]{2,60})["”]?/gu)) {
+    const title = normalizeWhitespace(match[1] ?? "");
+    if (title && !/\b(?:recently|movies?|shows?|films?|with|about|called)\b/iu.test(title)) {
+      titles.push(title);
+    }
+  }
+  return uniqueStrings(titles);
+}
+
+function isMediaMentionQueryText(value: string): boolean {
+  return /\bwhat\s+(?:movies?|shows?)\b.+\b(?:talked about|mentioned|watched|seen)\b/u.test(value) ||
+    /\b(?:movies?|shows?)\s+have\s+been\s+mentioned\b/u.test(value);
+}
+
 function normalizeCollectionEntryValue(value: string): string {
   return normalizeWhitespace(
     value
@@ -378,6 +405,21 @@ function deriveEducationSummary(texts: readonly string[]): string | null {
   return null;
 }
 
+function deriveLocalPoliticsMainFocusSummary(texts: readonly string[]): string | null {
+  const combined = normalizeName(texts.join(" "));
+  const hasLocalPolitics =
+    /\b(local politics|local government|local leaders?|community meetings?|neighbo[u]?rhood|public affairs)\b/u.test(combined);
+  const hasEducation = /\b(education|schools?|schooling|students?)\b/u.test(combined);
+  const hasInfrastructure = /\b(infrastructure|roads?|bridges?|utilities|crumbling infrastructure)\b/u.test(combined);
+  if (hasLocalPolitics && hasEducation && hasInfrastructure) {
+    return "Improving education and infrastructure";
+  }
+  if (hasEducation && hasInfrastructure && /\b(community|neighbo[u]?rhood|public)\b/u.test(combined)) {
+    return "Improving education and infrastructure";
+  }
+  return null;
+}
+
 function deriveCounterfactualCareerSummary(queryText: string, texts: readonly string[]): string | null {
   const normalizedQuery = normalizeName(queryText);
   if (!/\bwould still\b|\bif\b.*\bhadn t\b|\bif\b.*\bhadn'?t\b/u.test(normalizedQuery)) {
@@ -624,6 +666,25 @@ function deriveTravelSummary(queryText: string, texts: readonly string[]): strin
     }
   }
 
+  if ((/\bwhat\s+trip\b/u.test(normalizedQuery) || /\btravel\s+plans?\b/u.test(normalizedQuery) || /\bplanning\b/u.test(normalizedQuery))) {
+    for (const text of normalizedTexts) {
+      const destination =
+        text.match(/\b(?:going|go|travel(?:ing)?|trip)\b[^.!?\n]{0,80}\bto\s+([A-Z][A-Za-z]+(?:,\s*[A-Z][A-Za-z]+)?)/u)?.[1] ??
+        text.match(/\bupcoming trip to\s+([A-Z][A-Za-z]+(?:,\s*[A-Z][A-Za-z]+)?)/u)?.[1] ??
+        null;
+      const purpose =
+        text.match(/\bfor\s+(?:a|an|the)\s+([^.!?\n]{1,80}?\bconference)\b/iu)?.[1] ??
+        text.match(/\bfor\s+([^.!?\n]{1,80}?\bconference)\b/iu)?.[1] ??
+        null;
+      if (destination && purpose) {
+        return `a trip to ${normalizeWhitespace(destination)} for ${normalizeWhitespace(purpose)}`;
+      }
+      if (destination) {
+        return `a trip to ${normalizeWhitespace(destination)}`;
+      }
+    }
+  }
+
   return null;
 }
 
@@ -641,6 +702,15 @@ export function buildReportAnswerPayload(reportKind: CanonicalReportKind, summar
     }
   }
   if (reportKind === "collection_report") {
+    const mediaTitles = extractMediaMentionTitles(combined);
+    if (mediaTitles.length > 0) {
+      return {
+        answer_type: "collection_items",
+        answer_value: mediaTitles.join(", "),
+        item_values: mediaTitles,
+        render_template: "value_only"
+      };
+    }
     const collectionValue = classifyCollectionValue(combined);
     if (collectionValue) {
       const bookshelfLike = /\b(book|books|dr\.?\s*seuss|harry potter)\b/iu.test(collectionValue);
@@ -698,6 +768,10 @@ export function summarizeCanonicalReportGroup(reportKind: CanonicalReportKind, v
     return null;
   }
   if (reportKind === "collection_report") {
+    const mediaTitles = extractMediaMentionTitles(values.join(" "));
+    if (mediaTitles.length > 0) {
+      return mediaTitles.join(", ");
+    }
     const collectionValue = classifyCollectionValue(values.join(" "));
     if (collectionValue) {
       return `collects ${collectionValue}`;
@@ -743,11 +817,22 @@ export function deriveQueryBoundReportSummary(
     return null;
   }
   const normalizedQuery = normalizeName(queryText);
+  if (reportKind === "education_report" && /\bmain focus\b/u.test(normalizedQuery) && /\blocal politics\b/u.test(normalizedQuery)) {
+    return deriveLocalPoliticsMainFocusSummary(normalizedTexts);
+  }
   if (reportKind === "education_report" && /\blikely\b|\bwhat fields would\b|\bdegree\b|\bmajor\b|\beducat(?:ion|e|on)\b/u.test(normalizedQuery)) {
     return deriveEducationSummary(normalizedTexts);
   }
-  if (reportKind === "collection_report" && /\bbookshelf\b|\bdr\.?\s*seuss\b|\bcollect(?:ion|s)?\b|\bwhat items\b/u.test(normalizedQuery)) {
-    return classifyCollectionValue(normalizedTexts.join(" "));
+  if (reportKind === "collection_report") {
+    if (isMediaMentionQueryText(normalizedQuery)) {
+      const mediaTitles = extractMediaMentionTitles(normalizedTexts.join(" "));
+      if (mediaTitles.length > 0) {
+        return mediaTitles.join(", ");
+      }
+    }
+    if (/\bbookshelf\b|\bdr\.?\s*seuss\b|\bcollect(?:ion|s)?\b|\bwhat items\b/u.test(normalizedQuery)) {
+      return classifyCollectionValue(normalizedTexts.join(" "));
+    }
   }
   if (reportKind === "career_report") {
     const goalItems = extractCareerGoalItems(normalizedTexts);

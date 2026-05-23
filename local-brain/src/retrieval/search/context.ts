@@ -7,6 +7,21 @@ import type { SearchRow } from "./internal-types.js";
 
 export interface RuntimeRequestContext {
   readonly key: string;
+  readonly queryEmbeddingCache: Map<
+    string,
+    Promise<{
+      readonly embedding: number[] | null;
+      readonly source: "provided" | "provider" | "none";
+      readonly provider?: string;
+      readonly model?: string;
+      readonly fallbackReason?: string;
+      readonly cacheHit?: boolean;
+      readonly cacheLookupLatencyMs?: number;
+      readonly providerLatencyMs?: number;
+      readonly providerCallCount?: number;
+      readonly normalizationVersion?: string;
+    }>
+  >;
   readonly primarySourceBackfillCache: Map<string, readonly string[]>;
   readonly fullSourceBackfillCache: Map<string, readonly string[]>;
   readonly linkedSourceExpansionCache: Map<string, readonly RecallResult[]>;
@@ -26,6 +41,7 @@ function normalizeContextWhitespace(value: string): string {
 export function createRuntimeRequestContext(key: string): RuntimeRequestContext {
   return {
     key,
+    queryEmbeddingCache: new Map(),
     primarySourceBackfillCache: new Map(),
     fullSourceBackfillCache: new Map(),
     linkedSourceExpansionCache: new Map(),

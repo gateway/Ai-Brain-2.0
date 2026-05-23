@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import { readConfig } from "../config.js";
 import { withTransaction, queryRows } from "../db/client.js";
+import { processVectorSyncJobs, enqueueTargetVectorSync } from "../jobs/vector-sync.js";
 import { getProviderAdapter } from "../providers/registry.js";
 import type { ProviderModality } from "../providers/types.js";
 
@@ -45,6 +47,7 @@ interface ObservationRow {
 }
 
 interface ArtifactContextRow {
+  readonly namespace_id: string;
   readonly artifact_id: string;
   readonly observation_id: string;
   readonly uri: string;
@@ -85,6 +88,7 @@ async function resolveArtifactContext(artifactId: string, artifactObservationId?
   const rows = await queryRows<ArtifactContextRow>(
     `
       SELECT
+        a.namespace_id,
         a.id AS artifact_id,
         ao.id AS observation_id,
         a.uri,
@@ -129,7 +133,8 @@ export async function attachTextDerivation(request: AttachTextDerivationRequest)
     throw new Error("attachTextDerivation requires non-empty text");
   }
 
-  const artifactObservationId = await resolveObservationId(request.artifactId, request.artifactObservationId);
+  const artifact = await resolveArtifactContext(request.artifactId, request.artifactObservationId);
+  const artifactObservationId = artifact.observation_id;
 
   let embedding: number[] | null = null;
   let providerName: string | undefined;
@@ -149,7 +154,7 @@ export async function attachTextDerivation(request: AttachTextDerivationRequest)
     outputDimensionality = embeddingResult.dimensions;
   }
 
-  return withTransaction(async (client) => {
+  const result = await withTransaction(async (client) => {
     const result = await client.query<{ derivation_id: string }>(
       `
         INSERT INTO artifact_derivations (
@@ -199,6 +204,41 @@ export async function attachTextDerivation(request: AttachTextDerivationRequest)
       outputDimensionality
     };
   });
+
+  if (!embedding) {
+    const config = readConfig();
+    try {
+      if (config.runtimeVectorActivationMode !== "off") {
+        await enqueueTargetVectorSync({
+          namespaceId: artifact.namespace_id,
+          targetTable: "artifact_derivations",
+          targetId: result.derivationId,
+          contentColumn: "content_text",
+          provider: config.embeddingProvider,
+          model: config.embeddingModel,
+          outputDimensionality: config.embeddingDimensions,
+          metadata: {
+            auto_enqueued: true,
+            source: "attach_text_derivation"
+          }
+        });
+      }
+      if (
+        config.runtimeVectorActivationMode === "bounded" ||
+        config.runtimeVectorActivationMode === "full"
+      ) {
+        await processVectorSyncJobs({
+          namespaceId: artifact.namespace_id,
+          provider: config.embeddingProvider,
+          limit: 1
+        });
+      }
+    } catch {
+      // Derivation writes stay available even when vector sync is unavailable.
+    }
+  }
+
+  return result;
 }
 
 export async function deriveArtifactViaProvider(request: DeriveArtifactRequest): Promise<AttachTextDerivationResult> {

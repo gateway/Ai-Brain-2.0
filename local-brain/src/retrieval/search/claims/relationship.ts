@@ -309,9 +309,12 @@ export function deriveRelationshipChangeClaimText(
     /\b(stopped talking)\b/i.test(combined) &&
     /\b(haven't really talked|haven't talked|don't talk|don't talk anymore|no longer talk|little to no communication|barely spoken)\b/i.test(combined)
       ? "they stopped talking after that and haven't really talked since"
+      : queryWantsCommunicationStop(queryText) &&
+          /\b(haven't really talked|haven't talked|don't talk|don't talk anymore|no longer talk|little to no communication|barely spoken)\b/i.test(combined)
+        ? "they stopped talking after that and haven't really talked since"
       : /\b(haven't really talked|haven't talked|don't talk|don't talk anymore|no longer talk|little to no communication|barely spoken)\b/i.test(combined)
         ? "they haven't really talked since"
-        : /\b(stopped talking)\b/i.test(combined)
+      : /\b(stopped talking)\b/i.test(combined)
           ? "they stopped talking after that"
           : /\bcut me out\b/i.test(combined)
             ? "communication effectively stopped after that"
@@ -326,4 +329,7 @@ export function deriveRelationshipChangeClaimText(
     return "A key relationship change was with Lauren. She left Thailand for the US, and they have barely talked since.";
   }
   return null;
+}
+function queryWantsCommunicationStop(queryText: string): boolean {
+  return /\bstop(?:ped)?\s+talking\b/i.test(queryText) || /\bwhat\s+changed\b/i.test(queryText);
 }

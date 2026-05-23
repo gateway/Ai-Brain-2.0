@@ -1,6 +1,8 @@
 import { closePool } from "../db/client.js";
 import { fileURLToPath } from "node:url";
 import { rebuildCanonicalMemoryNamespace } from "../canonical-memory/service.js";
+import { rebuildContractProjectionsNamespace } from "../contract-projections/service.js";
+import { rebuildTemporalEventFactsNamespace } from "../temporal-events/service.js";
 
 function readFlag(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -19,7 +21,9 @@ async function main(): Promise<void> {
 
   try {
     const result = await rebuildCanonicalMemoryNamespace(namespaceId);
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    const temporalEventFacts = await rebuildTemporalEventFactsNamespace(namespaceId);
+    const projections = await rebuildContractProjectionsNamespace(namespaceId);
+    process.stdout.write(`${JSON.stringify({ ...result, temporalEventFacts, contractProjections: projections.counts }, null, 2)}\n`);
   } finally {
     await closePool();
   }

@@ -1,5 +1,6 @@
 import type { NamespaceId, RecallResult } from "../types.js";
 import type { StoredCanonicalLookup } from "../canonical-memory/service.js";
+import type { RetrievalControllerIntent } from "./retrieval-controller-types.js";
 
 export interface RecallQuery {
   readonly query: string;
@@ -35,6 +36,14 @@ export type RecapDerivationProvider = "none" | "local" | "openrouter";
 export type RecallWritebackNoteFamily = "fact_note" | "profile_note" | "preference_note";
 export type RecallEntityResolutionMode = "default" | "subject_bound" | "participant_overlap";
 export type RecallExactDetailSource = "episodic_leaf" | "artifact_source" | "derivation" | "mixed";
+export type SupportBundleFamily =
+  | "current_state"
+  | "exact_detail"
+  | "temporal_detail"
+  | "typed_list_set"
+  | "profile_report"
+  | "commonality"
+  | "generic";
 export type RecallQueryModeHint =
   | "exact_detail"
   | "current_state"
@@ -129,6 +138,89 @@ export type CanonicalTemporalSupportKind =
   | "reference_derived_relative"
   | "generic_time_fragment";
 export type CanonicalTemporalSourceQuality = "canonical_event" | "aligned_anchor" | "derived_relative" | "generic";
+export type ProjectionTruthStatus = "active" | "superseded" | "uncertain";
+
+export interface TemporalEventFact {
+  readonly eventKey: string;
+  readonly eventType: string | null;
+  readonly startAt: string | null;
+  readonly endAt: string | null;
+  readonly answerYear: number | null;
+  readonly answerMonth: number | null;
+  readonly answerDay: number | null;
+  readonly timeGranularity: string | null;
+  readonly exactness: "exact" | "bounded" | "inferred";
+  readonly truthStatus: ProjectionTruthStatus;
+}
+
+export interface TemporalEventSupport {
+  readonly supportTable: string;
+  readonly sourceRowId: string | null;
+  readonly supportMemoryId: string | null;
+  readonly supportRole: "primary" | "support" | "conflict";
+  readonly snippet: string | null;
+  readonly occurredAt: string | null;
+}
+
+export interface RenderPayload {
+  readonly answerType?: string;
+  readonly answerValue?: string;
+  readonly reasonValue?: string;
+  readonly itemValues?: readonly string[];
+  readonly summaryText?: string;
+}
+
+export interface SqlFusedSupportCandidate {
+  readonly memoryId: string;
+  readonly memoryType: RecallResult["memoryType"];
+  readonly lexicalRank?: number;
+  readonly vectorRank?: number;
+  readonly truthStatus?: ProjectionTruthStatus;
+  readonly occurredAt?: string | null;
+}
+
+export interface RenderSupportBundle {
+  readonly activeSupportCount: number;
+  readonly supersededSupportFilteredCount: number;
+  readonly temporalExactness?: "exact" | "bounded" | "inferred" | null;
+}
+
+export interface SelectionTraceEntry {
+  readonly stage: string;
+  readonly decision: string;
+  readonly reason: string;
+  readonly selectedSections?: readonly string[];
+  readonly rejectedOptions?: readonly string[];
+}
+
+export type QueryFocusMode =
+  | "timeline"
+  | "employers_only"
+  | "advisory_only"
+  | "ventures_only"
+  | "roles_and_dates"
+  | "source_audit";
+
+export interface AnswerSectionSourceTrailEntry {
+  readonly sourceUri?: string | null;
+  readonly artifactId?: string | null;
+  readonly occurredAt?: string | null;
+  readonly sourceMemoryIds?: readonly string[];
+  readonly sourceChunkIds?: readonly string[];
+  readonly sourceSceneIds?: readonly string[];
+  readonly sourceTable?: string | null;
+  readonly sourceRowId?: string | null;
+  readonly quote?: string | null;
+}
+
+export interface StructuredAnswerSection {
+  readonly id: string;
+  readonly title: string;
+  readonly text: string;
+  readonly evidenceCount: number;
+  readonly sourceTrail: readonly AnswerSectionSourceTrailEntry[];
+  readonly focusModes?: readonly QueryFocusMode[];
+}
 
 export type CanonicalAbstainReason =
   | "insufficient_subject_binding"
@@ -138,6 +230,17 @@ export type CanonicalAbstainReason =
   | "current_state_not_supported"
   | "unsupported_counterfactual_chain"
   | "insufficient_support";
+export type RuntimeAbstentionReason =
+  | "no_subject_binding"
+  | "no_exact_value_support"
+  | "support_conflict"
+  | "temporal_gap"
+  | "insufficient_active_truth";
+export type TemporalCoverageStatus = "exact" | "bounded" | "partial" | "conflicting" | "unresolved";
+export type EntityResolutionStatus = "resolved" | "ambiguous" | "unresolved";
+export type StructuredSufficiencyStatus = "sufficient" | "partial" | "insufficient" | "none";
+export type SelfBindingRecoveredFrom = "existing_binding" | "scalar_truth" | "event_truth" | "query_subject" | "none";
+export type ClaimAdmissibilityStatus = "admissible" | "rejected" | "ambiguous";
 
 export interface SubjectPlan {
   readonly kind: SubjectPlanKind;
@@ -199,9 +302,24 @@ export type RetrievalPlanLane =
   | "book_list"
   | "support_network"
   | "location_history"
+  | "set_fact"
   | "exact_detail"
   | "abstention"
   | "generic";
+
+export type PlannerAnswerKind =
+  | "generic"
+  | "report_inference"
+  | "direct_attribute"
+  | "direct_reason"
+  | "value_slot"
+  | "utterance_fact"
+  | "inventory_list"
+  | "location_history"
+  | "list_history"
+  | "event_inventory"
+  | "support_network"
+  | "temporal_event";
 
 export type CandidatePoolSelection =
   | "temporal_exact_facts"
@@ -260,9 +378,16 @@ export interface TargetedBackfillRequest {
     | "travel_location_entries_missing"
     | "community_membership_support_missing"
     | "book_list_entries_missing"
+    | "book_recommendation_pair_missing"
     | "event_list_entries_missing"
+    | "pair_event_entries_missing"
     | "support_network_entries_missing"
     | "location_history_entries_missing"
+    | "set_entries_missing"
+    | "identity_support_missing"
+    | "preference_value_missing"
+    | "relationship_status_missing"
+    | "judgment_reason_missing"
     | "exact_detail_support_missing"
     | "temporal_event_identity_missing"
     | "temporal_granularity_missing"
@@ -333,6 +458,7 @@ export type AnswerShapingMode =
   | "runtime_report_resynthesis"
   | "stored_report_summary"
   | "typed_temporal_event"
+  | "typed_list_set"
   | "temporal_text_fallback"
   | "typed_set_entries"
   | "mixed_string_set"
@@ -551,6 +677,8 @@ export interface DirectDetailSupportUnit extends AtomicMemoryUnit {
 export interface AnswerRetrievalPlan {
   readonly family: AnswerOwnerFamily | "generic";
   readonly lane: RetrievalPlanLane;
+  readonly answerKind: PlannerAnswerKind;
+  readonly controllerIntent?: RetrievalControllerIntent;
   readonly resolvedSubjectEntityId: string | null;
   readonly resolvedObjectEntityId: string | null;
   readonly resolvedEventKey: string | null;
@@ -638,12 +766,133 @@ export type CanonicalTieBreakReason =
   | "adjudicated_over_duality_snippet";
 
 export interface RetrievalLatencyBudget {
-  readonly family: "bounded_event_detail" | "descriptive_place_activity" | "commonality_aggregation" | "default";
+  readonly family:
+    | "exact_detail_scalar"
+    | "bounded_event_detail"
+    | "camping_location_history"
+    | "descriptive_place_activity"
+    | "commonality_aggregation"
+    | "sparse_profile_inference"
+    | "broad_direct_fact"
+    | "relationship_profile"
+    | "broad_preference_profile"
+    | "support_network_reasoned"
+    | "made_item_inventory"
+    | "list_history"
+    | "location_history"
+    | "event_inventory"
+    | "temporal_event"
+    | "default";
   readonly maxBranchDepth: number;
   readonly maxNeighborhoodExpansions: number;
   readonly maxLeafCandidates: number;
   readonly stopOnFirstSufficient: boolean;
   readonly disableArtifactDerivationAfterSufficient: boolean;
+}
+
+export type TypedContractName =
+  | "book_list"
+  | "book_recommendation_pair"
+  | "inventory_list"
+  | "made_item_inventory"
+  | "made_item_pair_inventory"
+  | "location_history"
+  | "camping_location_history"
+  | "support_network"
+  | "event_inventory"
+  | "family_activity_inventory"
+  | "pair_event_inventory"
+  | "direct_destress_activity"
+  | "direct_reason"
+  | "structured_direct_reason"
+  | "benefit_reason_slot"
+  | "value_slot"
+  | "symbolic_value_slot"
+  | "direct_attribute"
+  | "temporal_plan_detail"
+  | "utterance_fact"
+  | "pet_inventory"
+  | "identity_profile"
+  | "relationship_profile"
+  | "preference_profile"
+  | "profile_trait_judgment"
+  | "reasoned_profile_judgment";
+
+export type StructuredPredicateFamily =
+  | "media.read"
+  | "media.recommend"
+  | "event.attend"
+  | "event.plan"
+  | "activity.general"
+  | "activity.family"
+  | "activity.hike"
+  | "activity.camping"
+  | "activity.workshop"
+  | "creation.paint"
+  | "creation.pottery"
+  | "preference.general"
+  | "preference.music"
+  | "profile.trait"
+  | "pet.own"
+  | "benefit.effect"
+  | "reason.start"
+  | "meaning.symbolism"
+  | "detail.received_for";
+
+export interface TypedContractCompleteness {
+  readonly contract: TypedContractName;
+  readonly requiredFields: readonly string[];
+  readonly resolvedFields: readonly string[];
+  readonly missingFields: readonly string[];
+  readonly complete: boolean;
+  readonly stopEligible: boolean;
+  readonly completenessScore: number;
+  readonly backfillReason: string | null;
+  readonly normalizedItemCount?: number;
+  readonly newItemCount?: number;
+  readonly growthStopped?: boolean;
+  readonly groundedItemCount?: number;
+}
+
+export interface PairBindingVerificationResult {
+  readonly required: boolean;
+  readonly verified: boolean;
+  readonly primarySubjectId: string | null;
+  readonly primarySubjectName: string | null;
+  readonly pairSubjectId: string | null;
+  readonly pairSubjectName: string | null;
+  readonly reason: string;
+}
+
+export type SubjectBoundAggregationScope = "primary_subject" | "dependent_group" | "pair_subject";
+
+export interface SubjectBoundAggregationRequest {
+  readonly namespaceId: string;
+  readonly queryText: string;
+  readonly subjectHints: readonly string[];
+  readonly limit: number;
+  readonly aggregationScope?: SubjectBoundAggregationScope;
+  readonly retrievalPlan: Pick<
+    AnswerRetrievalPlan,
+    "family" | "lane" | "answerKind" | "subjectNames" | "controllerIntent"
+  >;
+}
+
+export interface SubjectBoundAggregationResult {
+  readonly attempted: boolean;
+  readonly rows: readonly RecallResult[];
+  readonly sources: readonly ("relationship_memory" | "semantic_memory" | "canonical_states" | "memory_entity_mentions" | "episodic_memory")[];
+  readonly predicateFamily: StructuredPredicateFamily | null;
+  readonly pairBinding: PairBindingVerificationResult | null;
+  readonly aggregationScope: SubjectBoundAggregationScope | null;
+  readonly normalizedItemKeys: readonly string[];
+  readonly groundedItemKeys: readonly string[];
+}
+
+export interface TemporalPlanDetailSupport {
+  readonly eventKey: string | null;
+  readonly planValue: string | null;
+  readonly supportRows: readonly RecallResult[];
 }
 
 export interface CanonicalAdjudicationResult {
@@ -823,7 +1072,13 @@ export interface RecallResponse {
     readonly answerableUnitMixedCount?: number;
     readonly answerableUnitForeignCount?: number;
     readonly readerApplied?: boolean;
-    readonly readerDecision?: "resolved" | "ambiguous" | "abstained_no_owned_unit" | "abstained_temporal_gap" | "abstained_alias_ambiguity";
+    readonly readerDecision?:
+      | "resolved"
+      | "ambiguous"
+      | "abstained_no_owned_unit"
+      | "abstained_temporal_gap"
+      | "abstained_alias_ambiguity"
+      | "offline_substrate_adjudicated";
     readonly readerSelectedUnitCount?: number;
     readonly readerTopUnitType?: string;
     readonly readerDominantMargin?: number;
@@ -852,13 +1107,22 @@ export interface RecallResponse {
     readonly queryEmbeddingSource: "provided" | "provider" | "none";
     readonly queryEmbeddingProvider?: string;
     readonly queryEmbeddingModel?: string;
+    readonly queryEmbeddingCacheHit?: boolean;
+    readonly queryEmbeddingNormalizationVersion?: string;
+    readonly queryEmbeddingCacheLookupLatencyMs?: number;
+    readonly queryEmbeddingProviderLatencyMs?: number;
+    readonly queryEmbeddingProviderCallCount?: number;
     readonly vectorFallbackReason?: string;
+    readonly vectorPolicyMode?: "preferred" | "assisted" | "guarded";
     readonly rankingKernel?: "app_fused" | "sql_hybrid_core" | "sql_hybrid_unified";
     readonly retrievalFusionVersion?: string;
     readonly rerankerEnabled?: boolean;
     readonly rerankerVersion?: string;
     readonly lexicalCandidateCount: number;
     readonly vectorCandidateCount: number;
+    readonly vectorContributedToFinalSupport?: boolean;
+    readonly vectorContribution?: "none" | "candidate_pool" | "final_support";
+    readonly vectorBlockedReason?: string | null;
     readonly fusedResultCount: number;
     readonly temporalAncestorCount?: number;
     readonly temporalDescendantSupportCount?: number;
@@ -872,13 +1136,242 @@ export interface RecallResponse {
     readonly stageTimingsMs?: Readonly<Record<string, number>>;
     readonly dominantStage?: string;
     readonly topStageMs?: number;
+    readonly candidateCountsByStage?: Readonly<Record<string, number>>;
+    readonly rowsScannedByStage?: Readonly<Record<string, number>>;
+    readonly compiledLookupTried?: boolean;
+    readonly proceduralLookupTried?: boolean;
+    readonly relationshipFastPathTried?: boolean;
+    readonly relationshipFastPathSucceeded?: boolean;
+    readonly sourceBoundedReadTried?: boolean;
+    readonly sourceBoundedReadSucceeded?: boolean;
+    readonly semanticFallbackUsed?: boolean;
+    readonly sqlHybridUsed?: boolean;
+    readonly typedLaneDescentTriggered?: boolean;
+    readonly plannerBackfillTriggered?: boolean;
+    readonly graphExpansionTriggered?: boolean;
+    readonly neighborExpansionCount?: number;
+    readonly typedLaneDepth?: number;
+    readonly recursiveSubqueryCount?: number;
+    readonly latencyBudgetFamily?: string;
+    readonly finalBudgetFamily?: string;
+    readonly typedContract?: TypedContractName;
+    readonly typedContractSatisfied?: boolean;
+    readonly typedContractComplete?: boolean;
+    readonly projectionShadowContract?: string;
+    readonly projectionShadowKind?: "list" | "report" | "temporal" | "scalar";
+    readonly projectionShadowComplete?: boolean;
+    readonly projectionShadowStopEligible?: boolean;
+    readonly projectionShadowCompletenessScore?: number;
+    readonly projectionShadowEntryCount?: number;
+    readonly projectionVersion?: string;
+    readonly temporalFactCount?: number;
+    readonly fusedKernelMode?: "shadow" | "preferred" | "required";
+    readonly renderPayloadMode?: "shadow" | "preferred" | "required";
+    readonly activeSupportCount?: number;
+    readonly supersededSupportFilteredCount?: number;
+    readonly temporalExactness?: "exact" | "bounded" | "inferred" | null;
+    readonly missingTypedFields?: readonly string[];
+    readonly typedBackfillMode?: "typed_completion" | "none";
+    readonly plannerWideningSuppressed?: boolean;
+    readonly earlyStopReason?: string;
+    readonly structuredAggregationAttempted?: boolean;
+    readonly structuredAggregationSource?: readonly ("relationship_memory" | "semantic_memory" | "canonical_states" | "memory_entity_mentions" | "episodic_memory")[];
+    readonly structuredPredicateFamily?: StructuredPredicateFamily;
+    readonly aggregationScope?: SubjectBoundAggregationScope;
+    readonly pairBindingVerified?: boolean;
+    readonly lexicalBridgeAttempted?: boolean;
+    readonly adjudicationSuppressedFallback?: boolean;
     readonly leafTraversalTriggered?: boolean;
     readonly descentTriggered?: boolean;
     readonly descentStages?: readonly RecallTypedLaneDescentStage[];
     readonly initialLaneSufficiency?: RecallSufficiencyGrade | null;
     readonly finalLaneSufficiency?: RecallSufficiencyGrade | null;
     readonly reducerFamily?: string;
+    readonly finalRouteFamily?: string;
     readonly finalClaimSource?: string;
+    readonly supportBundleFamily?: SupportBundleFamily;
+    readonly authoritativeSource?: string;
+    readonly abstentionReason?: RuntimeAbstentionReason;
+    readonly temporalCoverageStatus?: TemporalCoverageStatus;
+    readonly entityResolutionStatus?: EntityResolutionStatus;
+    readonly fallbackUsed?: boolean;
+    readonly fallbackReason?: string;
+    readonly fallbackBlockedReason?: string;
+    readonly routeBudgetEnforced?: boolean;
+    readonly routeBudgetExceededStages?: readonly string[];
+    readonly routeBudgetDecision?: string;
+    readonly plannerTargetedBackfillSubqueryLimit?: number;
+    readonly structuredSufficiencyStatus?: StructuredSufficiencyStatus;
+    readonly scalarTruthTried?: boolean;
+    readonly eventTruthTried?: boolean;
+    readonly backfillBlockedReason?: string;
+    readonly selfBindingRecoveredFrom?: SelfBindingRecoveredFrom;
+    readonly claimAdmissibilityStatus?: ClaimAdmissibilityStatus;
+    readonly authoritativeClaimRejectedReason?: string;
+    readonly factKeyLookupUsed?: boolean;
+    readonly factKeyHitType?: string;
+    readonly factRowSource?: string;
+    readonly compiledRankScore?: number;
+    readonly compiledQueryContextScore?: number;
+    readonly compiledSourceAuthorityScore?: number;
+    readonly compiledSelectedReason?: string;
+    readonly compiledRunnerUpReason?: string;
+    readonly conflictResolutionStatus?: "resolved_by_context_margin" | "ambiguous" | "not_applicable";
+    readonly conflictWinnerReason?: string;
+    readonly conflictRunnerUpCount?: number;
+    readonly traitFamily?: string;
+    readonly traitPolarity?: string;
+    readonly compiledTraitLookupTried?: boolean;
+    readonly compiledTraitLookupSucceeded?: boolean;
+    readonly profileTraitCompiledLookupTried?: boolean;
+    readonly profileTraitCompiledLookupStatus?: string;
+    readonly traitEvidenceSource?: string;
+    readonly traitReaderDecision?: string;
+    readonly traitRejectionReason?: string;
+    readonly canonicalReportFallbackReason?: string;
+    readonly profileTraitSourceCoverageStatus?: string;
+    readonly profileTraitEvidenceSpanCount?: number;
+    readonly profileTraitCompilerStatus?: string;
+    readonly profileTraitRouteStatus?: string;
+    readonly profileTraitResidualOwner?: string | null;
+    readonly compiledDirectFactLookupTried?: boolean;
+    readonly compiledDirectFactLookupSucceeded?: boolean;
+    readonly directFactFamily?: string;
+    readonly compiledDirectFactCoverageStatus?: string;
+    readonly compiledProfileInferenceLookupTried?: boolean;
+    readonly compiledProfileInferenceLookupSucceeded?: boolean;
+    readonly profileInferenceFamily?: string;
+    readonly premiseCount?: number;
+    readonly premiseCoverageStatus?: string;
+    readonly inferenceConfidence?: number | null;
+    readonly inferencePromotionStatus?: string;
+    readonly inferenceRejectionReason?: string | null;
+    readonly offlineSubstrateLookupTried?: boolean;
+    readonly offlineSubstrateLookupSucceeded?: boolean;
+    readonly offlineSubstrateSelectedRowId?: string | null;
+    readonly offlineSubstrateFamily?: string;
+    readonly offlineSubstrateSourceDerivedFamily?: string | null;
+    readonly offlineSubstrateSourceDerivedValue?: string | null;
+    readonly offlineSubstrateQueryShape?: string | null;
+    readonly offlineSubstrateAnswerShape?: string | null;
+    readonly offlineSubstrateEvidenceTriggers?: readonly string[];
+    readonly offlineSubstratePremiseQuoteCount?: number;
+    readonly offlineSubstrateSourceSessionCount?: number;
+    readonly offlineSubstrateAdjudicationStatus?: string;
+    readonly offlineSubstrateRowsScanned?: number;
+    readonly offlineSubstrateEvidenceCount?: number;
+    readonly offlineSubstrateBlockedReason?: string | null;
+    readonly offlineSubstrateDiagnosticOnly?: boolean;
+    readonly profileReportProjectionTried?: boolean;
+    readonly profileReportProjectionSucceeded?: boolean;
+    readonly profileReportProjectionVersion?: string;
+    readonly profileReportProjectionEntryCount?: number;
+    readonly profileReportProjectionEvidenceCount?: number;
+    readonly profileReportProjectionLatencyMs?: number;
+    readonly profileReportProjectionBlockedReason?: string | null;
+    readonly relationshipMapProjectionTried?: boolean;
+    readonly relationshipMapProjectionSucceeded?: boolean;
+    readonly relationshipMapProjectionVersion?: string;
+    readonly relationshipMapProjectionEntryCount?: number;
+    readonly relationshipMapProjectionEvidenceCount?: number;
+    readonly relationshipMapProjectionLatencyMs?: number;
+    readonly relationshipMapProjectionBlockedReason?: string | null;
+    readonly projectDefinitionProjectionTried?: boolean;
+    readonly projectDefinitionProjectionSucceeded?: boolean;
+    readonly projectDefinitionProjectionVersion?: string;
+    readonly projectDefinitionProjectionEntryCount?: number;
+    readonly projectDefinitionProjectionEvidenceCount?: number;
+    readonly projectDefinitionProjectionLatencyMs?: number;
+    readonly projectDefinitionProjectionBlockedReason?: string | null;
+    readonly queryContractRouterTried?: boolean;
+    readonly queryContractRouterSucceeded?: boolean;
+    readonly queryContractName?: string;
+    readonly queryContractFamily?: string;
+    readonly queryContractRetrievalDomain?: string;
+    readonly queryContractAnswerShape?: string;
+    readonly queryContractConfidence?: number;
+    readonly queryContractRoutingReasons?: readonly string[];
+    readonly queryContractBlockedFallbacks?: readonly string[];
+    readonly queryContractFallbackBlockedReason?: string | null;
+    readonly queryContractSelectedReadModel?: string | null;
+    readonly queryContractLatencyMs?: number;
+    readonly memoryQueryPlanVersion?: string;
+    readonly memoryQueryPlanIntent?: string;
+    readonly memoryQueryPlanRetrievalDomain?: string;
+    readonly memoryQueryPlanQueryContract?: string;
+    readonly memoryQueryPlanAnswerShape?: string;
+    readonly memoryQueryPlanSubjects?: readonly string[];
+    readonly memoryQueryPlanObjects?: readonly string[];
+    readonly memoryQueryPlanPlaces?: readonly string[];
+    readonly memoryQueryPlanProjects?: readonly string[];
+    readonly memoryQueryPlanSourceScope?: string;
+    readonly memoryQueryPlanTaskScope?: string;
+    readonly memoryQueryPlanSourceAuditTarget?: Record<string, unknown> | null;
+    readonly memoryQueryPlanRequiresSynthesis?: boolean;
+    readonly recallChannels?: readonly string[];
+    readonly rerankDecision?: string;
+    readonly filterTrace?: readonly Record<string, unknown>[];
+    readonly finalSelectionReason?: string;
+    readonly selectedCorpusCapability?: string;
+    readonly routeArbitrationDecision?: string;
+    readonly routeArbitrationReason?: string;
+    readonly blockedEarlyRoutes?: readonly string[];
+    readonly selectedReader?: string | null;
+    readonly repoProjectionUsed?: boolean;
+    readonly packageScriptProjectionUsed?: boolean;
+    readonly repoDocScanCount?: number;
+    readonly plannerEnforced?: boolean;
+    readonly selectionTrace?: readonly SelectionTraceEntry[];
+    readonly answerSections?: readonly StructuredAnswerSection[];
+    readonly sharedSocialGraphTried?: boolean;
+    readonly sharedSocialGraphSucceeded?: boolean;
+    readonly sharedSocialGraphEvidenceCount?: number;
+    readonly sharedSocialGraphMode?: "strict_shared" | "grouped_with_overlap" | "single_owner";
+    readonly sharedSocialGraphOwners?: readonly string[];
+    readonly sharedSocialGraphSharedFriends?: readonly string[];
+    readonly sharedSocialGraphPlaceScope?: string | null;
+    readonly sharedSocialGraphLatencyMs?: number;
+    readonly sharedSocialGraphBlockedReason?: string | null;
+    readonly currentStatePurchaseProjectionTried?: boolean;
+    readonly currentStatePurchaseProjectionSucceeded?: boolean;
+    readonly currentStatePurchaseProjectionVersion?: string;
+    readonly currentStatePurchaseProjectionEntryCount?: number;
+    readonly currentStatePurchaseProjectionEvidenceCount?: number;
+    readonly aliasCurrentStateProjectionTried?: boolean;
+    readonly aliasCurrentStateProjectionSucceeded?: boolean;
+    readonly aliasCurrentStateProjectionFamily?: string;
+    readonly aliasCurrentStateProjectionVersion?: string;
+    readonly aliasCurrentStateProjectionEntryCount?: number;
+    readonly aliasCurrentStateProjectionEvidenceCount?: number;
+    readonly aliasCurrentStateProjectionLatencyMs?: number;
+    readonly aliasCurrentStateProjectionBlockedReason?: string | null;
+    readonly recapProfileProjectionTried?: boolean;
+    readonly recapProfileProjectionSucceeded?: boolean;
+    readonly recapProfileProjectionFamily?: string;
+    readonly recapProfileProjectionVersion?: string;
+    readonly recapProfileProjectionEntryCount?: number;
+    readonly recapProfileEvidenceCount?: number;
+    readonly recapProfileLatencyMs?: number;
+    readonly recapProfileBlockedReason?: string | null;
+    readonly continuityProjectionTried?: boolean;
+    readonly continuityProjectionSucceeded?: boolean;
+    readonly continuityProjectionVersion?: string;
+    readonly continuityProjectionEntryCount?: number;
+    readonly continuityProjectionEvidenceCount?: number;
+    readonly continuityProjectionLatencyMs?: number;
+    readonly continuityProjectionBlockedReason?: string | null;
+    readonly entityDossierTried?: boolean;
+    readonly entityDossierSucceeded?: boolean;
+    readonly entityDossierEntityType?: string;
+    readonly telemetryCoverageStatus?: string;
+    readonly sourceBoundFallbackUsed?: boolean;
+    readonly queryTimeExtractorUsed?: boolean;
+    readonly queryTimeGLiNEROrLLMUsed?: boolean;
+    readonly canonicalFallbackBlockedReason?: string;
+    readonly sourceBoundEvidenceRequired?: boolean;
+    readonly sourceBoundEvidencePresent?: boolean;
+    readonly readerEvidenceDisciplineStatus?: string;
+    readonly readerResidualOwner?: string | null;
     readonly answerOwnerTrace?: AnswerOwnerTrace;
     readonly answerShapingTrace?: AnswerShapingTrace;
     readonly fallbackSuppressedReason?: string;
@@ -990,6 +1483,8 @@ export interface ResolvedWindow {
   readonly source: "explicit" | "planner" | "none";
 }
 
+export type TemporalScopeMode = "source_scope" | "event_window_scope" | "lifecycle_scope";
+
 export interface RecapFocus {
   readonly participants: readonly string[];
   readonly topics: readonly string[];
@@ -1003,6 +1498,11 @@ export interface RecapRetrievalPlan {
   readonly groupedBy: "artifact_cluster" | "day_cluster" | "result_order";
   readonly queryDecompositionApplied: boolean;
   readonly queryDecompositionSubqueries: readonly string[];
+  readonly scopeMode?: TemporalScopeMode;
+  readonly sourceConstraintUri?: string;
+  readonly usedEventWindow?: boolean;
+  readonly usedCapturedAtOnly?: boolean;
+  readonly temporalSupportPaths?: readonly TemporalSupportPath[];
 }
 
 export interface RecapDerivation {
@@ -1047,6 +1547,15 @@ export interface RecapTaskItem {
   readonly project?: string;
   readonly dueHint?: string;
   readonly statusGuess?: string;
+  readonly lifecycleStatus?: "open" | "blocked" | "completed" | "canceled" | "superseded" | "stale_open" | "recently_closed";
+  readonly statusReason?: string;
+  readonly ownerSubject?: string;
+  readonly dueWindowStart?: string;
+  readonly dueWindowEnd?: string;
+  readonly ageDays?: number;
+  readonly lastMentionedAt?: string;
+  readonly sourceConfidence?: "high" | "medium" | "low";
+  readonly sourceTrail?: readonly string[];
   readonly evidenceIds: readonly string[];
 }
 
@@ -1061,13 +1570,54 @@ export interface CalendarCommitmentItem {
   readonly participants: readonly string[];
   readonly timeHint?: string;
   readonly locationHint?: string;
+  readonly windowStart?: string;
+  readonly windowEnd?: string;
+  readonly timeGranularity?: string;
+  readonly timeExactness?: string;
   readonly certainty: "high" | "medium" | "low";
   readonly evidenceIds: readonly string[];
+}
+
+export interface TemporalSupportPath {
+  readonly id: string;
+  readonly sourceKind: string | null;
+  readonly sourceUri: string | null;
+  readonly capturedAt: string | null;
+  readonly occurredAt: string | null;
+  readonly windowStart: string | null;
+  readonly windowEnd: string | null;
+  readonly timeGranularity: string | null;
+  readonly timeExactness: string | null;
+  readonly temporalAnchorType: string | null;
+  readonly temporalAnchorReference: string | null;
+  readonly quote: string;
+}
+
+export interface EventMemoryUnit {
+  readonly id: string;
+  readonly subject: string | null;
+  readonly eventType: string | null;
+  readonly participants: readonly string[];
+  readonly places: readonly string[];
+  readonly projects: readonly string[];
+  readonly capturedAt: string | null;
+  readonly occurredAt: string | null;
+  readonly windowStart: string | null;
+  readonly windowEnd: string | null;
+  readonly timeGranularity: string | null;
+  readonly timeExactness: string | null;
+  readonly temporalAnchorType: string | null;
+  readonly temporalAnchorReference: string | null;
+  readonly durationText: string | null;
+  readonly durationSecondsApprox: number | null;
+  readonly sourceKind: string | null;
+  readonly sourceTrail: readonly string[];
 }
 
 export interface CalendarExtractionResponse extends RecapBaseResponse {
   readonly intent: "calendar_extraction";
   readonly commitments: readonly CalendarCommitmentItem[];
+  readonly eventMemoryUnits?: readonly EventMemoryUnit[];
   readonly derivation?: RecapDerivation;
 }
 

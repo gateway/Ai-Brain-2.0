@@ -4,7 +4,21 @@ import {
   extractPrimaryQuerySurfaceNames,
   extractQuerySurfaceNames
 } from "./query-subjects.js";
-import { isConcreteConsumablePreferenceQuery } from "./query-signals.js";
+import {
+  isConcreteBookHistoryQuery,
+  isConcreteConsumablePreferenceQuery,
+  isConcreteCountryOriginQuery,
+  isConcreteEnumerativeListQuery,
+  isConcreteEventInventoryQuery,
+  isConcreteFavoriteDomainQuery,
+  isConcreteLocationHistoryQuery,
+  isConcreteReasonValueQuery,
+  isConcreteSupportNetworkQuery,
+  isConcreteUtteranceFactQuery,
+  isConcreteValueSlotQuery,
+  isCommunityParticipationQuery,
+  isIdentityProfileQuery
+} from "./query-signals.js";
 import type {
   AnswerOwnerCandidateTrace,
   AnswerOwnerFamily,
@@ -48,8 +62,14 @@ function isListSetFamilyQuery(queryText: string, exactDetailFamily: string): boo
   }
   return (
     ["social_exclusion", "hobbies", "shop", "country", "symbolic_gifts", "bands", "favorite_band", "favorite_dj", "favorite_books"].includes(exactDetailFamily) ||
+    isConcreteBookHistoryQuery(queryText) ||
+    isConcreteLocationHistoryQuery(queryText) ||
+    isConcreteEventInventoryQuery(queryText) ||
+    isConcreteSupportNetworkQuery(queryText) ||
+    isConcreteEnumerativeListQuery(queryText) ||
     /\bfavorite books?\b/u.test(normalized) ||
-    /\bwhere\b[^?!.]{0,80}\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went)\b/u.test(normalized) ||
+    isCommunityParticipationQuery(queryText) ||
+    /\bwhere\b[^?!.]{0,80}\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went|camp(?:ed|ing)?)\b/u.test(normalized) ||
     /\bwhat\s+(?:states|areas|places)\b/u.test(normalized) ||
     /\bwhat do\b.*\bboth\b/u.test(normalized) ||
     /\bwhich country\b/u.test(normalized) ||
@@ -59,7 +79,21 @@ function isListSetFamilyQuery(queryText: string, exactDetailFamily: string): boo
 
 function isReportFamilyQuery(queryText: string): boolean {
   const normalized = normalize(queryText);
+  if (
+    isConcreteUtteranceFactQuery(queryText) ||
+    isConcreteBookHistoryQuery(queryText) ||
+    isConcreteLocationHistoryQuery(queryText) ||
+    isConcreteEventInventoryQuery(queryText) ||
+    isConcreteSupportNetworkQuery(queryText) ||
+    isConcreteReasonValueQuery(queryText) ||
+    isConcreteValueSlotQuery(queryText) ||
+    isConcreteFavoriteDomainQuery(queryText) ||
+    isConcreteCountryOriginQuery(queryText)
+  ) {
+    return false;
+  }
   return (
+    isIdentityProfileQuery(queryText) ||
     /\bwhy\b/u.test(normalized) ||
     /\bhow does\b[^?!.]{0,80}\bplan to\b/u.test(normalized) ||
     /\bwhat can\b[^?!.]{0,80}\bpotentially do\b/u.test(normalized) ||
@@ -89,6 +123,9 @@ function isConcreteExactDetailQuery(queryText: string, exactDetailFamily: string
   if (/\bfavorite style of painting\b/u.test(normalized)) {
     return true;
   }
+  if (isConcreteReasonValueQuery(queryText) || isConcreteCountryOriginQuery(queryText)) {
+    return true;
+  }
   if (isConcreteConsumablePreferenceQuery(queryText.trim())) {
     return true;
   }
@@ -105,11 +142,11 @@ function isConcreteExactDetailQuery(queryText: string, exactDetailFamily: string
   }
   if (
     isTemporalFamilyQuery(queryText) ||
-    /\bwhat\s+books?\b/u.test(normalized) ||
-    /\bbooks?\b[^?!.]{0,40}\bread\b/u.test(normalized) ||
-    /\bwhat\s+(?:[a-z0-9+&'’ -]+\s+)?events?\b/u.test(normalized) ||
-    /\bwho\s+supports?\b/u.test(normalized) ||
-    /\bsupport network\b/u.test(normalized) ||
+    isConcreteBookHistoryQuery(queryText) ||
+    isConcreteLocationHistoryQuery(queryText) ||
+    isConcreteEventInventoryQuery(queryText) ||
+    isConcreteSupportNetworkQuery(queryText) ||
+    isConcreteEnumerativeListQuery(queryText) ||
     isListSetFamilyQuery(queryText, exactDetailFamily) ||
     /\bwhy\b/u.test(normalized) ||
     /\bwould\b/u.test(normalized) ||
@@ -119,6 +156,7 @@ function isConcreteExactDetailQuery(queryText: string, exactDetailFamily: string
     /\bdreams?\b/u.test(normalized) ||
     /\bplans?\b/u.test(normalized) ||
     /\bfinancial status\b/u.test(normalized) ||
+    isIdentityProfileQuery(queryText) ||
     /\bidentity\b/u.test(normalized) ||
     /\brelationship status\b/u.test(normalized) ||
     /\bmember of\b/u.test(normalized) ||
@@ -136,6 +174,9 @@ function isConcreteExactDetailQuery(queryText: string, exactDetailFamily: string
     return false;
   }
   if (exactDetailFamily !== "generic" && !["social_exclusion", "hobbies", "shop", "country", "symbolic_gifts", "bands", "favorite_band", "favorite_dj"].includes(exactDetailFamily)) {
+    return true;
+  }
+  if (isConcreteUtteranceFactQuery(queryText) || isConcreteValueSlotQuery(queryText) || isConcreteFavoriteDomainQuery(queryText)) {
     return true;
   }
   return (
@@ -160,6 +201,7 @@ function retrievalLaneToOwnerFamily(lane: RetrievalPlanLane | AnswerOwnerFamily 
     case "book_list":
     case "support_network":
     case "location_history":
+    case "set_fact":
     case "list_set":
       return "list_set";
     case "exact_detail":
@@ -254,6 +296,17 @@ function classifyOwnerFamily(params: {
   const canonicalKind = params.canonicalAdjudication?.canonical.kind ?? null;
   const canonicalPredicateFamily = params.canonicalAdjudication?.bundle.predicateFamily ?? null;
   const canonicalFinalClaimSource = params.canonicalAdjudication?.formatted.finalClaimSource ?? null;
+  const primaryTypedContract = params.retrievalPlan?.controllerIntent?.primaryTypedContract ?? null;
+  if (
+    [
+      "book_recommendation_pair",
+      "structured_direct_reason",
+      "symbolic_value_slot",
+      "temporal_plan_detail"
+    ].includes(primaryTypedContract ?? "")
+  ) {
+    return "exact_detail";
+  }
   const plannerFamilyHint =
     retrievalLaneToOwnerFamily(params.retrievalPlan?.lane ?? params.retrievalPlan?.family ?? null) !== "generic"
       ? retrievalLaneToOwnerFamily(params.retrievalPlan?.lane ?? params.retrievalPlan?.family ?? null)

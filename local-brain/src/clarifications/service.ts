@@ -133,6 +133,17 @@ interface MergeEntityAliasInput {
   readonly note?: string;
 }
 
+interface MergeEntityRoleCorrectionInput {
+  readonly namespaceId: string;
+  readonly sourceName: string;
+  readonly sourceEntityType: string;
+  readonly canonicalName: string;
+  readonly canonicalEntityType: string;
+  readonly aliases?: readonly string[];
+  readonly preserveAliases?: boolean;
+  readonly note?: string;
+}
+
 interface ResolveIdentityConflictInput {
   readonly sourceEntityId: string;
   readonly targetEntityId: string;
@@ -147,6 +158,33 @@ interface KeepIdentityConflictSeparateInput {
   readonly leftEntityId: string;
   readonly rightEntityId: string;
   readonly note?: string;
+}
+
+interface CorrectionSourceEnvelopeInput {
+  readonly namespaceId: string;
+  readonly correctionKind: "alias_merge" | "role_correction" | "keep_separate";
+  readonly sourceName: string;
+  readonly canonicalName?: string | null;
+  readonly sourceEntityId?: string | null;
+  readonly targetEntityId?: string | null;
+  readonly sourceEntityType?: string | null;
+  readonly canonicalEntityType?: string | null;
+  readonly action: string;
+  readonly outboxEventId?: string | null;
+  readonly decisionTable?: string | null;
+  readonly decisionId?: string | null;
+  readonly sourceTrail?: readonly Record<string, unknown>[];
+  readonly payload?: Record<string, unknown>;
+  readonly idempotencyKey: string;
+}
+
+interface CorrectionReferenceAuditInput {
+  readonly namespaceId: string;
+  readonly sourceEntityId?: string | null;
+  readonly targetEntityId?: string | null;
+  readonly correctionEnvelopeId?: string | null;
+  readonly auditKind: "alias_merge" | "role_correction" | "keep_separate";
+  readonly metadata?: Record<string, unknown>;
 }
 
 export interface ClarificationInboxItem {
@@ -199,9 +237,9 @@ interface RebuildRunRow {
 
 export interface EntityMergeResult {
   readonly namespaceId: string;
-  readonly sourceEntityId: string;
+  readonly sourceEntityId: string | null;
   readonly targetEntityId: string;
-  readonly mergeMode: "rename" | "redirect_merge";
+  readonly mergeMode: "rename" | "redirect_merge" | "alias_only";
   readonly outboxEventId: string;
 }
 
@@ -875,6 +913,28 @@ async function resolveEntityForUpdate(
   return row;
 }
 
+async function findEntityForUpdate(
+  client: PoolClient,
+  namespaceId: string,
+  entityType: string,
+  canonicalName: string
+): Promise<{ id: string; canonical_name: string; entity_type: string } | null> {
+  const result = await client.query<{ id: string; canonical_name: string; entity_type: string }>(
+    `
+      SELECT id::text, canonical_name, entity_type
+      FROM entities
+      WHERE namespace_id = $1
+        AND entity_type = $2
+        AND normalized_name = $3
+        AND merged_into_entity_id IS NULL
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [namespaceId, entityType, normalizeName(canonicalName)]
+  );
+  return result.rows[0] ?? null;
+}
+
 async function resolveEntityByIdForUpdate(
   client: PoolClient,
   entityId: string
@@ -1129,6 +1189,246 @@ async function upsertOutboxEvent(
   );
 
   return inserted.rows[0]?.id ?? "";
+}
+
+async function upsertCorrectionSourceEnvelope(client: PoolClient, input: CorrectionSourceEnvelopeInput): Promise<string> {
+  const inserted = await client.query<{ readonly id: string }>(
+    `
+      INSERT INTO correction_source_envelopes (
+        namespace_id,
+        correction_kind,
+        source_name,
+        canonical_name,
+        source_entity_id,
+        target_entity_id,
+        source_entity_type,
+        canonical_entity_type,
+        action,
+        outbox_event_id,
+        decision_table,
+        decision_id,
+        source_trail,
+        payload,
+        idempotency_key
+      )
+      VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid, $7, $8, $9, $10::uuid, $11, $12::uuid, $13::jsonb, $14::jsonb, $15)
+      ON CONFLICT (idempotency_key)
+      DO UPDATE SET
+        canonical_name = EXCLUDED.canonical_name,
+        source_entity_id = EXCLUDED.source_entity_id,
+        target_entity_id = EXCLUDED.target_entity_id,
+        source_entity_type = EXCLUDED.source_entity_type,
+        canonical_entity_type = EXCLUDED.canonical_entity_type,
+        action = EXCLUDED.action,
+        outbox_event_id = EXCLUDED.outbox_event_id,
+        decision_table = EXCLUDED.decision_table,
+        decision_id = EXCLUDED.decision_id,
+        source_trail = EXCLUDED.source_trail,
+        payload = correction_source_envelopes.payload || EXCLUDED.payload
+      RETURNING id::text
+    `,
+    [
+      input.namespaceId,
+      input.correctionKind,
+      input.sourceName,
+      input.canonicalName ?? null,
+      input.sourceEntityId ?? null,
+      input.targetEntityId ?? null,
+      input.sourceEntityType ?? null,
+      input.canonicalEntityType ?? null,
+      input.action,
+      input.outboxEventId ?? null,
+      input.decisionTable ?? null,
+      input.decisionId ?? null,
+      JSON.stringify(input.sourceTrail ?? []),
+      JSON.stringify(input.payload ?? {}),
+      input.idempotencyKey
+    ]
+  );
+  return inserted.rows[0]?.id ?? "";
+}
+
+async function upsertCorrectionWriteLock(
+  client: PoolClient,
+  input: {
+    readonly namespaceId: string;
+    readonly entityName: string;
+    readonly entityType?: string | null;
+    readonly lockReason: string;
+    readonly status: "active" | "released";
+    readonly sourceEnvelopeId?: string | null;
+    readonly metadata?: Record<string, unknown>;
+  }
+): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO correction_write_locks (
+        namespace_id,
+        entity_name,
+        normalized_name,
+        entity_type,
+        lock_reason,
+        status,
+        source_envelope_id,
+        released_at,
+        metadata
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7::uuid, CASE WHEN $6 = 'released' THEN now() ELSE NULL END, $8::jsonb)
+      ON CONFLICT (namespace_id, normalized_name, coalesce(entity_type, ''), lock_reason)
+      DO UPDATE SET
+        entity_name = EXCLUDED.entity_name,
+        status = EXCLUDED.status,
+        source_envelope_id = COALESCE(EXCLUDED.source_envelope_id, correction_write_locks.source_envelope_id),
+        released_at = CASE WHEN EXCLUDED.status = 'released' THEN now() ELSE NULL END,
+        metadata = correction_write_locks.metadata || EXCLUDED.metadata
+    `,
+    [
+      input.namespaceId,
+      input.entityName,
+      normalizeName(input.entityName),
+      input.entityType ?? null,
+      input.lockReason,
+      input.status,
+      input.sourceEnvelopeId ?? null,
+      JSON.stringify(input.metadata ?? {})
+    ]
+  );
+}
+
+async function recordCorrectionReferenceAudit(client: PoolClient, input: CorrectionReferenceAuditInput): Promise<string> {
+  const sourceEntityId = input.sourceEntityId ?? null;
+  const targetEntityId = input.targetEntityId ?? null;
+  const sameEntityRetained = Boolean(sourceEntityId && targetEntityId && sourceEntityId === targetEntityId);
+  const [relationshipRefs, selfBindingRefs, priorRefs] = sourceEntityId
+    ? await Promise.all([
+        client.query<{ readonly total: string }>(
+          `
+            SELECT count(*)::text AS total
+            FROM relationship_memory
+            WHERE namespace_id = $1
+              AND (subject_entity_id = $2::uuid OR object_entity_id = $2::uuid)
+          `,
+          [input.namespaceId, sourceEntityId]
+        ),
+        client.query<{ readonly total: string }>(
+          `
+            SELECT count(*)::text AS total
+            FROM namespace_self_bindings
+            WHERE namespace_id = $1
+              AND entity_id = $2::uuid
+          `,
+          [input.namespaceId, sourceEntityId]
+        ),
+        client.query<{ readonly total: string }>(
+          `
+            SELECT count(*)::text AS total
+            FROM relationship_priors
+            WHERE namespace_id = $1
+              AND (entity_a_id = $2::uuid OR entity_b_id = $2::uuid)
+          `,
+          [input.namespaceId, sourceEntityId]
+        )
+      ])
+    : [
+        { rows: [{ total: "0" }] },
+        { rows: [{ total: "0" }] },
+        { rows: [{ total: "0" }] }
+      ];
+  const relationshipSourceRefCount = Number(relationshipRefs.rows[0]?.total ?? "0");
+  const selfBindingSourceRefCount = Number(selfBindingRefs.rows[0]?.total ?? "0");
+  const relationshipPriorSourceRefCount = Number(priorRefs.rows[0]?.total ?? "0");
+  const sourceReferenceCount = relationshipSourceRefCount + selfBindingSourceRefCount + relationshipPriorSourceRefCount;
+  const intentionallyRetained = sameEntityRetained ? sourceReferenceCount : 0;
+  const inserted = await client.query<{ readonly id: string }>(
+    `
+      INSERT INTO correction_reference_audits (
+        namespace_id,
+        source_entity_id,
+        target_entity_id,
+        correction_envelope_id,
+        audit_kind,
+        source_reference_count,
+        intentionally_retained_count,
+        relationship_source_ref_count,
+        self_binding_source_ref_count,
+        relationship_prior_source_ref_count,
+        passed,
+        metadata
+      )
+      VALUES ($1, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
+      RETURNING id::text
+    `,
+    [
+      input.namespaceId,
+      sourceEntityId,
+      targetEntityId,
+      input.correctionEnvelopeId ?? null,
+      input.auditKind,
+      sourceReferenceCount,
+      intentionallyRetained,
+      relationshipSourceRefCount,
+      selfBindingSourceRefCount,
+      relationshipPriorSourceRefCount,
+      sourceReferenceCount === 0 || intentionallyRetained === sourceReferenceCount,
+      JSON.stringify(input.metadata ?? {})
+    ]
+  );
+  return inserted.rows[0]?.id ?? "";
+}
+
+async function upsertCorrectionClassConstraint(
+  client: PoolClient,
+  input: {
+    readonly namespaceId: string;
+    readonly surfaceName: string;
+    readonly canonicalName: string;
+    readonly correctedRole: string;
+    readonly forbiddenRoles: readonly string[];
+    readonly allowedRoles?: readonly string[];
+    readonly sourceEnvelopeId?: string | null;
+    readonly decisionReason?: string | null;
+    readonly metadata?: Record<string, unknown>;
+  }
+): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO correction_class_constraints (
+        namespace_id,
+        surface_name,
+        normalized_name,
+        canonical_name,
+        corrected_role,
+        forbidden_roles,
+        allowed_roles,
+        source_envelope_id,
+        decision_reason,
+        metadata
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::text[], $7::text[], $8::uuid, $9, $10::jsonb)
+      ON CONFLICT (namespace_id, normalized_name, corrected_role)
+      DO UPDATE SET
+        surface_name = EXCLUDED.surface_name,
+        canonical_name = EXCLUDED.canonical_name,
+        forbidden_roles = EXCLUDED.forbidden_roles,
+        allowed_roles = EXCLUDED.allowed_roles,
+        source_envelope_id = COALESCE(EXCLUDED.source_envelope_id, correction_class_constraints.source_envelope_id),
+        decision_reason = EXCLUDED.decision_reason,
+        metadata = correction_class_constraints.metadata || EXCLUDED.metadata,
+        updated_at = now()
+    `,
+    [
+      input.namespaceId,
+      input.surfaceName,
+      normalizeName(input.surfaceName),
+      input.canonicalName,
+      input.correctedRole,
+      [...new Set(input.forbiddenRoles)],
+      [...new Set(input.allowedRoles ?? [input.correctedRole])],
+      input.sourceEnvelopeId ?? null,
+      input.decisionReason ?? null,
+      JSON.stringify(input.metadata ?? {})
+    ]
+  );
 }
 
 async function fetchCandidateForUpdate(client: PoolClient, namespaceId: string, candidateId: string): Promise<ClaimCandidateRow> {
@@ -1934,10 +2234,116 @@ export async function mergeEntityAlias(input: MergeEntityAliasInput): Promise<En
   const aliases = unique([...(input.aliases ?? [])]);
 
   return withTransaction(async (client) => {
-    const source = await resolveEntityForUpdate(client, input.namespaceId, input.entityType, {
-      entityId: input.sourceEntityId,
-      canonicalName: input.sourceName
-    });
+    let source: { id: string; canonical_name: string; entity_type: string } | null = null;
+    try {
+      source = await resolveEntityForUpdate(client, input.namespaceId, input.entityType, {
+        entityId: input.sourceEntityId,
+        canonicalName: input.sourceName
+      });
+    } catch (error) {
+      if (input.sourceEntityId || !(error instanceof Error) || !error.message.includes("was not found")) {
+        throw error;
+      }
+    }
+
+    if (!source) {
+      const target = await findEntityForUpdate(client, input.namespaceId, input.entityType, input.canonicalName);
+      if (!target) {
+        throw new Error(`Entity "${input.canonicalName}" was not found in namespace ${input.namespaceId}.`);
+      }
+      const sourceName = normalizeWhitespace(input.sourceName ?? "");
+      if (!sourceName) {
+        throw new Error("Missing source alias text.");
+      }
+      for (const alias of unique([sourceName, ...aliases])) {
+        await upsertAlias(client, target.id, alias, "manual", {
+          clarification_source: "entity_alias_only",
+          note: input.note ?? null
+        });
+      }
+      const outboxEventId = await upsertOutboxEvent(client, {
+        namespaceId: input.namespaceId,
+        aggregateType: "entity",
+        aggregateId: target.id,
+        eventType: "entity.alias_added",
+        payload: {
+          namespace_id: input.namespaceId,
+          source_entity_id: null,
+          source_name: sourceName,
+          target_entity_id: target.id,
+          canonical_name: target.canonical_name,
+          entity_type: input.entityType,
+          aliases: unique([sourceName, ...aliases]),
+          merge_mode: "alias_only",
+          preserve_aliases: true,
+          rebuild_scope: {
+            candidate_ids: [],
+            entity_ids: [target.id],
+            aliases: unique([sourceName, ...aliases]),
+            canonical_names: [target.canonical_name],
+            trigger_kinds: ["entity_alias_added"]
+          },
+          note: input.note ?? null
+        },
+        idempotencyKey: `entity:alias-only:${input.namespaceId}:${target.id}:${normalizeName(sourceName)}`
+      });
+      const envelopeId = await upsertCorrectionSourceEnvelope(client, {
+        namespaceId: input.namespaceId,
+        correctionKind: "alias_merge",
+        sourceName,
+        canonicalName: target.canonical_name,
+        sourceEntityId: null,
+        targetEntityId: target.id,
+        sourceEntityType: input.entityType,
+        canonicalEntityType: input.entityType,
+        action: "alias_only",
+        outboxEventId,
+        decisionTable: "brain_outbox_events",
+        sourceTrail: [
+          {
+            sourceUri: "mcp://memory.apply_correction",
+            quote: `${sourceName} was added as a verified alias for ${target.canonical_name}.`,
+            supportKind: "operator_correction"
+          }
+        ],
+        payload: {
+          preserve_aliases: true,
+          aliases: unique([sourceName, ...aliases]),
+          note: input.note ?? null
+        },
+        idempotencyKey: `correction-envelope:alias-only:${input.namespaceId}:${target.id}:${normalizeName(sourceName)}`
+      });
+      await recordCorrectionReferenceAudit(client, {
+        namespaceId: input.namespaceId,
+        sourceEntityId: null,
+        targetEntityId: target.id,
+        correctionEnvelopeId: envelopeId,
+        auditKind: "alias_merge",
+        metadata: {
+          merge_mode: "alias_only",
+          note: input.note ?? null
+        }
+      });
+      await upsertCorrectionWriteLock(client, {
+        namespaceId: input.namespaceId,
+        entityName: sourceName,
+        entityType: input.entityType,
+        lockReason: "operator_correction",
+        status: "released",
+        sourceEnvelopeId: envelopeId,
+        metadata: {
+          canonical_name: target.canonical_name,
+          merge_mode: "alias_only"
+        }
+      });
+      return {
+        namespaceId: input.namespaceId,
+        sourceEntityId: null,
+        targetEntityId: target.id,
+        mergeMode: "alias_only",
+        outboxEventId
+      };
+    }
 
     let target =
       input.targetEntityId && input.targetEntityId !== source.id
@@ -2071,12 +2477,224 @@ export async function mergeEntityAlias(input: MergeEntityAliasInput): Promise<En
       },
       idempotencyKey: `entity:merge:${input.namespaceId}:${source.id}:${targetEntityId}:${normalizeName(canonicalName)}`
     });
+    const envelopeId = await upsertCorrectionSourceEnvelope(client, {
+      namespaceId: input.namespaceId,
+      correctionKind: "alias_merge",
+      sourceName: source.canonical_name,
+      canonicalName,
+      sourceEntityId: source.id,
+      targetEntityId,
+      sourceEntityType: input.entityType,
+      canonicalEntityType: input.entityType,
+      action: mergeMode,
+      outboxEventId,
+      decisionTable: "brain_outbox_events",
+      sourceTrail: [
+        {
+          sourceUri: "mcp://memory.apply_correction",
+          quote: `${source.canonical_name} was corrected to ${canonicalName}.`,
+          supportKind: "operator_correction"
+        }
+      ],
+      payload: {
+        preserve_aliases: preserveAliases,
+        aliases: preserveAliases ? unique([source.canonical_name, ...aliases]) : unique(aliases),
+        note: input.note ?? null
+      },
+      idempotencyKey: `correction-envelope:alias:${input.namespaceId}:${source.id}:${targetEntityId}:${normalizeName(canonicalName)}`
+    });
+    await recordCorrectionReferenceAudit(client, {
+      namespaceId: input.namespaceId,
+      sourceEntityId: source.id,
+      targetEntityId,
+      correctionEnvelopeId: envelopeId,
+      auditKind: "alias_merge",
+      metadata: {
+        merge_mode: mergeMode,
+        note: input.note ?? null
+      }
+    });
+    await upsertCorrectionWriteLock(client, {
+      namespaceId: input.namespaceId,
+      entityName: source.canonical_name,
+      entityType: input.entityType,
+      lockReason: "operator_correction",
+      status: "released",
+      sourceEnvelopeId: envelopeId,
+      metadata: {
+        canonical_name: canonicalName,
+        merge_mode: mergeMode
+      }
+    });
 
     return {
       namespaceId: input.namespaceId,
       sourceEntityId: source.id,
       targetEntityId,
       mergeMode,
+      outboxEventId
+    };
+  });
+}
+
+export async function mergeEntityRoleCorrection(input: MergeEntityRoleCorrectionInput): Promise<EntityMergeResult> {
+  const preserveAliases = input.preserveAliases ?? true;
+  const aliases = unique([...(input.aliases ?? [])]);
+
+  return withTransaction(async (client) => {
+    const source = await resolveEntityForUpdate(client, input.namespaceId, input.sourceEntityType, {
+      canonicalName: input.sourceName
+    });
+    const targetEntityId = await upsertEntity(client, input.namespaceId, input.canonicalEntityType, input.canonicalName, {
+      clarification_source: "entity_role_correction",
+      alias_merge_note: input.note ?? null
+    });
+    const target = await resolveEntityForUpdate(client, input.namespaceId, input.canonicalEntityType, {
+      entityId: targetEntityId
+    });
+
+    if (source.id === target.id) {
+      throw new Error("Source and target entity are already the same entity.");
+    }
+
+    await transferEntityAliases(client, source.id, target.id, input.note);
+    if (preserveAliases) {
+      for (const alias of unique([source.canonical_name, input.sourceName, ...aliases])) {
+        await upsertAlias(client, target.id, alias, "manual", {
+          clarification_source: "entity_role_correction",
+          source_entity_type: input.sourceEntityType,
+          target_entity_type: input.canonicalEntityType,
+          note: input.note ?? null
+        });
+      }
+    } else {
+      await replaceEntityAliases(client, target.id, aliases, {
+        clarification_source: "entity_role_correction_strict",
+        source_entity_type: input.sourceEntityType,
+        target_entity_type: input.canonicalEntityType,
+        note: input.note ?? null
+      });
+    }
+
+    await mergeEntityReferences(client, input.namespaceId, source.id, target.id);
+    await client.query(
+      `
+        UPDATE entities
+        SET
+          merged_into_entity_id = $2::uuid,
+          metadata = entities.metadata || $3::jsonb,
+          last_seen_at = now()
+        WHERE id = $1::uuid
+      `,
+      [
+        source.id,
+        target.id,
+        JSON.stringify({
+          alias_merge_mode: "role_correction_merge",
+          merged_into_entity_id: target.id,
+          source_entity_type: input.sourceEntityType,
+          target_entity_type: input.canonicalEntityType,
+          alias_merge_note: input.note ?? null
+        })
+      ]
+    );
+
+    const outboxEventId = await upsertOutboxEvent(client, {
+      namespaceId: input.namespaceId,
+      aggregateType: "entity",
+      aggregateId: source.id,
+      eventType: "entity.alias_merged",
+      payload: {
+        namespace_id: input.namespaceId,
+        source_entity_id: source.id,
+        source_name: source.canonical_name,
+        source_entity_type: input.sourceEntityType,
+        target_entity_id: target.id,
+        canonical_name: input.canonicalName,
+        entity_type: input.canonicalEntityType,
+        aliases: preserveAliases ? unique([source.canonical_name, input.sourceName, ...aliases]) : unique(aliases),
+        merge_mode: "role_correction_merge",
+        preserve_aliases: preserveAliases,
+        rebuild_scope: {
+          candidate_ids: [],
+          entity_ids: unique([source.id, target.id]),
+          aliases: preserveAliases ? unique([source.canonical_name, input.sourceName, ...aliases]) : unique(aliases),
+          canonical_names: [input.canonicalName],
+          trigger_kinds: ["entity_role_corrected"]
+        },
+        note: input.note ?? null
+      },
+      idempotencyKey: `entity:role-correction:${input.namespaceId}:${source.id}:${target.id}:${normalizeName(input.canonicalName)}`
+    });
+    const envelopeId = await upsertCorrectionSourceEnvelope(client, {
+      namespaceId: input.namespaceId,
+      correctionKind: "role_correction",
+      sourceName: source.canonical_name,
+      canonicalName: input.canonicalName,
+      sourceEntityId: source.id,
+      targetEntityId: target.id,
+      sourceEntityType: input.sourceEntityType,
+      canonicalEntityType: input.canonicalEntityType,
+      action: "role_correction_merge",
+      outboxEventId,
+      decisionTable: "brain_outbox_events",
+      sourceTrail: [
+        {
+          sourceUri: "mcp://memory.apply_correction",
+          quote: `${source.canonical_name} was corrected from ${input.sourceEntityType} to ${input.canonicalEntityType}.`,
+          supportKind: "operator_role_correction"
+        }
+      ],
+      payload: {
+        preserve_aliases: preserveAliases,
+        aliases: preserveAliases ? unique([source.canonical_name, input.sourceName, ...aliases]) : unique(aliases),
+        note: input.note ?? null
+      },
+      idempotencyKey: `correction-envelope:role:${input.namespaceId}:${source.id}:${target.id}:${normalizeName(input.canonicalName)}`
+    });
+    await upsertCorrectionClassConstraint(client, {
+      namespaceId: input.namespaceId,
+      surfaceName: input.sourceName,
+      canonicalName: input.canonicalName,
+      correctedRole: input.canonicalEntityType,
+      forbiddenRoles: [input.sourceEntityType],
+      sourceEnvelopeId: envelopeId,
+      decisionReason: input.note ?? "Manual role correction through MCP.",
+      metadata: {
+        source_entity_id: source.id,
+        target_entity_id: target.id
+      }
+    });
+    await recordCorrectionReferenceAudit(client, {
+      namespaceId: input.namespaceId,
+      sourceEntityId: source.id,
+      targetEntityId: target.id,
+      correctionEnvelopeId: envelopeId,
+      auditKind: "role_correction",
+      metadata: {
+        source_entity_type: input.sourceEntityType,
+        canonical_entity_type: input.canonicalEntityType,
+        note: input.note ?? null
+      }
+    });
+    await upsertCorrectionWriteLock(client, {
+      namespaceId: input.namespaceId,
+      entityName: input.sourceName,
+      entityType: input.sourceEntityType,
+      lockReason: "operator_role_correction",
+      status: "released",
+      sourceEnvelopeId: envelopeId,
+      metadata: {
+        canonical_name: input.canonicalName,
+        canonical_entity_type: input.canonicalEntityType
+      }
+    });
+
+    return {
+      namespaceId: input.namespaceId,
+      sourceEntityId: source.id,
+      targetEntityId: target.id,
+      mergeMode: "redirect_merge",
       outboxEventId
     };
   });
@@ -2332,6 +2950,42 @@ export async function keepIdentityConflictSeparate(input: KeepIdentityConflictSe
       metadata: {
         left_namespace_id: left.namespace_id,
         right_namespace_id: right.namespace_id
+      }
+    });
+    const envelopeId = await upsertCorrectionSourceEnvelope(client, {
+      namespaceId: left.namespace_id,
+      correctionKind: "keep_separate",
+      sourceName: left.canonical_name,
+      canonicalName: right.canonical_name,
+      sourceEntityId: left.id,
+      targetEntityId: right.id,
+      sourceEntityType: left.entity_type,
+      canonicalEntityType: right.entity_type,
+      action: "keep_separate",
+      decisionTable: "identity_conflict_decisions",
+      sourceTrail: [
+        {
+          sourceUri: "mcp://memory.keep_correction_separate",
+          quote: `${left.canonical_name} and ${right.canonical_name} were explicitly kept separate.`,
+          supportKind: "operator_correction"
+        }
+      ],
+      payload: {
+        note: input.note ?? null,
+        left_namespace_id: left.namespace_id,
+        right_namespace_id: right.namespace_id
+      },
+      idempotencyKey: `correction-envelope:keep-separate:${left.id}:${right.id}`
+    });
+    await recordCorrectionReferenceAudit(client, {
+      namespaceId: left.namespace_id,
+      sourceEntityId: left.id,
+      targetEntityId: right.id,
+      correctionEnvelopeId: envelopeId,
+      auditKind: "keep_separate",
+      metadata: {
+        note: input.note ?? null,
+        expected_retained_separate_identities: true
       }
     });
 

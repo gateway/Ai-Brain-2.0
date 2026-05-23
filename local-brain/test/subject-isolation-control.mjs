@@ -188,3 +188,34 @@ test("answerable-unit owner and participant provenance count as subject-owned si
   const evaluation = evaluateSubjectIsolationResult("When did Melanie paint a sunrise?", answerableTemporal);
   assert.equal(evaluation.status, "subject_owned");
 });
+
+test("pair-query subject isolation keeps only named pair participants in shared-group queries", () => {
+  const pairOwned = makeResult({
+    memoryId: "jon-gina-owned",
+    content: "Jon: Gina and I both participated in dance competitions when we were younger.",
+    subjectName: "Jon",
+    speakerName: "Jon",
+    participantNames: ["Jon", "Gina"],
+    derivationType: "participant_turn"
+  });
+  const foreign = makeResult({
+    memoryId: "jon-gina-foreign",
+    content: "Maya: I also competed in dance competitions all the time.",
+    subjectName: "Maya",
+    speakerName: "Maya",
+    participantNames: ["Jon", "Gina", "Maya"],
+    derivationType: "participant_turn"
+  });
+
+  const retained = retainSubjectIsolatedRecallResults(
+    "Did Jon and Gina both participate in dance competitions?",
+    [foreign, pairOwned],
+    2
+  );
+
+  assert.equal(retained.results[0]?.memoryId, "jon-gina-owned");
+  assert.equal(
+    retained.evaluations.find((entry) => entry.result.memoryId === "jon-gina-foreign")?.status,
+    "mixed_subject"
+  );
+});

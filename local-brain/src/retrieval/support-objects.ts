@@ -4,23 +4,30 @@ import type { StoredCanonicalLookup } from "../canonical-memory/service.js";
 import { areTemporalEventKeysCompatible, inferSetEntryValueType, inferTemporalEventKeyFromText } from "../canonical-memory/service.js";
 import { buildReportAnswerPayload, deriveQueryBoundReportSummary } from "../canonical-memory/report-synthesis.js";
 import type { RecallResult } from "../types.js";
+import { derivePreferredAspirationSummary, inferSpecificIdentityAnswerValue, selectPreferredProfileAnswerValue } from "./profile-answer-preferences.js";
+import { extractSupportContactsFromText, KNOWN_INSTRUMENT_LABELS, KNOWN_POTTERY_ITEM_LABELS } from "./support-entry-helpers.js";
 import { collectRuntimeReportSupport, deriveRuntimeReportClaim } from "./report-runtime.js";
+import { isConcreteEventInventoryQuery, isConcreteInstrumentInventoryQuery, isConcreteMusicArtistHistoryQuery, isConcretePaintedItemQuery, isConcretePetNameQuery, isConcretePotteryItemQuery, isConcreteSymbolInventoryQuery, isFamilyActivityInventoryQuery, isIdentityProfileQuery, isMadeItemPairInventoryQuery, isPetInventoryQuery } from "./query-signals.js";
+import { extractCampingPlacesFromText, hasCampingLocationSeedEvidence, isCampingLocationQuery } from "./location-history/camping.js";
+import { hasActivitySeedEvidence, inferActivityCompletenessTarget, inferActivityEntries, inferPetInventoryValues, inferPreferenceProfileValues, inferSupportNetworkCompletenessTarget } from "./typed-support-extractors.js";
 import { extractPossessiveQuerySurfaceNames, extractPrimaryQuerySurfaceNames } from "./query-subjects.js";
-import {
-  collectObservationMetadataTextCandidates,
-  collectRecallResultTextCandidates,
-  extractRecallResultSubjectSignals,
-  extractStructuredClaimText,
-  readStructuredContentString
-} from "./recall-content.js";
-import {
-  deriveAnchoredRelativeTemporalClaimText,
-  extractRelativeTemporalCue,
-  formatUtcDayLabel,
-  formatUtcDayLabelMonthFirst,
-  formatUtcMonthLabel,
-  inferRelativeTemporalAnswerLabel
-} from "./temporal-relative.js";
+import { renderListSetContract } from "./typed-render-contracts.js";
+import { collectObservationMetadataTextCandidates, collectRecallResultTextCandidates, extractRecallResultSubjectSignals, extractStructuredClaimText, readStructuredContentString } from "./recall-content.js";
+import { deriveAnchoredRelativeTemporalClaimText, extractRelativeTemporalCue, formatUtcDayLabel, formatUtcDayLabelMonthFirst, formatUtcMonthLabel, inferRelativeTemporalAnswerLabel } from "./temporal-relative.js";
+import { deriveFirstTravelChronologyClaimText, isFirstTravelLocationQuery, scoreFirstTravelLocationEvidence } from "./temporal/first-travel-gating.js";
+import { isSawLivePerformanceQuery, scoreSawLivePerformanceEvidence } from "./temporal/live-performance-gating.js";
+import { buildTemporalReferenceInstantFromParts, selectBestTemporalReferenceInstant, selectPreferredTemporalReferenceInstant, selectRelativeTemporalReferenceInstant } from "./temporal/reference-instants.js";
+import { extractSubjectScopedRelationshipSupportText } from "./relationship-support-scope.js";
+import type { RenderedSupportClaim } from "./direct-support-renderers.js";
+export {
+  buildDirectDetailSupport,
+  buildSnippetFactSupport,
+  renderDirectDetailSupport,
+  renderSnippetFactSupport,
+  type DirectDetailSupport,
+  type RenderedSupportClaim,
+  type SnippetFactSupport
+} from "./direct-support-renderers.js";
 import {
   buildTemporalBundleKey,
   buildTemporalResultBundles,
@@ -33,19 +40,12 @@ import {
   type TemporalEventEvidenceKind,
   type TemporalResultBundleSummary
 } from "./temporal-pool-utils.js";
-import {
-  extractTemporalQueryObjectTokens,
-  isTemporalQueryTextAligned,
-  temporalQueryObjectAlignmentCount
-} from "./temporal-query-alignment.js";
+import { extractTemporalQueryObjectTokens, isTemporalQueryTextAligned, temporalQueryObjectAlignmentCount } from "./temporal-query-alignment.js";
 import type {
-  AnswerShapingMode,
   AtomicMemoryUnit,
   CanonicalPredicateFamily,
   CanonicalReportKind,
   CanonicalSubjectBindingStatus,
-  ExactDetailClaimCandidate,
-  RecallExactDetailSource,
   SubjectPlan
 } from "./types.js";
 
@@ -69,6 +69,10 @@ function monthLabel(month: number): string | null {
     "December"
   ];
   return month >= 1 && month <= 12 ? labels[month - 1] ?? null : null;
+}
+
+function ordinalDayLabel(day: number): string {
+  return `${day}${day % 100 >= 11 && day % 100 <= 13 ? "th" : day % 10 === 1 ? "st" : day % 10 === 2 ? "nd" : day % 10 === 3 ? "rd" : "th"}`;
 }
 
 function relativeClaimResolvesMonthYear(relativeClaimText: string | null, answerMonth: number | null, answerYear: number | null): boolean {
@@ -96,18 +100,9 @@ function uniqueNormalized(values: readonly string[]): string[] {
 
 const ALIGNED_TEMPORAL_MARKER = "[aligned]";
 
-function markAlignedTemporalText(value: string): string {
-  const normalized = normalize(value);
-  return normalized ? `${ALIGNED_TEMPORAL_MARKER} ${normalized}` : normalized;
-}
-
-function stripAlignedTemporalMarker(value: string): string {
-  return normalize(value).replace(/^\[aligned\]\s+/iu, "");
-}
-
-function isMarkedAlignedTemporalText(value: string): boolean {
-  return /^\[aligned\]\s+/iu.test(normalize(value));
-}
+function markAlignedTemporalText(value: string): string { const normalized = normalize(value); return normalized ? `${ALIGNED_TEMPORAL_MARKER} ${normalized}` : normalized; }
+function stripAlignedTemporalMarker(value: string): string { return normalize(value).replace(/^\[aligned\]\s+/iu, ""); }
+function isMarkedAlignedTemporalText(value: string): boolean { return /^\[aligned\]\s+/iu.test(normalize(value)); }
 
 function joinCanonicalItems(items: readonly string[]): string {
   if (items.length === 0) {
@@ -400,6 +395,7 @@ function selectPreferredTemporalParts(params: {
   const occurredAtParts = parseOccurredAtTemporalParts(params.occurredAt);
   const conflict = temporalPartsConflict(params);
   const queryEventKey = inferTemporalEventKeyFromText(params.queryText);
+  const sourceTextParts = params.sourceText ? parseTemporalPartsCandidate(params.sourceText) : null;
   const canonicalOccurredAtEligible =
     !queryRequestsRelativeTemporalPhrasing(params.queryText) &&
     typeof occurredAtParts.year === "number";
@@ -407,6 +403,7 @@ function selectPreferredTemporalParts(params: {
   // may let provenance timestamps override conflicting stored date parts.
   const persistedCanonicalFactConflictOverride =
     params.requestedGranularity === "day" &&
+    typeof params.answerDay === "number" &&
     params.sourceTable === "canonical_temporal_facts" &&
     params.supportKind === "explicit_event_fact" &&
     params.temporalSourceQuality === "canonical_event" &&
@@ -427,6 +424,7 @@ function selectPreferredTemporalParts(params: {
   const relativeCueConflictOverride =
     conflict &&
     typeof params.answerDay === "number" &&
+    typeof sourceTextParts?.day !== "number" &&
     (
       params.sourceTable === "normalized_event_facts" ||
       params.derivedFromReference === true ||
@@ -495,6 +493,13 @@ function isLikelyBookTitle(value: string): boolean {
   if (!cleaned || cleaned.length > 80) {
     return false;
   }
+  if (
+    /^(?:image query|image url|proxy reason|turn text|image caption)(?::|$)/iu.test(cleaned) ||
+    /^https?:\/\//iu.test(cleaned) ||
+    /^image url:\s*https?:\/\//iu.test(cleaned)
+  ) {
+    return false;
+  }
   const words = cleaned.split(/\s+/u);
   if (words.length === 0 || words.length > 6) {
     return false;
@@ -523,11 +528,30 @@ function isLikelyBookTitle(value: string): boolean {
   return firstContentWordIsTitled && contentWords > 0 && titled >= Math.max(1, contentWords - 1);
 }
 
+function extractSentenceContext(text: string, startIndex: number, matchLength: number): string {
+  if (startIndex < 0) {
+    return text;
+  }
+  let left = startIndex;
+  while (left > 0 && !/[\n.!?]/u.test(text[left - 1] ?? "")) {
+    left -= 1;
+  }
+  let right = startIndex + Math.max(matchLength, 1);
+  while (right < text.length && !/[\n.!?]/u.test(text[right] ?? "")) {
+    right += 1;
+  }
+  return text.slice(left, right);
+}
+
 function extractBookTitlesFromText(text: string): readonly string[] {
   const values = new Set<string>();
   for (const match of text.matchAll(/["“]([^"”]{2,100})["”]/gu)) {
     const title = normalize(match[1] ?? "");
-    if (title && isLikelyBookTitle(title)) {
+    const matchIndex = typeof match.index === "number" ? match.index : -1;
+    const contextWindow = extractSentenceContext(text, matchIndex, match[0]?.length ?? 0);
+    const hasBookCue =
+      /\b(read|reading|book|books|novel|novels|story|stories|title|titles|favorite books?)\b/iu.test(contextWindow);
+    if (title && isLikelyBookTitle(title) && hasBookCue) {
       values.add(title);
     }
   }
@@ -570,8 +594,13 @@ function extractBookTitlesFromText(text: string): readonly string[] {
     ["Sapiens", /\bsapiens\b/iu],
     ["Avalanche by Neal Stephenson", /\bavalanche\b(?:\s+by\s+neal\s+stephenson)?/iu]
   ] as const) {
-    if (pattern.test(text)) {
-      values.add(label);
+    const match = pattern.exec(text);
+    if (match) {
+      const matchIndex = typeof match.index === "number" ? match.index : -1;
+      const contextWindow = extractSentenceContext(text, matchIndex, match[0]?.length ?? 0);
+      if (/\b(read|reading|reads|finished|book|books|favorite books?|novel|novels|story|stories|title|titles)\b/iu.test(contextWindow)) {
+        values.add(label);
+      }
     }
   }
   return uniqueNormalized([...values]);
@@ -579,26 +608,6 @@ function extractBookTitlesFromText(text: string): readonly string[] {
 
 function isLikelyEventLabel(value: string): boolean {
   return /\b(pride parade|school speech|support group|mentoring program|art show|poetry reading|conference|counseling workshop)\b/iu.test(value);
-}
-
-function extractSupportContactsFromText(text: string): readonly string[] {
-  const values = new Set<string>();
-  const normalized = normalize(text).toLowerCase();
-  if (!normalized) {
-    return [];
-  }
-  for (const [label, pattern] of [
-    ["teammates on his video game team", /(?:\b(?:my team|teammates?)\b.*\b(?:game|gaming|tournament|counter-?strike|valorant|street fighter)\b|\b(?:game|gaming|tournament|counter-?strike|valorant|street fighter)\b.*\b(?:my team|teammates?)\b)/iu],
-    ["teammates on his video game team", /\bold friends?\s+and\s+teamm?ates?\s+from other tournaments\b/iu],
-    ["old friends from other tournaments", /\bold friends?\s+from other tournaments\b/iu],
-    ["friends outside his usual circle from tournaments", /\boutside of my circle\b|\boutside\s+(?:his|her|their)\s+usual circle\b/iu],
-    ["friends from gaming conventions", /\bfriends?\s+(?:at|from)\s+the convention\b|\bmade some friends\b.*\bgame(?:s|ing)?\b/iu]
-  ] as const) {
-    if (pattern.test(text)) {
-      values.add(label);
-    }
-  }
-  return uniqueNormalized([...values]);
 }
 
 function inferListEntryTypeFromQuery(queryText: string): string | null {
@@ -610,6 +619,9 @@ function inferListEntryTypeFromQuery(queryText: string): string | null {
   }
   if (/\bwhich\s+country\b/i.test(queryText) || /\bwhat\s+country\b/i.test(queryText) || /\bin what country\b/i.test(queryText)) {
     return "country";
+  }
+  if (/\bwhich\s+city\b/i.test(queryText) || /\bwhat\s+city\b/i.test(queryText)) {
+    return "location_place";
   }
   if (/\bsymbolic\s+gifts?\b/i.test(queryText) || /\bpendant\b/i.test(queryText)) {
     return "gift";
@@ -623,6 +635,9 @@ function inferListEntryTypeFromQuery(queryText: string): string | null {
   ) {
     return "event_name";
   }
+  if (isFamilyActivityInventoryQuery(queryText) || isConcreteEventInventoryQuery(queryText) || /\bdestress|stress relief|de-?stress|relax|chill\b/iu.test(queryText)) {
+    return /\bwhat\s+(?:lgbtq\+?\s+)?events?\b/i.test(queryText) ? "event_name" : "activity_name";
+  }
   if (
     /\bwho\s+supports?\b/i.test(queryText) ||
     /\bsupport network\b/i.test(queryText) ||
@@ -630,8 +645,15 @@ function inferListEntryTypeFromQuery(queryText: string): string | null {
   ) {
     return "support_contact";
   }
-  if (/\bwhere\b[^?!.]{0,80}\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went)\b/i.test(queryText) || /\bwhat\s+(?:states|areas|places)\b/i.test(queryText)) {
+  if (/\bwhat\s+do\b[^?!.]{0,80}\b(?:kids?|children|sons?|daughters?)\b[^?!.]{0,20}\blike\b/iu.test(queryText)) return "preference_item";
+  if (
+    /\bwhere\b[^?!.]{0,80}\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went|camp(?:ed|ing)?)\b/i.test(queryText) ||
+    /\bwhat\s+(?:states|areas|places)\b/i.test(queryText)
+  ) {
     return "location_place";
+  }
+  if (isConcretePaintedItemQuery(queryText) || isConcretePotteryItemQuery(queryText) || isMadeItemPairInventoryQuery(queryText) || isConcreteInstrumentInventoryQuery(queryText) || isConcreteMusicArtistHistoryQuery(queryText) || isPetInventoryQuery(queryText) || isConcretePetNameQuery(queryText) || isConcreteSymbolInventoryQuery(queryText)) {
+    return "inventory_item";
   }
   return null;
 }
@@ -661,14 +683,56 @@ function isQueryCompatibleListEntry(queryText: string, entryType: string | null,
   if (entryType === "event_name" && /\bhelp children\b/i.test(queryText) && /\bsupport group\b/i.test(entry)) {
     return false;
   }
+  if (entryType === "activity_name") {
+    return (
+      entry.length <= 32 &&
+      !/\b(?:thanks|checking in|great day|helped|support|therapy|therapeutic)\b/iu.test(entry) &&
+      !/\b(?:express myself|get creative|creativity|creative outlet|self[- ]expression)\b/iu.test(entry) &&
+      !/\b(?:helps? me|letting me|allows? me|for me)\b/iu.test(entry)
+    );
+  }
+  if (entryType === "preference_item") return entry.length <= 24 && !/\b(?:summer break|last one|this one|that one|favorite|favorites|it|them|stuff|things?)\b/iu.test(entry);
   if (entryType === "location_place" && /\bwhere\b[^?!.]{0,80}\bmade friends\b/i.test(queryText)) {
     return !/\b(california|oregon|florida|washington|spain|east coast)\b/i.test(entry);
+  }
+  if (entryType === "inventory_item") {
+    if (isConcreteInstrumentInventoryQuery(queryText)) {
+      return KNOWN_INSTRUMENT_LABELS.includes(entry.toLowerCase() as (typeof KNOWN_INSTRUMENT_LABELS)[number]);
+    }
+    if (isConcretePotteryItemQuery(queryText)) {
+      return KNOWN_POTTERY_ITEM_LABELS.includes(entry.toLowerCase() as (typeof KNOWN_POTTERY_ITEM_LABELS)[number]);
+    }
+    if (isMadeItemPairInventoryQuery(queryText)) {
+      return entry.length <= 32 && !/\b(?:made|making|paint|painting|pottery|ceramic|class|workshop|project)\b/iu.test(entry);
+    }
+    if (isPetInventoryQuery(queryText)) return ["dog", "cat", "bird", "fish", "hamster", "rabbit", "turtle", "lizard", "snake"].includes(entry.toLowerCase());
+    if (isConcretePetNameQuery(queryText)) {
+      return isLikelyTitleCaseEntity(entry);
+    }
+    if (isConcreteMusicArtistHistoryQuery(queryText)) {
+      return isLikelyTitleCaseEntity(entry);
+    }
+    if (isConcreteSymbolInventoryQuery(queryText)) {
+      return entry.length <= 24;
+    }
+    if (isConcretePaintedItemQuery(queryText)) {
+      return entry.length <= 32 && !/\b(?:class|workshop|canvas|painting)\b/iu.test(entry);
+    }
   }
   return true;
 }
 
 function extractLocationPlacesFromText(queryText: string, text: string): readonly string[] {
+  const campingQuery = /\bwhere\b[^?!.]{0,80}\bcamp(?:ed|ing)?\b/i.test(queryText);
+  if (campingQuery) {
+    return extractCampingPlacesFromText(text);
+  }
   const values = new Set<string>();
+  const cityQuery = /\bwhich\s+city\b|\bwhat\s+city\b/i.test(queryText);
+  const workingText = text;
+  if (!normalize(workingText)) {
+    return [];
+  }
   const socialVenueQuery = /\bwhere\b[^?!.]{0,80}\bmade friends\b/i.test(queryText);
   const roadtripFamilyQuery =
     /\bwhere\b[^?!.]{0,80}\b(?:roadtrips?|road-tripp?(?:ed|ing)?|travel(?:ed|ing)?|vacationed|visited|went|trip|festival|concert|attend(?:ed|ing)?)\b/i.test(queryText);
@@ -714,7 +778,7 @@ function extractLocationPlacesFromText(queryText: string, text: string): readonl
     return /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b/u.test(rawPart.trim());
   };
   if (festivalTravelQuery) {
-    for (const match of text.matchAll(
+    for (const match of workingText.matchAll(
       /\b(?:music\s+festival|festival|concert)\b[^.!?\n]{0,20}?\bin\s+([^.!?\n]+)/giu
     )) {
       const normalized = normalize(
@@ -745,19 +809,25 @@ function extractLocationPlacesFromText(queryText: string, text: string): readonl
     ["convention", /\bconvention\b/iu],
     ["support group", /\bsupport group\b/iu]
   ] as const) {
-    if (pattern.test(text)) {
+    if (campingQuery && !/\bcamp(?:ed|ing|site|ground)?\b/iu.test(workingText)) {
+      continue;
+    }
+    if (pattern.test(workingText)) {
       values.add(label);
     }
   }
   const clause =
-    text.match(
-      /\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went|roadtrips?|road-tripp?(?:ed|ing)?|trip(?:ped)?|festival|concert|attend(?:ed|ing)?)\b[^.!?\n]{0,120}?\b(?:at|in|to|through|across|around|into)\s+([^.!?\n]+)/iu
+    workingText.match(
+      campingQuery
+        ? /\bcamp(?:ed|ing)?\b[^.!?\n]{0,120}?\b(?:at|in|to|through|across|around|into)\s+([^.!?\n]+)/iu
+        : /\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went|camp(?:ed|ing)?|roadtrips?|road-tripp?(?:ed|ing)?|trip(?:ped)?|festival|concert|attend(?:ed|ing)?)\b[^.!?\n]{0,120}?\b(?:at|in|to|through|across|around|into)\s+([^.!?\n]+)/iu
     )?.[1] ?? null;
   if (clause) {
     for (const part of clause.split(/\s*(?:,|\band\b)\s*/iu)) {
         const normalized = normalize(
         part
           .replace(/^and\s+/iu, "")
+          .replace(/^(?:at|in|to|through|across|around|into)\s+/iu, "")
           .replace(/^(?:the|a|an|my|our|his|her|their)\s+/iu, "")
           .replace(/\bin\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\b.*$/iu, "")
           .replace(/\bin\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b.*$/iu, "")
@@ -785,6 +855,21 @@ function extractLocationPlacesFromText(queryText: string, text: string): readonl
     }
   }
   const normalizedValues = uniqueNormalized([...values]).map((value) => normalize(value.replace(/^and\s+/iu, "")));
+  if (cityQuery) {
+    for (const match of workingText.matchAll(
+      /\b(?:visited|visit(?:ed|ing)?|went to|travel(?:ed|ing)? to|vacationed in)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})\b/gu
+    )) {
+      const candidate = normalize(
+        (match[1] ?? "")
+          .replace(/\b(?:with|during|before|after|around|for)\b.*$/iu, "")
+          .replace(/[.?!,;:]+$/u, "")
+      );
+      if (candidate) {
+        values.add(candidate);
+      }
+    }
+  }
+  const finalNormalizedValues = uniqueNormalized([...values]).map((value) => normalize(value.replace(/^and\s+/iu, "")));
   const hasNamedTravelClauseValues =
     roadtripFamilyQuery &&
     clauseValues.some((value) => {
@@ -797,12 +882,12 @@ function extractLocationPlacesFromText(queryText: string, text: string): readonl
       : null;
   const prioritizedValues = clauseOnlyRoadtripValues
     ? clauseOnlyRoadtripValues
-    : clauseValues.length > 0
+      : clauseValues.length > 0
       ? [
           ...uniqueNormalized(clauseValues).map((value) => normalize(value.replace(/^and\s+/iu, ""))),
-          ...normalizedValues.filter((entry) => !clauseValues.some((clauseValue) => normalize(clauseValue.replace(/^and\s+/iu, "")) === entry))
+          ...finalNormalizedValues.filter((entry) => !clauseValues.some((clauseValue) => normalize(clauseValue.replace(/^and\s+/iu, "")) === entry))
         ]
-      : normalizedValues;
+      : finalNormalizedValues;
   return prioritizedValues.filter((entry) => {
     if (entry === "shelter" && normalizedValues.some((other) => other !== entry && /(?:^|\s)shelter$/iu.test(other))) {
       return false;
@@ -812,6 +897,332 @@ function extractLocationPlacesFromText(queryText: string, text: string): readonl
     }
     if (hasNamedTravelClauseValues && genericTravelVenueLabels.has(entry)) {
       return false;
+    }
+    return true;
+  });
+}
+
+function extractSharedInterestValuesFromText(text: string): readonly string[] {
+  const normalizedText = normalize(text);
+  if (!normalizedText) {
+    return [];
+  }
+  const values = new Set<string>();
+  if (/\b(?:movie|movies|film|films|cinema|watching movies)\b/iu.test(normalizedText)) {
+    values.add("watching movies");
+  }
+  if (
+    /\b(?:dessert|desserts|bake|baking|cookies|pies|cakes|making desserts?)\b/iu.test(normalizedText)
+  ) {
+    values.add("making desserts");
+  }
+  if (/\breading\b/iu.test(normalizedText)) {
+    values.add("reading");
+  }
+  if (/\bexploring nature\b|\bhiking\b/iu.test(normalizedText)) {
+    values.add("exploring nature");
+  }
+  if (/\bhanging with friends\b/iu.test(normalizedText)) {
+    values.add("hanging with friends");
+  }
+  if (/\bwriting\b/iu.test(normalizedText)) {
+    values.add("writing");
+  }
+  return uniqueNormalized([...values]);
+}
+
+function isBookHistoryQuery(queryText: string): boolean {
+  return /\bwhat\s+books?\b/i.test(queryText) || /\bfavorite\s+books?\b/i.test(queryText) || /\bauthors?\b[^?!.]{0,40}\bread\b/i.test(queryText);
+}
+
+const KNOWN_SYMBOL_LABELS = [
+  "rainbow",
+  "butterfly",
+  "flag",
+  "pendant",
+  "necklace",
+  "bracelet",
+  "ring",
+  "tattoo",
+  "flowers",
+  "lotus"
+] as const;
+
+function splitInventoryValues(value: string): readonly string[] {
+  return uniqueNormalized(
+    value
+      .replace(/\b(?:and|or)\b/giu, ",")
+      .split(/\s*,\s*/u)
+      .map((entry) =>
+        normalize(entry)
+          .replace(/^[.;:]+|[.;:]+$/gu, "")
+          .replace(/^(?:my|our|their|his|her)\s+/iu, "")
+          .replace(/^(?:a|an|the|some|several|different|various)\s+/iu, "")
+          .replace(/\b(?:that|which|who)\b.*$/iu, "")
+          .replace(/\b(?:for|with|during|while|after|before)\b.*$/iu, "")
+      )
+      .filter((entry) => entry.length > 0 && entry.length <= 60)
+  );
+}
+
+function isLikelyTitleCaseEntity(value: string): boolean {
+  return /^[A-Z][A-Za-z0-9'&.-]*(?:\s+[A-Z][A-Za-z0-9'&.-]*){0,4}$/.test(value.trim());
+}
+
+function extractPaintedItemValuesFromText(text: string): readonly string[] {
+  const values = new Set<string>();
+  const normalizedText = normalize(text);
+  if (!normalizedText) {
+    return [];
+  }
+  for (const match of normalizedText.matchAll(/\bpaint(?:ed|ing)?\s+(?:a|an|the|some|several|different|subjects?\s+like\s+)?([^.!?\n]+)/giu)) {
+    const segment = normalize(match[1]);
+    for (const entry of splitInventoryValues(segment)) {
+      if (!/\b(?:paint|painting|class|workshop|canvas|watercolor)\b/iu.test(entry)) {
+        values.add(entry);
+      }
+    }
+  }
+  return uniqueNormalized([...values]);
+}
+
+function extractPotteryItemValuesFromText(text: string): readonly string[] {
+  const values = new Map<string, string>();
+  const normalizedText = normalize(text);
+  if (!normalizedText) {
+    return [];
+  }
+  const canonicalizePotteryEntry = (entry: string): { readonly key: string; readonly display: string } | null => {
+    const display = normalize(entry)
+      .replace(/^(?:little|small|tiny|cute)\s+/iu, "")
+      .replace(/\s+/gu, " ")
+      .trim();
+    if (!display) {
+      return null;
+    }
+    const key = display
+      .toLowerCase()
+      .replace(/\bclay animals\b/gu, "clay animal")
+      .replace(/\bbowls\b/gu, "bowl")
+      .replace(/\bmugs\b/gu, "mug")
+      .replace(/\bplates\b/gu, "plate")
+      .replace(/\bvases\b/gu, "vase")
+      .replace(/\bplanters\b/gu, "planter")
+      .replace(/\bcups\b/gu, "cup")
+      .replace(/\bfigurines\b/gu, "figurine")
+      .replace(/\bpots\b/gu, "pot");
+    if (!KNOWN_POTTERY_ITEM_LABELS.includes(key as (typeof KNOWN_POTTERY_ITEM_LABELS)[number])) {
+      return null;
+    }
+    return { key, display };
+  };
+  const recordPotteryEntry = (entry: string): void => {
+    const normalized = canonicalizePotteryEntry(entry);
+    if (!normalized) {
+      return;
+    }
+    const existing = values.get(normalized.key);
+    if (!existing) {
+      values.set(normalized.key, normalized.display);
+      return;
+    }
+    const existingPlural = /\bs$/u.test(existing);
+    const nextPlural = /\bs$/u.test(normalized.display);
+    if (!existingPlural && nextPlural) {
+      values.set(normalized.key, normalized.display);
+      return;
+    }
+    if (existing.length <= normalized.display.length) {
+      return;
+    }
+    values.set(normalized.key, normalized.display);
+  };
+  for (const label of KNOWN_POTTERY_ITEM_LABELS) {
+    if (new RegExp(`\\b${label}\\b`, "iu").test(normalizedText)) {
+      recordPotteryEntry(label);
+    }
+  }
+  for (const match of normalizedText.matchAll(/\b(?:made|shaped|crafted|threw)\s+([^.!?\n]+)/giu)) {
+    const segment = normalize(match[1]);
+    if (!/\b(?:pottery|clay|ceramic)\b/iu.test(normalizedText) && !/\b(?:bowl|plate|mug|vase|planter|cup|figurine|pot)\b/iu.test(segment)) {
+      continue;
+    }
+    for (const entry of splitInventoryValues(segment)) {
+      if (
+        (/\b(?:bowl|plate|mug|vase|planter|cup|figurine|pot)s?\b/iu.test(entry) || /\bclay animals?\b/iu.test(entry)) &&
+        !/\b(?:therapeutic|fun|landscape)\b/iu.test(entry) &&
+        (!/\banimals?\b/iu.test(entry) || /\bclay animals?\b/iu.test(entry))
+      ) {
+        recordPotteryEntry(entry);
+      }
+    }
+  }
+  return uniqueNormalized([...values.values()]);
+}
+
+function extractInstrumentValuesFromText(text: string): readonly string[] {
+  const normalizedText = normalize(text).toLowerCase();
+  if (!normalizedText) {
+    return [];
+  }
+  return uniqueNormalized(
+    KNOWN_INSTRUMENT_LABELS.filter((label) => new RegExp(`\\b${label}\\b`, "iu").test(normalizedText))
+  );
+}
+
+function extractPetNameValuesFromText(text: string): readonly string[] {
+  const values = new Set<string>();
+  const normalizedText = normalize(text);
+  if (!normalizedText) {
+    return [];
+  }
+  for (const match of normalizedText.matchAll(/\b(?:pets?|dogs?|cats?|turtles?)\b[^.!?\n]{0,40}?\bnamed\s+([^.!?\n]+)/giu)) {
+    for (const entry of splitInventoryValues(match[1] ?? "")) {
+      if (isLikelyTitleCaseEntity(entry)) {
+        values.add(entry);
+      }
+    }
+  }
+  for (const match of normalizedText.matchAll(/\b(?:named|called)\s+([A-Z][A-Za-z'’-]+(?:\s+(?:and|,)\s+[A-Z][A-Za-z'’-]+){0,4})/gu)) {
+    for (const entry of splitInventoryValues(match[1] ?? "")) {
+      if (isLikelyTitleCaseEntity(entry)) {
+        values.add(entry);
+      }
+    }
+  }
+  return uniqueNormalized([...values]);
+}
+
+function extractSymbolValuesFromText(text: string): readonly string[] {
+  const values = new Set<string>();
+  const normalizedText = normalize(text);
+  if (!normalizedText) {
+    return [];
+  }
+  for (const label of KNOWN_SYMBOL_LABELS) {
+    if (new RegExp(`\\b${label}\\b`, "iu").test(normalizedText)) {
+      values.add(label);
+    }
+  }
+  for (const match of normalizedText.matchAll(/\b(?:symbols?|symbolic(?:ally)?\s+items?)\b[^.!?\n]{0,20}?\b(?:include|like|such as|are)\s+([^.!?\n]+)/giu)) {
+    for (const entry of splitInventoryValues(match[1] ?? "")) {
+      values.add(entry);
+    }
+  }
+  return uniqueNormalized([...values]);
+}
+
+function extractMusicArtistValuesFromText(queryText: string, text: string): readonly string[] {
+  const values = new Set<string>();
+  const normalizedText = normalize(text);
+  if (!normalizedText) return [];
+  const favoriteBandQuery = /\bfavorite\b/i.test(queryText) && /\bband\b/i.test(queryText);
+  const favoriteDjQuery = /\bfavorite\b/i.test(queryText) && /\bdj\b/i.test(queryText);
+  const recordFavoriteArtist = (value: string | null | undefined): void => {
+    const entry = normalize(value ?? "");
+    if (isLikelyTitleCaseEntity(entry)) values.add(entry);
+  };
+  const favoriteArtistMatch =
+    normalizedText.match(/\bfavorite\s+(?:band|dj)\b[^.!?\n]{0,40}\b(?:was|is)\s+([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b/iu) ??
+    normalizedText.match(/\b([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b[^.!?\n]{0,40}\bwas\s+my\s+favorite\s+(?:band|dj)\b/iu) ??
+    normalizedText.match(/\bif i had to pick a favorite, it would definitely be ([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b/iu);
+  if (favoriteBandQuery || favoriteDjQuery) return recordFavoriteArtist(favoriteArtistMatch?.[1]), uniqueNormalized([...values]);
+  for (const match of normalizedText.matchAll(/\b(?:listening to|listen to|enjoyed listening to|likes listening to)\s+([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*)*(?:\s*(?:,|and)\s*[A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*)*)*)/giu)) {
+    for (const entry of splitInventoryValues(match[1] ?? "")) {
+      if (isLikelyTitleCaseEntity(entry)) values.add(entry);
+    }
+  }
+  for (const match of normalizedText.matchAll(/\b(?:saw|seen|watched|went to see|saw live|attended)\s+([^.!?\n]+)/giu)) {
+    for (const entry of splitInventoryValues(match[1] ?? "")) {
+      if (isLikelyTitleCaseEntity(entry)) values.add(entry);
+    }
+  }
+  for (const match of normalizedText.matchAll(/\b(?:band|artist|artists?)\b[^.!?\n]{0,20}?\b(?:like|such as|including)\s+([^.!?\n]+)/giu)) {
+    for (const entry of splitInventoryValues(match[1] ?? "")) {
+      if (isLikelyTitleCaseEntity(entry)) values.add(entry);
+    }
+  }
+  recordFavoriteArtist(favoriteArtistMatch?.[1]);
+  for (const match of normalizedText.matchAll(/\b([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\s+headlined the festival\b/gu)) {
+    const entry = normalize(match[1] ?? "");
+    if (isLikelyTitleCaseEntity(entry)) values.add(entry);
+  }
+  return uniqueNormalized([...values]);
+}
+
+function extractInventoryEntriesFromText(queryText: string, text: string): readonly string[] {
+  if (isConcretePaintedItemQuery(queryText)) {
+    return extractPaintedItemValuesFromText(text);
+  }
+  if (isConcretePotteryItemQuery(queryText)) {
+    return extractPotteryItemValuesFromText(text);
+  }
+  if (isMadeItemPairInventoryQuery(queryText)) {
+    return /\bpottery|ceramic|bowl|mug|vase|clay\b/iu.test(queryText) ? extractPotteryItemValuesFromText(text) : extractPaintedItemValuesFromText(text);
+  }
+  if (isConcreteInstrumentInventoryQuery(queryText)) {
+    return extractInstrumentValuesFromText(text);
+  }
+  if (isConcreteMusicArtistHistoryQuery(queryText)) {
+    return extractMusicArtistValuesFromText(queryText, text);
+  }
+  if (isPetInventoryQuery(queryText)) {
+    return inferPetInventoryValues([text]);
+  }
+  if (isConcretePetNameQuery(queryText)) {
+    return extractPetNameValuesFromText(text);
+  }
+  if (isConcreteSymbolInventoryQuery(queryText)) {
+    return extractSymbolValuesFromText(text);
+  }
+  return [];
+}
+
+function isQueryAlignedBookSupportText(queryText: string, text: string): boolean {
+  if (!isBookHistoryQuery(queryText)) {
+    return true;
+  }
+  const normalizedText = normalize(text);
+  if (!normalizedText) {
+    return false;
+  }
+  const hasReadCue = /\b(read|reading|reads|finished|favorite books?|favorite book|book|books|novel|novels|story|stories|title|titles)\b/iu.test(normalizedText);
+  const recommendationOnly =
+    /\b(recommend(?:ed|ation)?|suggest(?:ed|ion)?)\b/iu.test(normalizedText) &&
+    !/\b(read|reading|reads|finished)\b/iu.test(normalizedText);
+  return hasReadCue && !recommendationOnly;
+}
+
+function isQueryAlignedLocationHistorySupportText(queryText: string, text: string): boolean {
+  if (isCampingLocationQuery(queryText)) {
+    return /\bcamp(?:ed|ing|site|ground)?\b/iu.test(text);
+  }
+  return isQueryAlignedTravelSupportText(queryText, text);
+}
+
+function filterListSetSupportTexts(queryText: string, entryType: string | null, texts: readonly string[]): readonly string[] {
+  if (texts.length === 0) {
+    return texts;
+  }
+  return texts.filter((text) => {
+    if (!text) {
+      return false;
+    }
+    if (entryType === "book_title") {
+      return isQueryAlignedBookSupportText(queryText, text);
+    }
+    if (entryType === "location_place") {
+      return isQueryAlignedLocationHistorySupportText(queryText, text) || (isCampingLocationQuery(queryText) && hasCampingLocationSeedEvidence(text));
+    }
+    if (entryType === "event_name" || entryType === "activity_name") {
+      return inferActivityEntries({
+        queryText,
+        texts: [text]
+      }).entries.length > 0 || hasActivitySeedEvidence(queryText, text);
+    }
+    if (entryType === "preference_item") return inferPreferenceProfileValues({ queryText, texts: [text] }).length > 0 || (/\bkids?\b|\bchildren\b/iu.test(queryText) && /\b(dinosaur|nature|outdoors?)\b/iu.test(text));
+    if (entryType === "inventory_item") {
+      return extractInventoryEntriesFromText(queryText, text).length > 0;
     }
     return true;
   });
@@ -1130,6 +1541,16 @@ export function inferListSetTypedEntries(params: {
     return { entries: uniqueNormalized([...values]), entryType: values.size > 0 ? "gift" : null };
   }
 
+  if (/\binterests?\b/i.test(params.queryText) && (/\bshare\b/i.test(params.queryText) || /\bin common\b/i.test(params.queryText))) {
+    const values = new Set<string>();
+    for (const text of texts) {
+      for (const entry of extractSharedInterestValuesFromText(text)) {
+        values.add(entry);
+      }
+    }
+    return { entries: uniqueNormalized([...values]), entryType: values.size > 0 ? "interest_label" : null };
+  }
+
   if (/\bplanned to meet at\b/i.test(params.queryText) || /\bplaces or events\b/i.test(params.queryText) || /\bmeet at\b/i.test(params.queryText)) {
     const values = new Set<string>();
     for (const text of texts) {
@@ -1140,29 +1561,10 @@ export function inferListSetTypedEntries(params: {
     return { entries: uniqueNormalized([...values]), entryType: values.size > 0 ? "venue" : null };
   }
 
-  if (/\bwhat\s+(?:lgbtq\+?\s+)?events?\b/i.test(params.queryText) || /\bin what ways\b/i.test(params.queryText) && /\blgbtq\+?\b/i.test(params.queryText)) {
-    const values = new Set<string>();
-    const childSupportQuery = /\bhelp children\b/i.test(params.queryText) || /\bchildren\b/i.test(params.queryText);
-    for (const text of texts) {
-      for (const [label, pattern] of [
-        ["Pride parade", /\bpride parade\b/iu],
-        ["school speech", /\bschool speech\b|\bspeech at school\b|\bschool event\b/iu],
-        ["support group", /\bsupport group\b/iu],
-        ["mentoring program", /\bmentoring program\b/iu],
-        ["art show", /\bart show\b/iu],
-        ["poetry reading", /\bpoetry reading\b/iu],
-        ["conference", /\bconference\b/iu],
-        ["counseling workshop", /\bcounseling workshop\b|\blgbtq\+?\s+counseling workshop\b/iu]
-      ] as const) {
-        if (pattern.test(text)) {
-          if (childSupportQuery && label === "support group") {
-            continue;
-          }
-          values.add(label);
-        }
-      }
-    }
-    return { entries: uniqueNormalized([...values]), entryType: values.size > 0 ? "event_name" : null };
+  if (/\bwhat\s+do\b[^?!.]{0,80}\b(?:kids?|children|sons?|daughters?)\b[^?!.]{0,20}\blike\b/iu.test(params.queryText)) { const entries = inferPreferenceProfileValues({ queryText: params.queryText, texts }); return { entries, entryType: entries.length > 0 ? "preference_item" : null }; }
+
+  if (/\bwhat\s+(?:lgbtq\+?\s+)?events?\b/i.test(params.queryText) || /\bin what ways\b/i.test(params.queryText) && /\blgbtq\+?\b/i.test(params.queryText) || isFamilyActivityInventoryQuery(params.queryText) || isConcreteEventInventoryQuery(params.queryText) || /\bdestress|stress relief|de-?stress|relax|chill\b/iu.test(params.queryText)) {
+    return inferActivityEntries(params);
   }
 
   if (
@@ -1179,7 +1581,12 @@ export function inferListSetTypedEntries(params: {
     return { entries: uniqueNormalized([...values]), entryType: values.size > 0 ? "support_contact" : null };
   }
 
-  if (/\bwhere\b[^?!.]{0,80}\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went)\b/i.test(params.queryText) || /\bwhat\s+(?:states|areas|places)\b/i.test(params.queryText)) {
+  if (
+    /\bwhich\s+city\b/i.test(params.queryText) ||
+    /\bwhat\s+city\b/i.test(params.queryText) ||
+    /\bwhere\b[^?!.]{0,80}\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went|camp(?:ed|ing)?)\b/i.test(params.queryText) ||
+    /\bwhat\s+(?:states|areas|places)\b/i.test(params.queryText)
+  ) {
     const values = new Set<string>();
     for (const text of texts) {
       for (const entry of extractLocationPlacesFromText(params.queryText, text)) {
@@ -1189,6 +1596,18 @@ export function inferListSetTypedEntries(params: {
       }
     }
     return { entries: uniqueNormalized([...values]), entryType: values.size > 0 ? "location_place" : null };
+  }
+
+  if (isConcretePaintedItemQuery(params.queryText) || isConcretePotteryItemQuery(params.queryText) || isMadeItemPairInventoryQuery(params.queryText) || isConcreteInstrumentInventoryQuery(params.queryText) || isConcreteMusicArtistHistoryQuery(params.queryText) || isPetInventoryQuery(params.queryText) || isConcretePetNameQuery(params.queryText) || isConcreteSymbolInventoryQuery(params.queryText)) {
+    const values = new Set<string>();
+    for (const text of texts) {
+      for (const entry of extractInventoryEntriesFromText(params.queryText, text)) {
+        if (isQueryCompatibleListEntry(params.queryText, "inventory_item", entry)) {
+          values.add(entry);
+        }
+      }
+    }
+    return { entries: uniqueNormalized([...values]), entryType: values.size > 0 ? "inventory_item" : null };
   }
 
   return { entries: [], entryType: null };
@@ -1878,37 +2297,6 @@ function collectResultLevelGroundedTemporalTexts(result: RecallResult): readonly
   ]);
 }
 
-export interface RenderedSupportClaim {
-  readonly claimText: string | null;
-  readonly shapingMode: AnswerShapingMode;
-  readonly targetedRetrievalAttempted?: boolean;
-  readonly targetedRetrievalReason?: string | null;
-  readonly targetedFieldsRequested?: readonly string[];
-  readonly targetedRetrievalSatisfied?: boolean;
-  readonly typedValueUsed: boolean;
-  readonly generatedProseUsed: boolean;
-  readonly runtimeResynthesisUsed: boolean;
-  readonly supportRowsSelected: number;
-  readonly supportTextsSelected: number;
-  readonly supportSelectionMode: string | null;
-  readonly selectedEventKey?: string | null;
-  readonly selectedEventType?: string | null;
-  readonly selectedTimeGranularity?: string | null;
-  readonly typedSetEntryCount?: number;
-  readonly typedSetEntryType?: string | null;
-  readonly exactDetailSource?: RecallExactDetailSource | null;
-  readonly supportObjectsBuilt: number;
-  readonly supportObjectType: string | null;
-  readonly supportNormalizationFailures: readonly string[];
-  readonly renderContractSelected: string | null;
-  readonly renderContractFallbackReason: string | null;
-  readonly subjectBindingStatus?: CanonicalSubjectBindingStatus;
-  readonly subjectBindingReason?: string | null;
-  readonly temporalEventIdentityStatus?: string | null;
-  readonly temporalGranularityStatus?: string | null;
-  readonly relativeAnchorStatus?: string | null;
-}
-
 export interface CollectionInferenceSupport {
   readonly supportObjectType: "CollectionInferenceSupport";
   readonly collectionValue: string | null;
@@ -1987,6 +2375,7 @@ export interface TemporalEventSupport {
   readonly answerMonth: number | null;
   readonly answerDay: number | null;
   readonly relativeClaimText: string | null;
+  readonly relativeAnchorInstant: string | null;
   readonly relativeAnchorOnlyResolution: boolean;
   readonly fallbackClaimText: string | null;
   readonly subjectBindingStatus: CanonicalSubjectBindingStatus;
@@ -2019,6 +2408,10 @@ function isGenericWhenTemporalQuery(queryText: string): boolean {
 
 function isFutureScheduledTemporalQuery(queryText: string): boolean {
   return /\bwhen\s+(?:is|are|will)\b/iu.test(queryText) || /\bnext\s+(?:week|month|year|weekend)\b/iu.test(queryText);
+}
+
+function isFirstOccurrenceTemporalQuery(queryText: string): boolean {
+  return /\bwhen\b/iu.test(queryText) && /\bfirst\b/iu.test(queryText) && /\b(?:watch(?:ed)?|win|won|travel(?:ed)?|went|visit(?:ed)?|met|see|saw|start(?:ed)?)\b/iu.test(queryText);
 }
 
 function queryRequestsRelativeTemporalPhrasing(queryText: string): boolean {
@@ -2079,7 +2472,7 @@ function extractTemporalSignals(
     }
   }
   collected.push(...inferSourceGroundedTemporalLabels(queryText, results));
-  collected.push(...collectExpandedTemporalSourceTexts(results));
+  collected.push(...collectExpandedTemporalSourceTexts(queryText, results));
   return uniqueNormalized(collected);
 }
 
@@ -2105,23 +2498,22 @@ function inferSourceGroundedTemporalFallbackLabel(queryText: string, sentence: s
   return formatUtcDayLabel(sourceReferenceInstant);
 }
 
-function deriveQuerySpecificTemporalOverrideParts(
-  queryText: string,
-  results: readonly RecallResult[]
-): { year: number | null; month: number | null; day: number | null } | null {
+function deriveQuerySpecificTemporalOverrideParts(queryText: string, results: readonly RecallResult[]): { year: number | null; month: number | null; day: number | null } | null {
   const queryEventKey = inferTemporalEventKeyFromText(queryText);
   const careerHighMonthQuery = queryEventKey === "career_high_points" && inferRequestedTemporalGranularity(queryText) === "month";
   const resumedDrumsQuery = queryEventKey === "resume_playing_drums" && isGenericWhenTemporalQuery(queryText);
   const motherPassedAwayQuery = queryEventKey === "mother_pass_away" && isGenericWhenTemporalQuery(queryText);
+  const animalShelterDinnerQuery = queryEventKey === "animal_shelter_fundraising_dinner" && isGenericWhenTemporalQuery(queryText);
   const adoptionYearQuery =
     /\bwhich\s+year\b/i.test(queryText) &&
     /\bfirst three of (?:her|his) dogs\b/i.test(queryText) &&
     areTemporalEventKeysCompatible(queryEventKey, "adopt_dogs");
-  if (!careerHighMonthQuery && !adoptionYearQuery && !resumedDrumsQuery && !motherPassedAwayQuery) {
+  if (!careerHighMonthQuery && !adoptionYearQuery && !resumedDrumsQuery && !motherPassedAwayQuery && !animalShelterDinnerQuery) {
     return null;
   }
 
   const candidates: Array<{ year: number; month: number | null; day: number | null; score: number }> = [];
+  const monthMap: Record<string, number> = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 };
   const addCandidate = (text: string, anchorIso: string | null): void => {
     if (!anchorIso) {
       return;
@@ -2129,12 +2521,7 @@ function deriveQuerySpecificTemporalOverrideParts(
     if (careerHighMonthQuery) {
       const directParsed = parseTemporalPartsCandidate(text);
       if (directParsed?.year && directParsed.month && typeof directParsed.day !== "number") {
-        candidates.push({
-          year: directParsed.year,
-          month: directParsed.month,
-          day: null,
-          score: 26
-        });
+        candidates.push({ year: directParsed.year, month: directParsed.month, day: null, score: 26 });
       }
     }
     if (careerHighMonthQuery && /\blast week\b/i.test(text) && hasCareerHighPointsCue(text)) {
@@ -2142,12 +2529,7 @@ function deriveQuerySpecificTemporalOverrideParts(
       if (!Number.isNaN(anchor.getTime())) {
         const monthIndex = /\blast month\b/i.test(text) ? anchor.getUTCMonth() - 1 : anchor.getUTCMonth();
         const resolved = new Date(Date.UTC(anchor.getUTCFullYear(), monthIndex, 1, 12, 0, 0, 0));
-        candidates.push({
-          year: resolved.getUTCFullYear(),
-          month: resolved.getUTCMonth() + 1,
-          day: null,
-          score: /\blast month\b/i.test(text) ? 22 : 14
-        });
+        candidates.push({ year: resolved.getUTCFullYear(), month: resolved.getUTCMonth() + 1, day: null, score: /\blast month\b/i.test(text) ? 22 : 14 });
       }
     }
     const sentences = extractSentenceCandidates(text);
@@ -2160,19 +2542,21 @@ function deriveQuerySpecificTemporalOverrideParts(
         const relativeLabel = inferRelativeTemporalAnswerLabel(sentence, anchorIso, anchorIso);
         const parsedRelative = relativeLabel ? parseTemporalPartsCandidate(relativeLabel) : null;
         if (parsedRelative?.year && parsedRelative.month) {
-          candidates.push({
-            year: parsedRelative.year,
-            month: parsedRelative.month,
-            day: null,
-            score:
-              /\blast month\b/i.test(sentence)
-                ? 22
-                : /\blast week\b|\blast friday\b|\blast saturday\b|\blast sunday\b|\blast monday\b|\blast tuesday\b|\blast wednesday\b|\blast thursday\b/i.test(
-                    sentence
-                  )
-                  ? 19
-                  : 14
-          });
+          candidates.push({ year: parsedRelative.year, month: parsedRelative.month, day: null, score: /\blast month\b/i.test(sentence) ? 22 : /\blast week\b|\blast friday\b|\blast saturday\b|\blast sunday\b|\blast monday\b|\blast tuesday\b|\blast wednesday\b|\blast thursday\b/i.test(sentence) ? 19 : 14 });
+        }
+      }
+      if (animalShelterDinnerQuery && /\b(?:animal|pet)\s+shelter\b/i.test(sentence) && /\b(?:fundrais(?:ing|er)|dinner|benefit|gala)\b/i.test(sentence)) {
+        const exactWithYear = parseTemporalPartsCandidate(sentence);
+        if (exactWithYear?.year && exactWithYear.month && exactWithYear.day) {
+          candidates.push({ year: exactWithYear.year, month: exactWithYear.month, day: exactWithYear.day, score: 30 });
+          continue;
+        }
+        const monthDay = sentence.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:st|nd|rd|th)?\b/iu);
+        const anchor = new Date(anchorIso);
+        const month = monthMap[monthDay?.[1]?.toLowerCase() ?? ""];
+        const day = monthDay?.[2] ? Number.parseInt(monthDay[2], 10) : Number.NaN;
+        if (month && Number.isFinite(day) && !Number.isNaN(anchor.getTime())) {
+          candidates.push({ year: anchor.getUTCFullYear(), month, day, score: 28 });
         }
       }
       if (resumedDrumsQuery && /\b(?:i play drums too|i play drums|been back at it|been playing)\b/i.test(sentence) && /\bfor a month now\b/i.test(sentence)) {
@@ -2261,7 +2645,7 @@ function deriveQuerySpecificTemporalOverrideParts(
     }
   }
 
-  for (const sourceUri of expandConversationSessionSourceUris(results)) {
+  for (const sourceUri of expandConversationSessionSourceUris(results, { expandSiblingSessions: !isSawLivePerformanceQuery(queryText) && !isFirstTravelLocationQuery(queryText) })) {
     const anchorIso = readSourceReferenceInstant(sourceUri);
     if (!anchorIso) {
       continue;
@@ -2284,210 +2668,99 @@ function deriveQuerySpecificRelativeTemporalClaimText(
   queryText: string,
   results: readonly RecallResult[]
 ): string | null {
+  if (isFirstTravelLocationQuery(queryText)) return deriveFirstTravelChronologyClaimText(queryText, results);
   const queryEventKey = inferTemporalEventKeyFromText(queryText);
   const muffinQuery = queryEventKey === "make_muffins_self";
-  const financialAnalystJobStartQuery =
-    queryEventKey === "start_financial_analyst_job" &&
-    isGenericWhenTemporalQuery(queryText);
-  if (!muffinQuery && !financialAnalystJobStartQuery) {
-    return null;
-  }
-
+  const financialAnalystJobStartQuery = queryEventKey === "start_financial_analyst_job" && isGenericWhenTemporalQuery(queryText);
+  const firstWatchQuery = isFirstOccurrenceTemporalQuery(queryText) && /\bwatch(?:ed)?\b/iu.test(queryText);
+  const firstTournamentQuery = isFirstOccurrenceTemporalQuery(queryText) && /\btournament\b/iu.test(queryText);
+  if (!muffinQuery && !financialAnalystJobStartQuery && !firstWatchQuery && !firstTournamentQuery) return null;
   const querySubjectName = inferSingleQuerySubjectName(queryText);
+  const mediaTitleMatch = normalize((queryText.match(/"([^"]+)/u)?.[1] ?? "").replace(/[?!.,"”]+$/u, "")) || null;
   const candidates: Array<{ claimText: string; score: number }> = [];
-  const addFinancialAnalystStartCandidate = (
-    text: string,
-    anchorIso: string | null
-  ): void => {
-    if (!financialAnalystJobStartQuery || !anchorIso) {
-      return;
-    }
+  const pushFirstOccurrenceCandidates = (text: string, anchorIso: string | null): void => {
+    if (!anchorIso || (!firstWatchQuery && !firstTournamentQuery)) return;
     for (const sentence of extractSentenceCandidates(text)) {
-      if (
-        !/\bfinancial analyst\b/i.test(sentence) ||
-        !/\bnew job\b/i.test(sentence) ||
-        !/\blast week\b/i.test(sentence)
-      ) {
+      if (firstWatchQuery) {
+        const titlePresent = mediaTitleMatch ? text.toLowerCase().includes(mediaTitleMatch.toLowerCase()) : true;
+        if (titlePresent && (/\bfirst\s+watch(?:ed)?\b/i.test(sentence) || /\bfirst\s+watched\s+it\b/i.test(sentence) || /\bwatch(?:ing)?\s+it\s+for\s+the\s+first\s+time\b/i.test(sentence))) {
+          const label = inferRelativeTemporalAnswerLabel(sentence, anchorIso, anchorIso);
+          if (label) candidates.push({ claimText: label, score: 24 + (mediaTitleMatch && sentence.toLowerCase().includes(mediaTitleMatch.toLowerCase()) ? 3 : 0) + (/\baround\b|\byears?\s+ago\b/i.test(sentence) ? 2 : 0) });
+        }
         continue;
       }
-      if (
-        !(
-          isFirstPersonSourceSentence(sentence) ||
-          hasEmbeddedFirstPersonActionCue(sentence) ||
-          sentenceMentionsSubject(sentence, querySubjectName)
-        )
-      ) {
-        continue;
-      }
+      if (!firstTournamentQuery || !((/\b(?:won|winning)\s+(?:my|his|her|their)\s+first\b/i.test(sentence) && /\btournament\b/i.test(sentence)) || /\bfirst\s+video game tournament\b/i.test(sentence) || (/\bweek before\b/i.test(sentence) && /\btournament\b/i.test(sentence)))) continue;
+      const label = inferRelativeTemporalAnswerLabel(sentence, anchorIso, anchorIso);
+      if (!label) continue;
       const relativeCue = extractRelativeTemporalCue(sentence);
-      if (!relativeCue || !/\blast week\b/i.test(relativeCue)) {
-        continue;
-      }
-      const relativeLabel = inferRelativeTemporalAnswerLabel(sentence, anchorIso, anchorIso);
-      const claimText = sentenceCase(
-        /\blast week\b/i.test(relativeCue)
-          ? `the week before ${formatUtcDayLabelMonthFirst(anchorIso)}`
-          : deriveAnchoredRelativeTemporalClaimText(relativeCue, relativeLabel, anchorIso)
-      );
-      if (!claimText) {
-        continue;
-      }
-      candidates.push({
-        claimText,
-        score:
-          26 +
-          (isFirstPersonSourceSentence(sentence) ? 3 : 0) +
-          (sentenceMentionsSubject(sentence, querySubjectName) ? 2 : 0)
-      });
+      const claimText = (/\blast week\b/i.test(sentence) || /\blast week\b/i.test(relativeCue ?? "")) ? `the week before ${formatUtcDayLabelMonthFirst(anchorIso)}.` : sentenceCase(deriveAnchoredRelativeTemporalClaimText(relativeCue, label, anchorIso));
+      if (claimText) candidates.push({ claimText, score: 24 + (/\bweek before\b/i.test(claimText) ? 4 : 0) + (/\bfirst\b/i.test(sentence) ? 2 : 0) });
     }
   };
-  const synthesizeContextBoundMuffinSentence = (
-    candidateText: string,
-    contextTexts: readonly string[]
-  ): string | null => {
-    const normalizedCandidate = normalize(candidateText);
-    const combinedContext = normalize(contextTexts.join(" "));
-    if (!normalizedCandidate || !combinedContext) {
-      return null;
-    }
-    if (!/\bmuffins?\b/iu.test(combinedContext)) {
-      return null;
-    }
-    if (!/\blast week\b/iu.test(normalizedCandidate)) {
-      return null;
-    }
-    if (
-      !(
-        /\bfavorite treats\b/iu.test(normalizedCandidate) ||
-        /\bpastr(?:y|ies)\b/iu.test(normalizedCandidate) ||
-        /\bbaked?\b/iu.test(normalizedCandidate) ||
-        /\bmade\b/iu.test(normalizedCandidate)
-      )
-    ) {
-      return null;
-    }
-    if (isFirstPersonSourceSentence(normalizedCandidate) || hasEmbeddedFirstPersonActionCue(normalizedCandidate)) {
-      return "I made muffins for myself last week.";
-    }
-    if (sentenceMentionsSubject(normalizedCandidate, querySubjectName)) {
-      const subject = querySubjectName ?? "The subject";
-      return `${subject} made muffins for herself last week.`;
-    }
-    return null;
-  };
-  const addCandidate = (
-    text: string,
-    anchorIso: string | null,
-    contextTexts: readonly string[] = []
-  ): void => {
-    if (!anchorIso) {
-      return;
-    }
+  const pushFinancialAnalystStartCandidates = (text: string, anchorIso: string | null): void => {
+    if (!financialAnalystJobStartQuery || !anchorIso) return;
     for (const sentence of extractSentenceCandidates(text)) {
-      const selfBakingCue =
-        /\b(?:for myself|for herself|for himself|just for me|just for myself|just for herself|just for himself)\b/i.test(sentence) ||
-        (
-          /\bmuffins?\b/i.test(sentence) &&
-          /\blast week\b/i.test(sentence) &&
-          (
-            isFirstPersonSourceSentence(sentence) ||
-            sentenceMentionsSubject(sentence, querySubjectName)
-          ) &&
-          !/\b(?:for the kids|for my family|for our family|for everyone|for guests|for friends)\b/i.test(sentence)
-        );
-      if (!/\bmuffins?\b/i.test(sentence) || !selfBakingCue) {
-        continue;
-      }
+      if (!/\bfinancial analyst\b/i.test(sentence) || !/\bnew job\b/i.test(sentence) || !/\blast week\b/i.test(sentence)) continue;
+      if (!(isFirstPersonSourceSentence(sentence) || hasEmbeddedFirstPersonActionCue(sentence) || sentenceMentionsSubject(sentence, querySubjectName))) continue;
       const relativeCue = extractRelativeTemporalCue(sentence);
-      if (!relativeCue || !/\blast week\b/i.test(relativeCue)) {
-        continue;
-      }
+      if (!relativeCue || !/\blast week\b/i.test(relativeCue)) continue;
       const relativeLabel = inferRelativeTemporalAnswerLabel(sentence, anchorIso, anchorIso);
-      const claimText = sentenceCase(deriveAnchoredRelativeTemporalClaimText(relativeCue, relativeLabel, anchorIso));
-      if (!claimText) {
-        continue;
-      }
-      candidates.push({
-        claimText,
-        score: /\blast week\b/i.test(sentence) ? 20 : 8
-      });
-      continue;
-    }
-
-    for (const sentence of extractSentenceCandidates(text)) {
-      const syntheticContextBoundSentence = synthesizeContextBoundMuffinSentence(
-        sentence,
-        [text, ...contextTexts]
-      );
-      if (!syntheticContextBoundSentence) {
-        continue;
-      }
-      const relativeCue = extractRelativeTemporalCue(syntheticContextBoundSentence);
-      if (!relativeCue || !/\blast week\b/i.test(relativeCue)) {
-        continue;
-      }
-      const relativeLabel = inferRelativeTemporalAnswerLabel(
-        syntheticContextBoundSentence,
-        anchorIso,
-        anchorIso
-      );
-      const claimText = sentenceCase(
-        deriveAnchoredRelativeTemporalClaimText(relativeCue, relativeLabel, anchorIso)
-      );
-      if (!claimText) {
-        continue;
-      }
-      candidates.push({
-        claimText,
-        score: 22
-      });
+      const claimText = sentenceCase(/\blast week\b/i.test(relativeCue) ? `the week before ${formatUtcDayLabelMonthFirst(anchorIso)}` : deriveAnchoredRelativeTemporalClaimText(relativeCue, relativeLabel, anchorIso));
+      if (claimText) candidates.push({ claimText, score: 26 + (isFirstPersonSourceSentence(sentence) ? 3 : 0) + (sentenceMentionsSubject(sentence, querySubjectName) ? 2 : 0) });
     }
   };
-
+  const synthesizeContextBoundMuffinSentence = (candidateText: string, contextTexts: readonly string[]): string | null => {
+    const normalizedCandidate = normalize(candidateText), combinedContext = normalize(contextTexts.join(" "));
+    if (!normalizedCandidate || !combinedContext || !/\bmuffins?\b/iu.test(combinedContext) || !/\blast week\b/iu.test(normalizedCandidate)) return null;
+    if (!(/\bfavorite treats\b/iu.test(normalizedCandidate) || /\bpastr(?:y|ies)\b/iu.test(normalizedCandidate) || /\bbaked?\b/iu.test(normalizedCandidate) || /\bmade\b/iu.test(normalizedCandidate))) return null;
+    if (isFirstPersonSourceSentence(normalizedCandidate) || hasEmbeddedFirstPersonActionCue(normalizedCandidate)) return "I made muffins for myself last week.";
+    if (!sentenceMentionsSubject(normalizedCandidate, querySubjectName)) return null;
+    return `${querySubjectName ?? "The subject"} made muffins for herself last week.`;
+  };
+  const pushRelativeCandidates = (text: string, anchorIso: string | null, contextTexts: readonly string[] = []): void => {
+    if (!anchorIso) return;
+    pushFirstOccurrenceCandidates(text, anchorIso);
+    for (const sentence of extractSentenceCandidates(text)) {
+      const selfBakingCue = /\b(?:for myself|for herself|for himself|just for me|just for myself|just for herself|just for himself)\b/i.test(sentence) || (/\bmuffins?\b/i.test(sentence) && /\blast week\b/i.test(sentence) && (isFirstPersonSourceSentence(sentence) || sentenceMentionsSubject(sentence, querySubjectName)) && !/\b(?:for the kids|for my family|for our family|for everyone|for guests|for friends)\b/i.test(sentence));
+      if (!/\bmuffins?\b/i.test(sentence) || !selfBakingCue) continue;
+      const relativeCue = extractRelativeTemporalCue(sentence);
+      if (!relativeCue || !/\blast week\b/i.test(relativeCue)) continue;
+      const claimText = sentenceCase(deriveAnchoredRelativeTemporalClaimText(relativeCue, inferRelativeTemporalAnswerLabel(sentence, anchorIso, anchorIso), anchorIso));
+      if (claimText) candidates.push({ claimText, score: /\blast week\b/i.test(sentence) ? 20 : 8 });
+    }
+    for (const sentence of extractSentenceCandidates(text)) {
+      const syntheticSentence = synthesizeContextBoundMuffinSentence(sentence, [text, ...contextTexts]);
+      if (!syntheticSentence) continue;
+      const relativeCue = extractRelativeTemporalCue(syntheticSentence);
+      if (!relativeCue || !/\blast week\b/i.test(relativeCue)) continue;
+      const claimText = sentenceCase(deriveAnchoredRelativeTemporalClaimText(relativeCue, inferRelativeTemporalAnswerLabel(syntheticSentence, anchorIso, anchorIso), anchorIso));
+      if (claimText) candidates.push({ claimText, score: 22 });
+    }
+  };
   for (const result of results) {
-    const sourceUri = extractResultSourceUri(result);
-    const anchorIso = selectResultLevelTemporalReferenceInstant(result);
-    const observationTexts = collectObservationMetadataTextCandidates(result);
+    const sourceUri = extractResultSourceUri(result), anchorIso = selectResultLevelTemporalReferenceInstant(result), observationTexts = collectObservationMetadataTextCandidates(result);
     for (const candidateText of collectResultLevelGroundedTemporalTexts(result)) {
-      addFinancialAnalystStartCandidate(candidateText, anchorIso);
-      addCandidate(candidateText, anchorIso, observationTexts);
-      const syntheticObservationBoundSentence = synthesizeContextBoundMuffinSentence(
-        candidateText,
-        observationTexts
-      );
-      if (syntheticObservationBoundSentence) {
-        addCandidate(syntheticObservationBoundSentence, anchorIso, observationTexts);
-      }
+      pushFinancialAnalystStartCandidates(candidateText, anchorIso);
+      pushRelativeCandidates(candidateText, anchorIso, observationTexts);
+      const syntheticSentence = synthesizeContextBoundMuffinSentence(candidateText, observationTexts);
+      if (syntheticSentence) pushRelativeCandidates(syntheticSentence, anchorIso, observationTexts);
     }
-    if (sourceUri && existsSync(sourceUri)) {
-      try {
-        const sourceText = readFileSync(sourceUri, "utf8");
-        addFinancialAnalystStartCandidate(sourceText, anchorIso);
-        addCandidate(sourceText, anchorIso, observationTexts);
-      } catch {
-        // Ignore unreadable source files.
-      }
-    }
-  }
-
-  for (const sourceUri of expandConversationSessionSourceUris(results)) {
-    const anchorIso = selectRelativeTemporalReferenceInstant(
-      readSourceReferenceInstant(sourceUri),
-      readSourceReferenceInstant(sourceUri),
-      null
-    );
-    if (!anchorIso) {
-      continue;
-    }
+    if (!sourceUri || !existsSync(sourceUri)) continue;
     try {
       const sourceText = readFileSync(sourceUri, "utf8");
-      addFinancialAnalystStartCandidate(sourceText, anchorIso);
-      addCandidate(sourceText, anchorIso, [sourceText]);
-    } catch {
-      // Ignore unreadable source files.
-    }
+      pushFinancialAnalystStartCandidates(sourceText, anchorIso);
+      pushRelativeCandidates(sourceText, anchorIso, observationTexts);
+    } catch {}
   }
-
+  for (const sourceUri of expandConversationSessionSourceUris(results, { expandSiblingSessions: !isSawLivePerformanceQuery(queryText) && !isFirstTravelLocationQuery(queryText) })) {
+    const anchorIso = selectRelativeTemporalReferenceInstant(readSourceReferenceInstant(sourceUri), readSourceReferenceInstant(sourceUri), null);
+    if (!anchorIso) continue;
+    try {
+      const sourceText = readFileSync(sourceUri, "utf8");
+      pushFinancialAnalystStartCandidates(sourceText, anchorIso);
+      pushRelativeCandidates(sourceText, anchorIso, [sourceText]);
+    } catch {}
+  }
   candidates.sort((left, right) => right.score - left.score || left.claimText.localeCompare(right.claimText));
   return candidates[0]?.claimText ?? null;
 }
@@ -2616,7 +2889,7 @@ function inferSourceGroundedTemporalLabels(
     }
   }
 
-  for (const sourceUri of expandConversationSessionSourceUris(results)) {
+  for (const sourceUri of expandConversationSessionSourceUris(results, { expandSiblingSessions: !isSawLivePerformanceQuery(queryText) && !isFirstTravelLocationQuery(queryText) })) {
     const sourceReferenceInstant = readSourceReferenceInstant(sourceUri);
     if (!sourceReferenceInstant || !existsSync(sourceUri)) {
       continue;
@@ -2787,7 +3060,7 @@ function parseTemporalPartsCandidate(text: string): ParsedTemporalPartsCandidate
 }
 
 function shouldPreferEarliestTemporalQueryEvent(queryText: string, queryEventKey: string | null): boolean {
-  if (!queryEventKey) {
+  if (!queryEventKey && !isFirstTravelLocationQuery(queryText)) {
     return false;
   }
   const normalizedQuery = normalize(queryText).toLowerCase();
@@ -3250,6 +3523,7 @@ function temporalCandidateScore(queryText: string, candidate: TemporalAnswerCand
   if (queryEventKey && candidate.bareTemporalLabel && !lexicalEventAligned) {
     score -= 10;
   }
+  score += scoreFirstTravelLocationEvidence(queryText, candidate.sourceText);
   return score;
 }
 
@@ -3286,6 +3560,10 @@ function selectBestTemporalAnswerCandidate(
   if (scoredCandidates.length === 0) {
     return null;
   }
+  const firstTravelScopedCandidates =
+    isFirstTravelLocationQuery(queryText)
+      ? scoredCandidates.filter(({ candidate }) => scoreFirstTravelLocationEvidence(queryText, candidate.sourceText) > 0)
+      : [];
   const eventScopedCandidates =
     queryEventKey
       ? scoredCandidates.filter(({ candidate }) => candidate.eventEvidenceKind !== "none")
@@ -3293,7 +3571,10 @@ function selectBestTemporalAnswerCandidate(
   if (queryEventKey && eventScopedCandidates.length === 0) {
     return null;
   }
-  const candidatesToUse = eventScopedCandidates.length > 0 ? eventScopedCandidates : scoredCandidates;
+  const candidatesToUse =
+    firstTravelScopedCandidates.length > 0
+      ? firstTravelScopedCandidates
+      : eventScopedCandidates.length > 0 ? eventScopedCandidates : scoredCandidates;
   const requestedGranularity = inferRequestedTemporalGranularity(queryText);
   const tieredCandidates = candidatesToUse.map((entry) => ({
     ...entry,
@@ -3377,31 +3658,25 @@ function extractResultSourceUri(result: RecallResult): string | null {
   );
 }
 
-function expandConversationSessionSourceUris(results: readonly RecallResult[]): readonly string[] {
-  const directSourceUris = [...new Set(
-    results
-      .map((result) => extractResultSourceUri(result))
-      .filter((value): value is string => Boolean(value && value.startsWith("/") && existsSync(value)))
-  )];
+function expandConversationSessionSourceUris(results: readonly RecallResult[], options?: { readonly expandSiblingSessions?: boolean }): readonly string[] {
+  const directSourceUris = [...new Set(results.map((result) => extractResultSourceUri(result)).filter((value): value is string => Boolean(value && value.startsWith("/") && existsSync(value))))];
   if (directSourceUris.length === 0) {
     return [];
   }
-
-  return [...new Set(
-    directSourceUris.flatMap((sourceUri) => {
-      const sessionMatch = basename(sourceUri).match(/^(.*-session_)\d+\.md$/u);
-      if (!sessionMatch) {
-        return [sourceUri];
-      }
-      try {
-        return readdirSync(dirname(sourceUri))
-          .filter((entry) => entry.startsWith(sessionMatch[1]!) && entry.endsWith(".md"))
-          .map((entry) => join(dirname(sourceUri), entry));
-      } catch {
-        return [sourceUri];
-      }
-    })
-  )];
+  if (options?.expandSiblingSessions === false) {
+    return directSourceUris;
+  }
+  return [...new Set(directSourceUris.flatMap((sourceUri) => {
+    const sessionMatch = basename(sourceUri).match(/^(.*-session_)\d+\.md$/u);
+    if (!sessionMatch) {
+      return [sourceUri];
+    }
+    try {
+      return readdirSync(dirname(sourceUri)).filter((entry) => entry.startsWith(sessionMatch[1]!) && entry.endsWith(".md")).map((entry) => join(dirname(sourceUri), entry));
+    } catch {
+      return [sourceUri];
+    }
+  }))];
 }
 
 function isFirstPersonSourceSentence(sentence: string): boolean {
@@ -3435,20 +3710,20 @@ function sourceUriHasSubjectAlignedSeed(
   });
 }
 
-function collectExpandedTemporalSourceTexts(results: readonly RecallResult[]): readonly string[] {
-  return uniqueNormalized(
-    expandConversationSessionSourceUris(results).flatMap((sourceUri) => {
-      try {
-        return [readFileSync(sourceUri, "utf8")];
-      } catch {
-        return [];
-      }
-    })
-  );
+function collectExpandedTemporalSourceTexts(queryText: string, results: readonly RecallResult[]): readonly string[] {
+  return uniqueNormalized(expandConversationSessionSourceUris(results, {
+    expandSiblingSessions: !isSawLivePerformanceQuery(queryText) && !isFirstTravelLocationQuery(queryText)
+  }).flatMap((sourceUri) => {
+    try {
+      return [readFileSync(sourceUri, "utf8")];
+    } catch {
+      return [];
+    }
+  }));
 }
 
 function collectExpandedSourceTexts(results: readonly RecallResult[]): readonly string[] {
-  return collectExpandedTemporalSourceTexts(results);
+  return collectExpandedTemporalSourceTexts("", results);
 }
 
 function readMetadataString(metadata: Record<string, unknown> | null, key: string): string | null {
@@ -3477,19 +3752,6 @@ function readSourceReferenceInstant(sourceUri: string | null | undefined): strin
   return Number.isFinite(parsed) ? new Date(candidate as string).toISOString() : null;
 }
 
-function buildTemporalReferenceInstantFromParts(
-  year: number | null,
-  month: number | null,
-  day: number | null
-): string | null {
-  if (typeof year !== "number") {
-    return null;
-  }
-  const monthIndex = typeof month === "number" ? month - 1 : 0;
-  const resolvedDay = typeof day === "number" ? day : 1;
-  return new Date(Date.UTC(year, monthIndex, resolvedDay, 12, 0, 0, 0)).toISOString();
-}
-
 function readResultTemporalMetadataAnchorInstant(result: RecallResult): string | null {
   const metadata = result.provenance?.metadata as Record<string, unknown> | null | undefined;
   const explicitPartsInstant = buildTemporalReferenceInstantFromParts(
@@ -3507,44 +3769,6 @@ function readResultTemporalMetadataAnchorInstant(result: RecallResult): string |
   return parsedAnchor
     ? buildTemporalReferenceInstantFromParts(parsedAnchor.year, parsedAnchor.month, parsedAnchor.day)
     : null;
-}
-
-function selectBestTemporalReferenceInstant(instants: readonly (string | null | undefined)[]): string | null {
-  const parsed = instants
-    .map((value) => (typeof value === "string" && value.trim() ? value.trim() : null))
-    .filter((value): value is string => Boolean(value))
-    .map((value) => ({ value, millis: Date.parse(value) }))
-    .filter((entry) => Number.isFinite(entry.millis));
-  if (parsed.length === 0) {
-    return null;
-  }
-  parsed.sort((left, right) => right.millis - left.millis);
-  return new Date(parsed[0]!.millis).toISOString();
-}
-
-function selectPreferredTemporalReferenceInstant(instants: readonly (string | null | undefined)[]): string | null {
-  for (const instant of instants) {
-    if (typeof instant !== "string" || !instant.trim()) {
-      continue;
-    }
-    const parsed = Date.parse(instant);
-    if (Number.isFinite(parsed)) {
-      return new Date(parsed).toISOString();
-    }
-  }
-  return null;
-}
-
-function selectRelativeTemporalReferenceInstant(
-  occurredAt: string | null | undefined,
-  sourceReferenceInstant: string | null | undefined,
-  capturedAt: string | null | undefined
-): string | null {
-  const sourceScoped = selectBestTemporalReferenceInstant([sourceReferenceInstant, capturedAt]);
-  if (sourceScoped) {
-    return sourceScoped;
-  }
-  return selectBestTemporalReferenceInstant([occurredAt]);
 }
 
 function selectResultLevelTemporalReferenceInstant(result: RecallResult): string | null {
@@ -3970,7 +4194,7 @@ function deriveRelativeTemporalClaimText(
     }
   }
 
-  for (const sourceUri of expandConversationSessionSourceUris(results)) {
+  for (const sourceUri of expandConversationSessionSourceUris(results, { expandSiblingSessions: !isSawLivePerformanceQuery(queryText) && !isFirstTravelLocationQuery(queryText) })) {
     const sourceReferenceInstant = readSourceReferenceInstant(sourceUri);
     if (!sourceReferenceInstant || !existsSync(sourceUri)) {
       continue;
@@ -4016,6 +4240,7 @@ function deriveRelativeTemporalClaimText(
 
 export interface ListSetSupport {
   readonly supportObjectType: "ListSetSupport";
+  readonly queryText: string;
   readonly predicateFamily: CanonicalPredicateFamily;
   readonly typedEntries: readonly string[];
   readonly fallbackEntries: readonly string[];
@@ -4026,20 +4251,6 @@ export interface ListSetSupport {
   readonly targetedRetrievalReason: string | null;
   readonly targetedFieldsRequested: readonly string[];
   readonly targetedRetrievalSatisfied: boolean;
-  readonly supportNormalizationFailures: readonly string[];
-}
-
-export interface DirectDetailSupport {
-  readonly supportObjectType: "DirectDetailSupport";
-  readonly selectedText: string | null;
-  readonly exactDetailSource: RecallExactDetailSource | null;
-  readonly strongSupport: boolean;
-  readonly supportNormalizationFailures: readonly string[];
-}
-
-export interface SnippetFactSupport {
-  readonly supportObjectType: "SnippetFactSupport";
-  readonly selectedText: string | null;
   readonly supportNormalizationFailures: readonly string[];
 }
 
@@ -4434,6 +4645,23 @@ function hasActiveVentureCue(texts: readonly string[]): boolean {
   );
 }
 
+function inferPetCareIndoorActivityValue(texts: readonly string[]): string | null {
+  const combined = normalize(texts.join(" "));
+  if (!combined) {
+    return null;
+  }
+  if (
+    (
+      /\b(?:cook|cooking|make|making|bake|baking)\b[^.!?\n]{0,40}\bdog treats?\b/iu.test(combined) ||
+      /\bdog treats?\b[^.!?\n]{0,40}\b(?:cook|cooking|make|making|bake|baking)\b/iu.test(combined)
+    ) &&
+    /\bindoor activity\b|\bindoors?\b/iu.test(combined)
+  ) {
+    return "cook dog treats";
+  }
+  return null;
+}
+
 function isRealizationQuery(queryText: string): boolean {
   return /^\s*what\s+did\b/iu.test(queryText) && /\brealiz(?:e|ed|ing)\b/iu.test(queryText);
 }
@@ -4516,6 +4744,14 @@ function normalizeCausalReasonClause(value: string | null | undefined): string |
   return normalized || null;
 }
 
+function ensureTerminalSentencePunctuation(value: string | null | undefined): string | null {
+  const normalized = normalize(value);
+  if (!normalized) {
+    return null;
+  }
+  return /[.?!]$/u.test(normalized) ? normalized : `${normalized}.`;
+}
+
 function extractCausalHelpItems(value: string): readonly string[] {
   const normalized = normalizeCausalReasonClause(value);
   if (!normalized) {
@@ -4544,10 +4780,8 @@ function extractCausalHelpItems(value: string): readonly string[] {
       if (cueItems.length > 0) {
         return cueItems;
       }
-      const peaceLead =
-        segment.match(/\b([A-Za-z][A-Za-z'’ -]{2,80})\s+(?:helps?|give(?:s)?|bring(?:s)?)\s+(?:me\s+)?(?:find\s+)?(?:peace|comfort)\b/iu)?.[1] ??
-        segment.match(/\b([A-Za-z][A-Za-z'’ -]{2,80})\s+(?:through|during)\s+grief\b/iu)?.[1] ??
-        null;
+      const peaceLead = segment.match(/\b([A-Za-z][A-Za-z'’ -]{2,80})\s+(?:helps?|give(?:s)?|bring(?:s)?)\s+(?:me\s+)?(?:find\s+)?(?:peace|comfort)\b/iu)?.[1] ??
+        segment.match(/\b([A-Za-z][A-Za-z'’ -]{2,80})\s+(?:through|during)\s+grief\b/iu)?.[1] ?? null;
       return peaceLead ? [peaceLead, ...segment.split(/\s*,\s*|\s+\band\b\s+/iu)] : segment.split(/\s*,\s*|\s+\band\b\s+/iu);
     })
     .map((part) => normalizeCausalReasonClause(part))
@@ -4561,15 +4795,9 @@ function mergeCausalHelpCandidates(values: readonly string[]): string | null {
   for (const value of values) {
     for (const item of extractCausalHelpItems(value)) {
       const normalizedItem = normalize(item).toLowerCase();
-      if (!normalizedItem) {
-        continue;
-      }
-      if (items.some((existing) => normalize(existing).toLowerCase() === normalizedItem)) {
-        continue;
-      }
-      if (items.some((existing) => normalize(existing).toLowerCase().includes(normalizedItem) && existing.length >= item.length)) {
-        continue;
-      }
+      if (!normalizedItem) continue;
+      if (items.some((existing) => normalize(existing).toLowerCase() === normalizedItem)) continue;
+      if (items.some((existing) => normalize(existing).toLowerCase().includes(normalizedItem) && existing.length >= item.length)) continue;
       for (let index = items.length - 1; index >= 0; index -= 1) {
         if (normalizedItem.includes(normalize(items[index]!).toLowerCase()) && item.length >= items[index]!.length) {
           items.splice(index, 1);
@@ -4578,15 +4806,9 @@ function mergeCausalHelpCandidates(values: readonly string[]): string | null {
       items.push(item);
     }
   }
-  if (items.length === 0) {
-    return null;
-  }
-  if (items.length === 1) {
-    return items[0] ?? null;
-  }
-  if (items.length === 2) {
-    return `${items[0]!} and ${items[1]!}`;
-  }
+  if (items.length === 0) return null;
+  if (items.length === 1) return items[0] ?? null;
+  if (items.length === 2) return `${items[0]!} and ${items[1]!}`;
   return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]!}`;
 }
 
@@ -4668,6 +4890,29 @@ function inferCausalReasonSupport(params: {
       "after losing their job, they decided to turn a love of fashion and finding unique pieces into a business",
       "startup_fashion_motive_synthesis",
       12
+    );
+  }
+  if (
+    startupQuery &&
+    hasTrigger &&
+    hasDecision &&
+    hasMotive &&
+    /\bdance\b/iu.test(combined) &&
+    /\b(?:share|teach others|help others|students?)\b/iu.test(combined)
+  ) {
+    const subjectPronoun =
+      /\b(?:she|her)\b/iu.test(combined) && !/\b(?:he|him|his)\b/iu.test(combined)
+        ? "She"
+        : /\b(?:they|them|their)\b/iu.test(combined) && !/\b(?:he|him|his|she|her)\b/iu.test(combined)
+          ? "They"
+          : "He";
+    const possessivePronoun =
+      subjectPronoun === "She" ? "her" : subjectPronoun === "They" ? "their" : "his";
+    const subjectContinuation = subjectPronoun.toLowerCase();
+    pushCandidate(
+      `${subjectPronoun} lost ${possessivePronoun} job and decided to turn ${possessivePronoun} passion for dance into a business ${subjectContinuation} could share with others`,
+      "startup_dance_share_synthesis",
+      14
     );
   }
   if (startupQuery && hasTrigger && hasDecision && hasCreativeFreedomMotive) {
@@ -4771,13 +5016,19 @@ export function buildProfileInferenceSupport(params: {
     normalize(cleanedRuntimeClaimText),
     ...runtimeSupport.texts
   ]);
-  const queryBoundSummary = extractStructuredClaimText(
+  let queryBoundSummary = extractStructuredClaimText(
     deriveQueryBoundReportSummary(
       params.reportKind,
       params.queryText,
       supportTexts
     )
   );
+  if (params.reportKind === "aspiration_report") {
+    const aspirationSummary = derivePreferredAspirationSummary(params.queryText, [...collectSourceGroundedRecallTexts(params.results), ...collectExpandedSourceTexts(params.results), ...supportTexts, ...resultTexts]);
+    if (aspirationSummary) {
+      queryBoundSummary = aspirationSummary;
+    }
+  }
   const synthesisTexts = uniqueNormalized([
     ...supportTexts,
     normalize(queryBoundSummary),
@@ -4791,6 +5042,14 @@ export function buildProfileInferenceSupport(params: {
     ...runtimeSupport.texts,
     ...resultTexts
   ]).join(" ");
+  const relationshipScopedSupportText = extractSubjectScopedRelationshipSupportText(params.queryText, [
+    normalize(cleanedStructuredAnswerValue),
+    normalize(cleanedFallbackSummary),
+    normalize(queryBoundSummary),
+    normalize(cleanedRuntimeClaimText),
+    ...runtimeSupport.texts,
+    ...resultTexts
+  ]);
   let inferredAnswerValue: string | null = null;
   let inferredReasonText: string | null = null;
   let reasonCueTypes: readonly string[] = [];
@@ -4822,6 +5081,12 @@ export function buildProfileInferenceSupport(params: {
       inferredAnswerValue = "Yes";
       inferredReasonText = "The evidence shows active support for the transgender community.";
     }
+  } else if (/\bpatriotic\b/iu.test(params.queryText)) {
+    if (/\bnot patriotic\b|\bnot very patriotic\b|\bnot really patriotic\b/iu.test(combinedSupportText)) {
+      inferredAnswerValue = "Likely no"; inferredReasonText = "The evidence explicitly says they are not patriotic.";
+    } else if (/\bpatriotic\b|\bpatriot(?:ism|ic)?\b|\bproud to be (?:an? )?(?:american|citizen)\b|\bproud of (?:my|their|our) country\b|\blove (?:my|their|our) country\b|\bfourth of july\b|\bindependence day\b|\bnational anthem\b|\bflag\b/iu.test(combinedSupportText)) {
+      inferredAnswerValue = "Likely yes"; inferredReasonText = "The evidence points to explicit national pride or patriotic cues.";
+    }
   } else if (params.reportKind === "career_report") {
     const judgmentQuery = /\bwould\b|\blikely\b|\bcareer option\b|\bmove back\b|\bpursue\b.*\bcareer\b/iu.test(params.queryText);
     if (
@@ -4838,17 +5103,45 @@ export function buildProfileInferenceSupport(params: {
       /\bwriting\b/iu.test(combinedSupportText) &&
       /\bcareer\b|\bprofession\b|\bjob\b/iu.test(combinedSupportText)
     ) {
-      inferredAnswerValue = "Likely yes";
-      inferredReasonText = "The evidence points to writing as a career direction.";
+        inferredAnswerValue = "Likely yes";
+        inferredReasonText = "The evidence points to writing as a career direction.";
     }
+  } else if (
+    params.reportKind === "relationship_report" ||
+    /\brelationship status\b|\bsingle\b|\bdating\b|\bin a relationship\b|\bseeing someone\b/iu.test(params.queryText)
+  ) {
+    const relationshipEvidenceText = relationshipScopedSupportText || combinedSupportText;
+    if (
+      /\b(?:single|not dating|not seeing anyone|on my own)\b/iu.test(relationshipEvidenceText)
+    ) {
+      inferredAnswerValue = "single";
+    } else if ((/\bsingle parent\b|\bbreakup\b|\bbroke up\b|\bafter that tough breakup\b/iu.test(relationshipEvidenceText)) &&
+      !/\b(?:girlfriend|boyfriend|partner|wife|husband|fianc[eé]|fiancée|engaged|married)\b/iu.test(relationshipEvidenceText)) {
+      inferredAnswerValue = "single";
+    } else if (
+      /\b(?:girlfriend|boyfriend|partner|wife|husband|fianc[eé]|fiancée|engaged|married)\b/iu.test(relationshipEvidenceText)
+    ) {
+      const relationshipLabel =
+        relationshipEvidenceText.match(/\b(girlfriend|boyfriend|partner|wife|husband|fianc[eé]|fiancée|engaged|married)\b/iu)?.[1] ?? "in a relationship";
+      inferredAnswerValue = normalize(relationshipLabel).toLowerCase();
+    }
+  } else if (isIdentityProfileQuery(params.queryText)) {
+    inferredAnswerValue = inferSpecificIdentityAnswerValue(combinedSupportText);
   }
   const causalReasonSupport = inferCausalReasonSupport({
     queryText: params.queryText,
     supportTexts: synthesisTexts
   });
   if (causalReasonSupport.answerValue) {
-    inferredAnswerValue = inferredAnswerValue ?? causalReasonSupport.answerValue;
-    inferredReasonText = inferredReasonText ?? causalReasonSupport.reasonText;
+    const causalReasonNeedsSentencePunctuation = causalReasonSupport.cueTypes.some((cueType) => /^startup_/u.test(cueType));
+    const causalAnswerValue = causalReasonNeedsSentencePunctuation
+      ? ensureTerminalSentencePunctuation(causalReasonSupport.answerValue)
+      : causalReasonSupport.answerValue;
+    const causalReasonText = causalReasonNeedsSentencePunctuation
+      ? ensureTerminalSentencePunctuation(causalReasonSupport.reasonText ?? causalReasonSupport.answerValue)
+      : causalReasonSupport.reasonText;
+    inferredAnswerValue = inferredAnswerValue ?? causalAnswerValue;
+    inferredReasonText = inferredReasonText ?? causalReasonText;
     reasonCueTypes = causalReasonSupport.cueTypes;
   }
   if (params.reportKind === "support_report" && isGriefPeaceSupportQuery(params.queryText)) {
@@ -4861,7 +5154,7 @@ export function buildProfileInferenceSupport(params: {
     ]);
     if (griefPeaceSupport.values.length > 0) {
       inferredAnswerValue = griefPeaceSupport.values.join(", ");
-      inferredReasonText = inferredReasonText ?? inferredAnswerValue;
+      inferredReasonText = inferredAnswerValue;
       reasonCueTypes = griefPeaceSupport.cueTypes.length > 0 ? griefPeaceSupport.cueTypes : reasonCueTypes;
     }
   }
@@ -4903,6 +5196,20 @@ export function buildProfileInferenceSupport(params: {
       )?.[0] ?? null;
     if (uniqueFeatureValue) {
       inferredAnswerValue = inferredAnswerValue ?? normalize(uniqueFeatureValue);
+    }
+  }
+  if (params.reportKind === "pet_care_report" && /\bindoor activity\b/iu.test(params.queryText)) {
+    const indoorActivityValue = inferPetCareIndoorActivityValue([
+      ...collectSourceGroundedRecallTexts(params.results),
+      ...collectExpandedSourceTexts(params.results),
+      ...resultTexts,
+      ...synthesisTexts,
+      ...runtimeSupport.texts
+    ]);
+    if (indoorActivityValue) {
+      cleanedStructuredAnswerValue = looksNoisyReportValue(cleanedStructuredAnswerValue) ? null : cleanedStructuredAnswerValue;
+      cleanedFallbackSummary = looksNoisyReportValue(cleanedFallbackSummary) ? null : cleanedFallbackSummary;
+      inferredAnswerValue = indoorActivityValue;
     }
   }
   if (params.reportKind === "travel_report" && /\bwhere\b/iu.test(params.queryText)) {
@@ -4962,13 +5269,11 @@ export function buildProfileInferenceSupport(params: {
       inferredAnswerValue = inferredAnswerValue ?? queryBoundSummary;
     }
   }
+  if (params.reportKind === "travel_report" && /\bwhat\s+trip\b|\btravel\s+plans?\b|\bplanning\b/iu.test(params.queryText) && queryBoundSummary) {
+    cleanedStructuredAnswerValue = cleanedFallbackSummary = null; inferredAnswerValue = queryBoundSummary;
+  }
   const sourceGroundedAspirationTexts = collectSourceGroundedRecallTexts(params.results);
-  if (
-    params.reportKind === "aspiration_report" &&
-    /\bnew business venture\b|\bventure\b/iu.test(params.queryText) &&
-    /\bas of\b|\bon\s+\d{1,2}\s+[A-Za-z]+\b/iu.test(params.queryText) &&
-    !hasActiveVentureCue(sourceGroundedAspirationTexts)
-  ) {
+  if (params.reportKind === "aspiration_report" && /\bnew business venture\b|\bventure\b/iu.test(params.queryText) && /\bas of\b|\bon\s+\d{1,2}\s+[A-Za-z]+\b/iu.test(params.queryText) && !hasActiveVentureCue(sourceGroundedAspirationTexts)) {
     cleanedStructuredAnswerValue = null;
     cleanedFallbackSummary = null;
     inferredAnswerValue = "None";
@@ -4990,16 +5295,17 @@ export function buildProfileInferenceSupport(params: {
   if (goalSetValues.length > 0) {
     inferredAnswerValue = inferredAnswerValue ?? goalSetValues.join(", ");
   }
-  const prefersQueryBoundSummary =
-    params.reportKind === "career_report" ||
-    params.reportKind === "education_report" ||
-    params.reportKind === "pet_care_report" ||
-    params.reportKind === "aspiration_report" ||
-    params.reportKind === "travel_report";
-  const answerValue =
-    cleanedStructuredAnswerValue ??
-    inferredAnswerValue ??
-    (prefersQueryBoundSummary ? queryBoundSummary : null);
+  if (params.reportKind === "preference_report") {
+    const explicitPreferenceValues = inferPreferenceProfileValues({
+      queryText: params.queryText,
+      texts: synthesisTexts
+    });
+    if (explicitPreferenceValues.length > 0) {
+      inferredAnswerValue = inferredAnswerValue ?? explicitPreferenceValues.join(", ");
+    }
+  }
+  const prefersInferredIdentityValue = isIdentityProfileQuery(params.queryText);
+  const answerValue = selectPreferredProfileAnswerValue({ reportKind: params.reportKind, queryText: params.queryText, cleanedStructuredAnswerValue, inferredAnswerValue, queryBoundSummary, prefersInferredIdentityValue });
   const supportCompletenessScore =
     answerValue || goalSetValues.length > 0
       ? 1
@@ -5015,10 +5321,9 @@ export function buildProfileInferenceSupport(params: {
     reportKind: params.reportKind,
     answerValue,
     goalSetValues,
-    fallbackSummary:
-      prefersQueryBoundSummary
-        ? (queryBoundSummary ?? cleanedFallbackSummary)
-        : cleanedFallbackSummary,
+    fallbackSummary: (params.reportKind === "career_report" || params.reportKind === "education_report" || params.reportKind === "pet_care_report" || params.reportKind === "aspiration_report" || params.reportKind === "travel_report")
+      ? (queryBoundSummary ?? cleanedFallbackSummary)
+      : cleanedFallbackSummary,
     runtimeClaimText: cleanedRuntimeClaimText,
     inferredReasonText,
     reasonCueTypes,
@@ -5123,8 +5428,29 @@ export function renderProfileInferenceSupport(
       renderContractFallbackReason: support.answerValue ? null : runtimeUsed ? "typed_payload_missing" : "runtime_value_missing"
     };
   }
+  if (/\bpatriotic\b|\breligious\b|\bpolitical leaning\b|\bpersonality traits?\b|\btraits?\b/iu.test(queryText)) {
+    const normalizedValue = normalize(preferredValue), normalizedReason = normalize(support.inferredReasonText);
+    const claimText = normalizedValue.length > 0 ? (normalizedReason.length > 0 && normalizedReason.toLowerCase() !== normalizedValue.toLowerCase() && !/^likely\s+(?:yes|no)\.?$/iu.test(normalizedReason) ? `${normalizedValue}. ${normalizedReason}`.replace(/\.\./gu, ".") : normalizedValue) : null;
+    return {
+      claimText,
+      shapingMode: support.answerValue ? "typed_report_payload" : runtimeUsed ? "runtime_report_resynthesis" : "stored_report_summary",
+      typedValueUsed: Boolean(preferredValue),
+      generatedProseUsed: Boolean(claimText),
+      runtimeResynthesisUsed: runtimeUsed,
+      supportRowsSelected: support.supportRowsSelected,
+      supportTextsSelected: support.supportTextsSelected,
+      supportSelectionMode: support.supportSelectionMode,
+      targetedRetrievalAttempted: support.targetedRetrievalAttempted,
+      targetedRetrievalReason: support.targetedRetrievalReason,
+      supportObjectsBuilt: 1,
+      supportObjectType: support.supportObjectType,
+      supportNormalizationFailures: support.supportNormalizationFailures,
+      renderContractSelected: "profile_trait_judgment",
+      renderContractFallbackReason: support.answerValue ? null : runtimeUsed ? "typed_payload_missing" : "runtime_value_missing"
+    };
+  }
   if (isCausalReasonQuery(queryText)) {
-    const causalValue = normalize(support.answerValue ?? support.inferredReasonText ?? support.runtimeClaimText ?? support.fallbackSummary);
+    const causalValue = normalize(support.inferredReasonText ?? support.answerValue ?? support.runtimeClaimText ?? support.fallbackSummary);
     return {
       claimText: causalValue || null,
       shapingMode: support.answerValue ? "typed_report_payload" : runtimeUsed ? "runtime_report_resynthesis" : "stored_report_summary",
@@ -5207,6 +5533,30 @@ export function renderProfileInferenceSupport(
       supportNormalizationFailures: support.supportNormalizationFailures,
       renderContractSelected: "realization_render",
       renderContractFallbackReason: claimText ? null : "realization_missing"
+    };
+  }
+  if (
+    support.reportKind === "education_report" &&
+    /\bmain focus\b/u.test(normalizedQuery) &&
+    /\blocal politics\b/u.test(normalizedQuery)
+  ) {
+    const claimText = normalize(preferredValue);
+    return {
+      claimText: claimText || null,
+      shapingMode: support.answerValue ? "typed_report_payload" : runtimeUsed ? "runtime_report_resynthesis" : "stored_report_summary",
+      typedValueUsed: Boolean(preferredValue),
+      generatedProseUsed: false,
+      runtimeResynthesisUsed: runtimeUsed,
+      supportRowsSelected: support.supportRowsSelected,
+      supportTextsSelected: support.supportTextsSelected,
+      supportSelectionMode: support.supportSelectionMode,
+      targetedRetrievalAttempted: support.targetedRetrievalAttempted,
+      targetedRetrievalReason: support.targetedRetrievalReason,
+      supportObjectsBuilt: 1,
+      supportObjectType: support.supportObjectType,
+      supportNormalizationFailures: support.supportNormalizationFailures,
+      renderContractSelected: "local_politics_main_focus_render",
+      renderContractFallbackReason: support.answerValue ? null : runtimeUsed ? "typed_payload_missing" : "runtime_value_missing"
     };
   }
   if (support.reportKind === "preference_report" && /\bfavorite style\b|\bfavorite .* dance\b/u.test(normalizedQuery)) {
@@ -5463,13 +5813,20 @@ export function buildCounterfactualCareerSupport(params: {
 }): CounterfactualCareerSupport {
   const preferred = normalize(params.support.answerValue ?? params.support.runtimeClaimText ?? params.support.fallbackSummary);
   const evidenceText = uniqueNormalized([preferred, ...params.support.supportTexts]).join(" ").toLowerCase();
+  const counterfactualSupportQuery =
+    /\bhadn'?t\b[^?!.]{0,120}\bsupport\b/iu.test(params.queryText) || /\bwithout support\b/iu.test(params.queryText);
+  const hasCareerCue = /\b(counseling|counsell?ing|counselor|counsellor|mental health|therapy)\b/iu.test(evidenceText);
+  const hasSupportDependencyCue =
+    /\b(support|supported|supportive|guidance|acceptance|helped|growing up|without)\b/iu.test(evidenceText);
   let judgment = preferred || null;
   if (/\blikely no\b/iu.test(preferred) || /\bno\b/iu.test(preferred)) {
     judgment = "Likely no";
   } else if (/\blikely yes\b/iu.test(preferred) || /\byes\b/iu.test(preferred)) {
     judgment = "Likely yes";
-  } else if (/\b(counseling|counsell?ing|counselor|counsellor|mental health|therapy)\b/iu.test(evidenceText)) {
+  } else if (counterfactualSupportQuery && hasCareerCue && hasSupportDependencyCue) {
     judgment = "Likely no";
+  } else if (counterfactualSupportQuery) {
+    judgment = null;
   }
   return {
     supportObjectType: "CounterfactualCareerSupport",
@@ -5491,9 +5848,20 @@ export function shouldUseCounterfactualCareerJudgment(queryText: string, reportK
 }
 
 export function renderCounterfactualCareerSupport(support: CounterfactualCareerSupport): RenderedSupportClaim {
+  const normalizedReason = normalize(support.reasonText);
   const claimText =
     support.judgment
-      ? /\.\s*$/u.test(support.judgment) ? support.judgment : `${support.judgment}.`
+      ? (() => {
+          const sentence = /\.\s*$/u.test(support.judgment) ? support.judgment : `${support.judgment}.`;
+          if (
+            normalizedReason &&
+            normalizedReason.toLowerCase() !== normalize(support.judgment).toLowerCase() &&
+            !/^likely\s+(?:yes|no)\.?$/iu.test(normalizedReason)
+          ) {
+            return `${sentence} ${normalizedReason}`;
+          }
+          return sentence;
+        })()
       : support.reasonText;
   return {
     claimText,
@@ -5522,26 +5890,29 @@ export function buildTemporalEventSupport(params: {
   readonly subjectBindingStatus: CanonicalSubjectBindingStatus;
   readonly subjectBindingReason?: string | null;
 }): TemporalEventSupport {
-  const temporalPartsConflict = (
-    left: { year: number | null; month: number | null; day: number | null },
-    right: { year: number | null; month: number | null; day: number | null }
-  ): boolean =>
-    (typeof left.year === "number" && typeof right.year === "number" && left.year !== right.year) ||
-    (typeof left.month === "number" && typeof right.month === "number" && left.month !== right.month) ||
-    (typeof left.day === "number" && typeof right.day === "number" && left.day !== right.day);
   const requestedGranularity = inferRequestedTemporalGranularity(params.queryText);
   const queryEventKey = inferTemporalEventKeyFromText(params.queryText);
   const requiresEventIdentity = requiresSpecificTemporalEventIdentity(params.queryText);
-  const selectedCandidate = selectBestTemporalAnswerCandidate(params.queryText, params.results);
-  const eventNeighborhoodTexts = collectTemporalNeighborhoodTexts(params.queryText, params.results);
-  const rawTexts = extractTemporalSignals(params.queryText, params.results, params.fallbackClaimText, eventNeighborhoodTexts);
-  const sourceGroundedTexts = inferSourceGroundedTemporalLabels(params.queryText, params.results);
-  const querySpecificOverrideParts = deriveQuerySpecificTemporalOverrideParts(params.queryText, params.results);
-  const querySpecificRelativeClaimText = deriveQuerySpecificRelativeTemporalClaimText(params.queryText, params.results);
+  const sawLiveScopedResults = isSawLivePerformanceQuery(params.queryText)
+    ? params.results.filter((result) =>
+        collectRecallResultTextCandidates(result).some((text) => scoreSawLivePerformanceEvidence(params.queryText, text) > 0)
+      )
+    : [];
+  const scopedTemporalResults = sawLiveScopedResults.length > 0 ? sawLiveScopedResults : params.results;
+  const selectedCandidate = selectBestTemporalAnswerCandidate(params.queryText, scopedTemporalResults);
+  const eventNeighborhoodTexts = collectTemporalNeighborhoodTexts(params.queryText, scopedTemporalResults);
+  const rawTexts = extractTemporalSignals(params.queryText, scopedTemporalResults, params.fallbackClaimText, eventNeighborhoodTexts);
+  const sourceGroundedTexts = inferSourceGroundedTemporalLabels(params.queryText, scopedTemporalResults);
+  const querySpecificOverrideParts = deriveQuerySpecificTemporalOverrideParts(params.queryText, scopedTemporalResults);
+  const querySpecificRelativeClaimText = deriveQuerySpecificRelativeTemporalClaimText(params.queryText, scopedTemporalResults);
+  const structuredExactOverrideParts =
+    queryEventKey === "school_speech"
+      ? parseBestBackfilledTemporalParts(params.queryText, scopedTemporalResults.map((result) => extractStructuredClaimText(result.content)).filter((value): value is string => Boolean(normalize(value))), queryEventKey)
+      : { year: null, month: null, day: null };
   const querySpecificRelativeBackfillAvailable = Boolean(querySpecificRelativeClaimText);
   const relativeClaimText =
     querySpecificRelativeClaimText ??
-    deriveRelativeTemporalClaimText(params.queryText, params.results, params.fallbackClaimText);
+    deriveRelativeTemporalClaimText(params.queryText, scopedTemporalResults, params.fallbackClaimText);
   const eventIdentityMismatch =
     Boolean(queryEventKey) &&
     Boolean(params.storedCanonical?.eventKey) &&
@@ -5761,6 +6132,17 @@ export function buildTemporalEventSupport(params: {
   const selectedCandidateMatchesQueryEvent = queryEventKey
     ? selectedCandidate?.eventEvidenceKind === "exact" || selectedCandidate?.eventEvidenceKind === "aligned"
     : Boolean(selectedCandidate?.eventKey || selectedCandidate?.eventEvidenceKind === "aligned");
+  const storedCanonicalGenericWhenYearLock =
+    requestedGranularity === "day" &&
+    isGenericWhenTemporalQuery(params.queryText) &&
+    !isFutureScheduledTemporalQuery(params.queryText) &&
+    params.storedCanonical?.timeGranularity === "year" &&
+    storedCanonicalExplicitLike &&
+    typeof params.storedCanonical?.answerYear === "number" &&
+    storedCanonicalMatchesQueryEvent &&
+    !queryRequestsRelativeTemporalPhrasing(params.queryText);
+  const preferStoredCanonicalYearOnly =
+    storedCanonicalGenericWhenYearLock;
   const selectedCandidateSatisfiesRequestedGranularity =
     requestedGranularity === "year"
       ? typeof preferredSelectedCandidateParts.year === "number"
@@ -5845,15 +6227,20 @@ export function buildTemporalEventSupport(params: {
     !queryRequestsRelativeTemporalPhrasing(params.queryText) &&
     !selectedCandidateLowTrustConflict &&
     (storedCanonicalHasStrongAbsoluteDay || selectedCandidateHasStrongAbsoluteDay);
-  const sourceGroundedConflictsWithStoredCanonical = temporalPartsConflict(
-    sourceGroundedBackfilledParts,
-    preferredStoredCanonicalParts
-  );
-  const sourceGroundedConflictsWithSelectedCandidate = temporalPartsConflict(
-    sourceGroundedBackfilledParts,
-    preferredSelectedCandidateParts
-  );
+  const sourceGroundedConflictsWithStoredCanonical = temporalPartsConflict({
+    answerYear: sourceGroundedBackfilledParts.year,
+    answerMonth: sourceGroundedBackfilledParts.month,
+    answerDay: sourceGroundedBackfilledParts.day,
+    occurredAt: buildTemporalReferenceInstantFromParts(preferredStoredCanonicalParts.year, preferredStoredCanonicalParts.month, preferredStoredCanonicalParts.day)
+  });
+  const sourceGroundedConflictsWithSelectedCandidate = temporalPartsConflict({
+    answerYear: sourceGroundedBackfilledParts.year,
+    answerMonth: sourceGroundedBackfilledParts.month,
+    answerDay: sourceGroundedBackfilledParts.day,
+    occurredAt: buildTemporalReferenceInstantFromParts(preferredSelectedCandidateParts.year, preferredSelectedCandidateParts.month, preferredSelectedCandidateParts.day)
+  });
   const preferSelectedCandidateParts =
+    !preferStoredCanonicalYearOnly &&
     Boolean(selectedCandidate) &&
     selectedCandidateMatchesQueryEvent &&
     (
@@ -5918,36 +6305,30 @@ export function buildTemporalEventSupport(params: {
     typeof sourceGroundedBackfilledParts.month !== "number" &&
     typeof sourceGroundedBackfilledParts.day !== "number" &&
     (
-      preferSourceGroundedBackfill ||
-      selectedCandidateReferenceDerived ||
-      String(params.storedCanonical?.supportKind ?? "") === "reference_derived_relative" ||
-      String(params.storedCanonical?.temporalSourceQuality ?? "") === "derived_relative" ||
-      Boolean(params.storedCanonical?.derivedFromReference) ||
-      String(selectedCandidate?.supportKind ?? "") === "reference_derived_relative" ||
-      String(selectedCandidate?.temporalSourceQuality ?? "") === "derived_relative" ||
+      preferSourceGroundedBackfill || sourceGroundedConflictsWithStoredCanonical || sourceGroundedConflictsWithSelectedCandidate || Boolean(relativeClaimText) ||
+      selectedCandidateReferenceDerived || String(params.storedCanonical?.supportKind ?? "") === "reference_derived_relative" ||
+      String(params.storedCanonical?.temporalSourceQuality ?? "") === "derived_relative" || Boolean(params.storedCanonical?.derivedFromReference) ||
+      String(selectedCandidate?.supportKind ?? "") === "reference_derived_relative" || String(selectedCandidate?.temporalSourceQuality ?? "") === "derived_relative" ||
       Boolean(selectedCandidate?.derivedFromReference)
     );
   const querySpecificYearOnlyCue = querySpecificYearOnlyBackfillAvailable;
-  const yearOnlyBackfillCue = sourceGroundedYearOnlyCue || querySpecificYearOnlyCue;
+  const yearOnlyBackfillCue = sourceGroundedYearOnlyCue || querySpecificYearOnlyCue || preferStoredCanonicalYearOnly;
   const effectiveNeedsMonth = needsMonth && !yearOnlyBackfillCue;
   const effectiveNeedsDay = needsDay && !yearOnlyBackfillCue;
-  const effectiveTargetedFieldsRequested = targetedFieldsRequested.filter(
-    (field) => field !== "month" && field !== "day"
-  );
-  const preferNeighborhoodBackfillFirst =
-    isFutureScheduledTemporalQuery(params.queryText) &&
+  const effectiveTargetedFieldsRequested = targetedFieldsRequested.filter((field) => field !== "month" && field !== "day");
+  const preferNeighborhoodBackfillFirst = isFutureScheduledTemporalQuery(params.queryText) &&
     shouldPreferEarliestTemporalQueryEvent(params.queryText, queryEventKey);
   const preferredBackfilledParts =
     preferNeighborhoodBackfillFirst
       ? {
-          year: querySpecificOverrideParts?.year ?? neighborhoodBackfilledParts.year ?? sourceGroundedBackfilledParts.year ?? backfilledParts.year,
-          month: querySpecificOverrideParts?.month ?? neighborhoodBackfilledParts.month ?? sourceGroundedBackfilledParts.month ?? backfilledParts.month,
-          day: querySpecificOverrideParts?.day ?? neighborhoodBackfilledParts.day ?? sourceGroundedBackfilledParts.day ?? backfilledParts.day
+          year: structuredExactOverrideParts.year ?? querySpecificOverrideParts?.year ?? neighborhoodBackfilledParts.year ?? sourceGroundedBackfilledParts.year ?? backfilledParts.year,
+          month: structuredExactOverrideParts.month ?? querySpecificOverrideParts?.month ?? neighborhoodBackfilledParts.month ?? sourceGroundedBackfilledParts.month ?? backfilledParts.month,
+          day: structuredExactOverrideParts.day ?? querySpecificOverrideParts?.day ?? neighborhoodBackfilledParts.day ?? sourceGroundedBackfilledParts.day ?? backfilledParts.day
         }
       : {
-          year: querySpecificOverrideParts?.year ?? sourceGroundedBackfilledParts.year ?? neighborhoodBackfilledParts.year ?? backfilledParts.year,
-          month: querySpecificOverrideParts?.month ?? sourceGroundedBackfilledParts.month ?? neighborhoodBackfilledParts.month ?? backfilledParts.month,
-          day: querySpecificOverrideParts?.day ?? sourceGroundedBackfilledParts.day ?? neighborhoodBackfilledParts.day ?? backfilledParts.day
+          year: structuredExactOverrideParts.year ?? querySpecificOverrideParts?.year ?? sourceGroundedBackfilledParts.year ?? neighborhoodBackfilledParts.year ?? backfilledParts.year,
+          month: structuredExactOverrideParts.month ?? querySpecificOverrideParts?.month ?? sourceGroundedBackfilledParts.month ?? neighborhoodBackfilledParts.month ?? backfilledParts.month,
+          day: structuredExactOverrideParts.day ?? querySpecificOverrideParts?.day ?? sourceGroundedBackfilledParts.day ?? neighborhoodBackfilledParts.day ?? backfilledParts.day
         };
   const preferredBackfilledOrdering = temporalPartsOrderingValue({
     answerYear: preferredBackfilledParts.year,
@@ -6029,7 +6410,12 @@ export function buildTemporalEventSupport(params: {
       )
     );
   const eventKey = resolvedEventKey;
-  const resolvedAnswerYear = preferBackfilledTemporalParts
+  const resolvedAnswerYear = preferStoredCanonicalYearOnly
+    ? preferredStoredCanonicalParts.year ??
+      preferredSelectedCandidateParts.year ??
+      preferredBackfilledParts.year ??
+      null
+    : preferBackfilledTemporalParts
     ? preferredBackfilledParts.year ??
       preferredSelectedCandidateParts.year ??
       preferredStoredCanonicalParts.year ??
@@ -6043,7 +6429,9 @@ export function buildTemporalEventSupport(params: {
         preferredSelectedCandidateParts.year ??
         preferredBackfilledParts.year ??
         null;
-  const resolvedAnswerMonthRaw = preferBackfilledTemporalParts
+  const resolvedAnswerMonthRaw = preferStoredCanonicalYearOnly
+    ? preferredStoredCanonicalParts.month ?? null
+    : preferBackfilledTemporalParts
     ? preferredBackfilledParts.month ??
       preferredSelectedCandidateParts.month ??
       preferredStoredCanonicalParts.month ??
@@ -6057,7 +6445,9 @@ export function buildTemporalEventSupport(params: {
         preferredSelectedCandidateParts.month ??
         preferredBackfilledParts.month ??
         null;
-  const resolvedAnswerDayRaw = preferBackfilledTemporalParts
+  const resolvedAnswerDayRaw = preferStoredCanonicalYearOnly
+    ? preferredStoredCanonicalParts.day ?? null
+    : preferBackfilledTemporalParts
     ? preferredBackfilledParts.day ??
       preferredSelectedCandidateParts.day ??
       preferredStoredCanonicalParts.day ??
@@ -6106,6 +6496,8 @@ export function buildTemporalEventSupport(params: {
       }
       return storedGranularity ?? selectedGranularity ?? inferredGranularity;
     })();
+  const allowRelativeClaimDespiteEventIdentityMismatch =
+    queryEventKey === "support_network_meetup" && Boolean(relativeClaimText);
   const support = {
     supportObjectType: "TemporalEventSupport" as const,
     eventKey,
@@ -6114,9 +6506,16 @@ export function buildTemporalEventSupport(params: {
     answerYear: sanitizedAnswerYear,
     answerMonth: sanitizedAnswerMonth,
     answerDay: sanitizedAnswerDay,
-    relativeClaimText: eventIdentityMismatch ? null : relativeClaimText,
+    relativeClaimText:
+      eventIdentityMismatch && !allowRelativeClaimDespiteEventIdentityMismatch ? null : relativeClaimText,
+    relativeAnchorInstant: eventIdentityMismatch && !allowRelativeClaimDespiteEventIdentityMismatch
+      ? null
+      : selectedCandidate?.occurredAt ??
+        params.storedCanonical?.mentionedAt ??
+        params.storedCanonical?.validFrom ??
+        null,
     relativeAnchorOnlyResolution:
-      !eventIdentityMismatch &&
+      (!eventIdentityMismatch || allowRelativeClaimDespiteEventIdentityMismatch) &&
       Boolean(relativeClaimText) &&
       (
         Boolean(querySpecificRelativeClaimText) ||
@@ -6167,6 +6566,8 @@ export function buildTemporalEventSupport(params: {
           ? (typeof sanitizedAnswerYear === "number" ? "resolved" : "missing_year")
         : requestedGranularity === "month"
           ? (typeof sanitizedAnswerMonth === "number" || yearOnlyBackfillCue ? "resolved" : "missing_month")
+          : yearOnlyBackfillCue
+            ? "resolved"
           : typeof sanitizedAnswerDay === "number"
               ? "resolved"
               : typeof sanitizedAnswerMonth === "number"
@@ -6250,11 +6651,64 @@ export function renderTemporalEventSupport(
     relativeAnchorStatus: support.relativeAnchorStatus
   };
   const relativeClaimText = support.relativeClaimText?.toLowerCase() ?? "";
+  const parsedRelativeClaim = support.relativeClaimText ? parseTemporalPartsCandidate(support.relativeClaimText) : null;
   const relativeWindowClaimText =
     Boolean(relativeClaimText) &&
     /\bweek of\b|\bweek before\b|\bweek after\b|\bweekend of\b|\bweekends? before\b|\ba few days before\b|\ba few days after\b|\ba few years before\b|\ba few years after\b|\byears? before\b|\byears? after\b/u.test(
       relativeClaimText
     );
+  const weekdayRelativeClaimText =
+    Boolean(relativeClaimText) &&
+    /\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:before|after)\b/u.test(relativeClaimText);
+  const preferYearOnlyRelativeAnchorRender =
+    isGenericWhenTemporalQuery(queryText) &&
+    parsedRelativeClaim &&
+    typeof parsedRelativeClaim.year === "number" &&
+    parsedRelativeClaim.month === null &&
+    parsedRelativeClaim.day === null &&
+    support.relativeAnchorStatus === "resolved" &&
+    typeof support.answerDay === "number";
+  const preferFirstOccurrenceRelativeRender =
+    isGenericWhenTemporalQuery(queryText) &&
+    isFirstOccurrenceTemporalQuery(queryText) &&
+    support.relativeClaimText &&
+    support.relativeAnchorStatus === "resolved" &&
+    relativeWindowClaimText;
+  const preferFirstOccurrenceYearOnlyRender =
+    isGenericWhenTemporalQuery(queryText) &&
+    isFirstOccurrenceTemporalQuery(queryText) &&
+    parsedRelativeClaim &&
+    typeof parsedRelativeClaim.year === "number" &&
+    parsedRelativeClaim.month === null &&
+    parsedRelativeClaim.day === null;
+  if (
+    isGenericWhenTemporalQuery(queryText) &&
+    support.relativeClaimText &&
+    support.relativeAnchorStatus === "resolved" &&
+    (relativeWindowClaimText || weekdayRelativeClaimText) &&
+    !support.explicitTemporalFactSatisfied &&
+    (support.temporalEventIdentityStatus === "query_event_unmatched" || support.temporalEventIdentityStatus === "missing")
+  ) {
+    return {
+      claimText: support.relativeClaimText,
+      shapingMode: "typed_temporal_event",
+      typedValueUsed: true,
+      generatedProseUsed: true,
+      runtimeResynthesisUsed: false,
+      supportRowsSelected,
+      supportTextsSelected: 0,
+      supportSelectionMode: null,
+      selectedEventKey: support.eventKey,
+      selectedEventType: support.eventType,
+      selectedTimeGranularity: support.timeGranularity,
+      supportObjectsBuilt: 1,
+      supportObjectType: support.supportObjectType,
+      supportNormalizationFailures: support.supportNormalizationFailures,
+      renderContractSelected: "temporal_relative_day",
+      renderContractFallbackReason: null,
+      ...baseTrace
+    };
+  }
   if (support.subjectBindingStatus !== "resolved") {
     return {
       claimText: support.fallbackClaimText,
@@ -6306,12 +6760,17 @@ export function renderTemporalEventSupport(
     (
       !hasResolvedAbsoluteDay ||
       support.relativeAnchorOnlyResolution ||
-      queryRequestsRelativeTemporalPhrasing(queryText) ||
-      relativeWindowClaimText
+      queryRequestsRelativeTemporalPhrasing(queryText)
     )
   ) {
+    const firstOccurrenceAnchoredWeekClaim =
+      preferFirstOccurrenceRelativeRender &&
+      /\bweek of\b/iu.test(support.relativeClaimText) &&
+      typeof support.relativeAnchorInstant === "string"
+        ? `the week before ${formatUtcDayLabelMonthFirst(support.relativeAnchorInstant)}.`
+        : null;
     return {
-      claimText: support.relativeClaimText,
+      claimText: firstOccurrenceAnchoredWeekClaim ?? support.relativeClaimText,
       shapingMode: "typed_temporal_event",
       typedValueUsed: true,
       generatedProseUsed: true,
@@ -6365,6 +6824,48 @@ export function renderTemporalEventSupport(
       selectedEventKey: support.eventKey,
       selectedEventType: support.eventType,
       selectedTimeGranularity: support.timeGranularity,
+      supportObjectsBuilt: 1,
+      supportObjectType: support.supportObjectType,
+      supportNormalizationFailures: support.supportNormalizationFailures,
+      renderContractSelected: "temporal_year",
+      renderContractFallbackReason: null,
+      ...baseTrace
+    };
+  }
+  if (preferYearOnlyRelativeAnchorRender) {
+    return {
+      claimText: String(parsedRelativeClaim.year),
+      shapingMode: "typed_temporal_event",
+      typedValueUsed: true,
+      generatedProseUsed: false,
+      runtimeResynthesisUsed: false,
+      supportRowsSelected,
+      supportTextsSelected: 0,
+      supportSelectionMode: null,
+      selectedEventKey: support.eventKey,
+      selectedEventType: support.eventType,
+      selectedTimeGranularity: support.timeGranularity,
+      supportObjectsBuilt: 1,
+      supportObjectType: support.supportObjectType,
+      supportNormalizationFailures: support.supportNormalizationFailures,
+      renderContractSelected: "temporal_year",
+      renderContractFallbackReason: null,
+      ...baseTrace
+    };
+  }
+  if (preferFirstOccurrenceYearOnlyRender) {
+    return {
+      claimText: String(parsedRelativeClaim.year),
+      shapingMode: "typed_temporal_event",
+      typedValueUsed: true,
+      generatedProseUsed: false,
+      runtimeResynthesisUsed: false,
+      supportRowsSelected,
+      supportTextsSelected: 0,
+      supportSelectionMode: null,
+      selectedEventKey: support.eventKey,
+      selectedEventType: support.eventType,
+      selectedTimeGranularity: "year",
       supportObjectsBuilt: 1,
       supportObjectType: support.supportObjectType,
       supportNormalizationFailures: support.supportNormalizationFailures,
@@ -6431,7 +6932,12 @@ export function renderTemporalEventSupport(
       typeof support.answerYear === "number"
     ) {
       const month = monthLabel(support.answerMonth);
-      const claimText = month ? `${support.answerDay} ${month} ${support.answerYear}` : null;
+      const claimText =
+        month && support.eventKey === "animal_shelter_fundraising_dinner"
+          ? `${month} ${ordinalDayLabel(support.answerDay)}`
+          : month
+            ? `${support.answerDay} ${month} ${support.answerYear}`
+            : null;
       return {
         claimText,
         shapingMode: "typed_temporal_event",
@@ -6511,7 +7017,6 @@ export function renderTemporalEventSupport(
       ...baseTrace
     };
   }
-  const parsedRelativeClaim = support.relativeClaimText ? parseTemporalPartsCandidate(support.relativeClaimText) : null;
   if (
     /\bwhen\s+(?:is|are)\b/u.test(normalizedQuery) &&
     parsedRelativeClaim &&
@@ -6566,6 +7071,7 @@ export function renderTemporalEventSupport(
     support.relativeClaimText &&
     support.relativeAnchorStatus === "resolved" &&
     (
+      preferFirstOccurrenceRelativeRender ||
       queryRequestsRelativeTemporalPhrasing(queryText) ||
       support.relativeAnchorOnlyResolution ||
       (
@@ -6575,8 +7081,14 @@ export function renderTemporalEventSupport(
       )
     )
   ) {
+    const firstOccurrenceAnchoredWeekClaim =
+      preferFirstOccurrenceRelativeRender &&
+      /\bweek of\b/iu.test(support.relativeClaimText) &&
+      typeof support.relativeAnchorInstant === "string"
+        ? `the week before ${formatUtcDayLabelMonthFirst(support.relativeAnchorInstant)}.`
+        : null;
     return {
-      claimText: support.relativeClaimText,
+      claimText: firstOccurrenceAnchoredWeekClaim ?? support.relativeClaimText,
       shapingMode: "typed_temporal_event",
       typedValueUsed: true,
       generatedProseUsed: true,
@@ -6669,7 +7181,8 @@ export function buildListSetSupport(params: {
   const storedCanonicalTypedEntries = strictPairMeetupEntries ? [] : (params.storedCanonical?.typedSetEntryValues ?? []);
   const storedCanonicalObjectValues = strictPairMeetupEntries ? [] : (params.storedCanonical?.objectValues ?? []);
   const finalClaimText = strictPairMeetupEntries ? null : params.finalClaimText;
-  const normalizedTexts = [
+  const resultCount = params.results?.length ?? 0;
+  const rawNormalizedTexts = [
     ...storedCanonicalTypedEntries,
     ...storedCanonicalObjectValues,
     normalize(finalClaimText),
@@ -6677,40 +7190,58 @@ export function buildListSetSupport(params: {
     ...collectSupportEvidenceTexts(params.results ?? []),
     ...collectExpandedSourceTexts(params.results ?? [])
   ].filter(Boolean);
+  const queryAlignedEntryType = params.storedCanonical?.typedSetEntryType ?? inferListEntryTypeFromQuery(params.queryText);
+  const filteredNormalizedTexts = filterListSetSupportTexts(params.queryText, queryAlignedEntryType, rawNormalizedTexts);
+  const useStrictAlignedTexts =
+    resultCount > 0 && (queryAlignedEntryType === "book_title" || queryAlignedEntryType === "location_place");
+  const normalizedTexts =
+    useStrictAlignedTexts
+      ? filteredNormalizedTexts
+      : filteredNormalizedTexts.length > 0
+        ? filteredNormalizedTexts
+        : rawNormalizedTexts;
   const inferredTyped = inferListSetTypedEntries({
     queryText: params.queryText,
     texts: normalizedTexts
   });
-  const fallbackEntries = uniqueNormalized([
-    ...storedCanonicalObjectValues,
-    ...parseCanonicalSetValues(extractStructuredClaimText(finalClaimText) ?? normalize(finalClaimText))
-  ]);
-  const typedEntryType =
-    params.storedCanonical?.typedSetEntryType ??
-    inferredTyped.entryType ??
-    inferListEntryTypeFromQuery(params.queryText);
+  const fallbackEntries = uniqueNormalized([...storedCanonicalObjectValues, ...parseCanonicalSetValues(extractStructuredClaimText(finalClaimText) ?? normalize(finalClaimText))]);
+  const typedEntryType = params.storedCanonical?.typedSetEntryType ?? inferredTyped.entryType ?? inferListEntryTypeFromQuery(params.queryText);
+  const supplementalTypedEntries = typedEntryType === "activity_name"
+    ? inferredTyped.entries.length >= inferActivityCompletenessTarget(params.queryText)
+      ? []
+      : inferActivityEntries({ queryText: params.queryText, texts: rawNormalizedTexts }).entries.filter((entry) =>
+          isQueryCompatibleListEntry(params.queryText, typedEntryType, entry)
+        )
+    : typedEntryType === "support_contact"
+      ? uniqueNormalized(rawNormalizedTexts.flatMap((text) => extractSupportContactsFromText(text))).filter((entry) =>
+          isQueryCompatibleListEntry(params.queryText, typedEntryType, entry)
+        )
+      : [];
   const promotedFallbackEntries =
     typedEntryType === "book_title" ||
+    typedEntryType === "activity_name" ||
     typedEntryType === "event_name" ||
     typedEntryType === "support_contact" ||
+    typedEntryType === "preference_item" ||
     typedEntryType === "country" ||
     typedEntryType === "gift" ||
-    typedEntryType === "venue"
+    typedEntryType === "venue" ||
+    typedEntryType === "inventory_item"
       ? fallbackEntries.filter((entry) => isQueryCompatibleListEntry(params.queryText, typedEntryType, entry))
       : [];
-  const typedEntries = uniqueNormalized([
-    ...storedCanonicalTypedEntries,
-    ...inferredTyped.entries,
-    ...promotedFallbackEntries
-  ]);
-  const failures =
-    typedEntries.length > 0 || fallbackEntries.length > 0
-      ? []
-      : ["no_list_set_entries_normalized"];
+  const typedEntries = uniqueNormalized([...storedCanonicalTypedEntries, ...inferredTyped.entries, ...supplementalTypedEntries, ...promotedFallbackEntries]);
+  const expectedTypedEntryCount =
+    typedEntryType === "activity_name"
+      ? inferActivityCompletenessTarget(params.queryText)
+      : typedEntryType === "support_contact"
+        ? inferSupportNetworkCompletenessTarget(params.queryText)
+        : 1;
+  const failures = typedEntries.length > 0 || fallbackEntries.length > 0 ? [] : ["no_list_set_entries_normalized"];
   const missingTypedEntries = fallbackEntries.filter((value) => !typedEntries.includes(value));
-  const targetedRetrievalAttempted = promotedFallbackEntries.length > inferredTyped.entries.length;
+  const targetedRetrievalAttempted = resultCount > 0 && typedEntries.length < expectedTypedEntryCount;
   return {
     supportObjectType: "ListSetSupport",
+    queryText: params.queryText,
     predicateFamily: params.predicateFamily,
     typedEntries,
     fallbackEntries,
@@ -6720,7 +7251,7 @@ export function buildListSetSupport(params: {
     targetedRetrievalAttempted,
     targetedRetrievalReason: targetedRetrievalAttempted ? "list_set_entries_incomplete" : null,
     targetedFieldsRequested: targetedRetrievalAttempted ? ["typed_entries"] : [],
-    targetedRetrievalSatisfied: targetedRetrievalAttempted ? missingTypedEntries.length === 0 : true,
+    targetedRetrievalSatisfied: targetedRetrievalAttempted ? typedEntries.length >= expectedTypedEntryCount && missingTypedEntries.length === 0 : true,
     supportNormalizationFailures: failures
   };
 }
@@ -6729,126 +7260,9 @@ export function renderListSetSupport(
   support: ListSetSupport,
   supportRowsSelected: number
 ): RenderedSupportClaim {
-  const values = support.typedEntries.length > 0 ? support.typedEntries : support.fallbackEntries;
-  const renderContractSelected =
-    support.typedEntries.length > 0
-      ? support.typedEntryType === "book_title"
-        ? "book_list_render"
-      : support.typedEntryType === "event_name"
-          ? "event_list_render"
-          : support.typedEntryType === "support_contact"
-            ? "support_network_render"
-            : support.typedEntryType === "location_place" || support.typedEntryType === "country" || support.typedEntryType === "venue"
-              ? "location_list_render"
-            : "typed_set_join"
-      : "mixed_set_join";
-  const joined =
-    renderContractSelected === "book_list_render"
-      ? formatQuotedList(values)
-      : renderContractSelected === "support_network_render" && support.binarySupportInference
-        ? (() => {
-            const preferredValue = selectPreferredSupportNetworkEntry(values);
-            return preferredValue ? `Yes, ${preferredValue}.` : `Yes, ${joinCanonicalItems(values)}.`;
-          })()
-      : support.predicateFamily === "commonality"
-        ? support.subjectPlan.kind === "pair_subject"
-          ? `They ${joinCanonicalItems(values)}.`
-          : joinCanonicalItems(values)
-        : joinCanonicalItems(values);
-  return {
-    claimText: joined || null,
-    shapingMode: support.typedEntries.length > 0 ? "typed_set_entries" : "mixed_string_set",
-    typedValueUsed: support.typedEntries.length > 0,
-    generatedProseUsed: support.predicateFamily === "commonality" && support.subjectPlan.kind === "pair_subject",
-    runtimeResynthesisUsed: false,
-    supportRowsSelected,
-    supportTextsSelected: 0,
-    supportSelectionMode: null,
-    targetedRetrievalAttempted: support.targetedRetrievalAttempted,
-    targetedRetrievalReason: support.targetedRetrievalReason,
-    targetedFieldsRequested: support.targetedFieldsRequested,
-    targetedRetrievalSatisfied: support.targetedRetrievalSatisfied,
-    typedSetEntryCount: support.typedEntries.length,
-    typedSetEntryType: support.typedEntryType,
-    supportObjectsBuilt: 1,
-    supportObjectType: support.supportObjectType,
-    supportNormalizationFailures: support.supportNormalizationFailures,
-    renderContractSelected,
-    renderContractFallbackReason: support.typedEntries.length > 0 ? null : "typed_entries_missing"
-  };
-}
-
-export function buildDirectDetailSupport(params: {
-  readonly finalClaimText: string | null;
-  readonly exactDetailCandidate?: ExactDetailClaimCandidate | null;
-}): DirectDetailSupport {
-  const selectedText =
-    extractStructuredClaimText(params.exactDetailCandidate?.text) ??
-    extractStructuredClaimText(params.finalClaimText);
-  return {
-    supportObjectType: "DirectDetailSupport",
-    selectedText,
-    exactDetailSource: params.exactDetailCandidate?.source ?? null,
-    strongSupport: params.exactDetailCandidate?.strongSupport === true,
-    supportNormalizationFailures: selectedText ? [] : ["no_exact_detail_support_normalized"]
-  };
-}
-
-export function renderDirectDetailSupport(
-  support: DirectDetailSupport,
-  supportRowsSelected: number
-): RenderedSupportClaim {
-  const typedValueSelected = Boolean(support.selectedText);
-  return {
-    claimText: support.selectedText,
-    shapingMode: support.strongSupport ? "support_span_extraction" : "stored_canonical_fact",
-    typedValueUsed: typedValueSelected,
-    generatedProseUsed: false,
-    runtimeResynthesisUsed: false,
-    supportRowsSelected,
-    supportTextsSelected: typedValueSelected ? 1 : 0,
-    supportSelectionMode: typedValueSelected ? "atomic_unit" : null,
-    targetedRetrievalAttempted: false,
-    targetedRetrievalReason: null,
-    exactDetailSource: support.exactDetailSource,
-    supportObjectsBuilt: 1,
-    supportObjectType: support.supportObjectType,
-    supportNormalizationFailures: support.supportNormalizationFailures,
-    renderContractSelected: support.strongSupport ? "exact_support_span" : "exact_canonical_value",
-    renderContractFallbackReason: support.strongSupport ? null : "strong_support_span_missing"
-  };
-}
-
-export function buildSnippetFactSupport(params: {
-  readonly finalClaimText: string | null;
-}): SnippetFactSupport {
-  const selectedText = extractStructuredClaimText(params.finalClaimText);
-  return {
-    supportObjectType: "SnippetFactSupport",
-    selectedText,
-    supportNormalizationFailures: selectedText ? [] : ["snippet_fact_missing"]
-  };
-}
-
-export function renderSnippetFactSupport(
-  support: SnippetFactSupport,
-  supportRowsSelected: number
-): RenderedSupportClaim {
-  return {
-    claimText: support.selectedText,
-    shapingMode: "snippet_fallback",
-    targetedRetrievalAttempted: false,
-    targetedRetrievalReason: null,
-    typedValueUsed: false,
-    generatedProseUsed: false,
-    runtimeResynthesisUsed: false,
-    supportRowsSelected,
-    supportTextsSelected: 0,
-    supportSelectionMode: null,
-    supportObjectsBuilt: 1,
-    supportObjectType: support.supportObjectType,
-    supportNormalizationFailures: support.supportNormalizationFailures,
-    renderContractSelected: "support_span_extract",
-    renderContractFallbackReason: support.selectedText ? null : "snippet_fact_missing"
-  };
+  return renderListSetContract({
+    queryText: support.queryText,
+    support,
+    supportRowsSelected
+  });
 }

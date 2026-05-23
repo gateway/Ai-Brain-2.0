@@ -1,4 +1,16 @@
 export type ExactDetailQuestionFamily =
+  | "pet_name"
+  | "breed"
+  | "brand"
+  | "count"
+  | "service_name"
+  | "playlist_name"
+  | "last_name"
+  | "venue"
+  | "certification"
+  | "capacity"
+  | "speed"
+  | "time_of_day"
   | "duration"
   | "hobbies"
   | "allergy_safe_pets"
@@ -26,6 +38,8 @@ export type ExactDetailQuestionFamily =
   | "goals"
   | "owned_pets"
   | "purchased_items"
+  | "food_drink"
+  | "age_at_event"
   | "bands"
   | "broken_items"
   | "team"
@@ -42,10 +56,396 @@ export type ExactDetailQuestionFamily =
   | "bird_type"
   | "meat_preference"
   | "project_type"
+  | "creative_work"
+  | "price"
+  | "stance"
   | "generic";
+
+export type ExactDetailReaderPriority = "current_state_first" | "event_first";
+
+export interface ExactDetailFamilySpec {
+  readonly family: ExactDetailQuestionFamily;
+  readonly aggressiveCutover: boolean;
+  readonly queryFamily: "current_state" | "exact_detail";
+  readonly readerPriority: ExactDetailReaderPriority;
+  readonly scalarPropertyKeys: readonly string[];
+  readonly scalarMatchTerms: readonly string[];
+  readonly eventPredicateFamilies: readonly string[];
+  readonly eventMatchTerms: readonly string[];
+  readonly selfOwned: boolean;
+}
+
+const ATOMIC_EXACT_DETAIL_QUESTION_FAMILIES = new Set<ExactDetailQuestionFamily>([
+  "age_at_event",
+  "brand",
+  "breed",
+  "capacity",
+  "certification",
+  "color",
+  "count",
+  "creative_work",
+  "duration",
+  "food_drink",
+  "last_name",
+  "pet_name",
+  "playlist_name",
+  "price",
+  "role",
+  "service_name",
+  "shop",
+  "speed",
+  "stance",
+  "time_of_day",
+  "venue"
+]);
+
+export function isAtomicExactDetailQuestionFamily(family: ExactDetailQuestionFamily): boolean {
+  return ATOMIC_EXACT_DETAIL_QUESTION_FAMILIES.has(family);
+}
+
+const EXACT_DETAIL_FAMILY_SPECS: Partial<Record<ExactDetailQuestionFamily, ExactDetailFamilySpec>> = {
+  pet_name: {
+    family: "pet_name",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["pet_name", "cat_name", "dog_name", "animal_name"],
+    scalarMatchTerms: ["pet", "cat", "dog", "name"],
+    eventPredicateFamilies: [],
+    eventMatchTerms: [],
+    selfOwned: true
+  },
+  breed: {
+    family: "breed",
+    aggressiveCutover: true,
+    queryFamily: "current_state",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["breed", "pet_breed", "dog_breed", "cat_breed"],
+    scalarMatchTerms: ["breed", "pet", "dog", "cat"],
+    eventPredicateFamilies: [],
+    eventMatchTerms: [],
+    selfOwned: true
+  },
+  brand: {
+    family: "brand",
+    aggressiveCutover: true,
+    queryFamily: "current_state",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["brand", "shoe_brand", "running_shoe_brand", "favorite_brand"],
+    scalarMatchTerms: ["brand", "shoe", "running", "sneaker"],
+    eventPredicateFamilies: [],
+    eventMatchTerms: [],
+    selfOwned: true
+  },
+  count: {
+    family: "count",
+    aggressiveCutover: true,
+    queryFamily: "current_state",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["count", "bike_count", "item_count", "owned_count", "packed_item_count", "activity_count"],
+    scalarMatchTerms: ["count", "number", "total", "bike", "bikes", "own", "packed", "shirts", "caught", "fish", "bass"],
+    eventPredicateFamilies: ["list_set", "temporal_event_fact", "activity_count", "trip_count"],
+    eventMatchTerms: ["count", "number", "total", "owned", "packed", "caught", "fishing", "bass", "trip"],
+    selfOwned: true
+  },
+  service_name: {
+    family: "service_name",
+    aggressiveCutover: true,
+    queryFamily: "current_state",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["service_name", "provider", "platform", "subscription_service", "music_service"],
+    scalarMatchTerms: ["service", "platform", "provider", "app", "subscription", "music", "streaming"],
+    eventPredicateFamilies: ["temporal_event_fact"],
+    eventMatchTerms: ["service", "provider", "platform", "subscription"],
+    selfOwned: true
+  },
+  playlist_name: {
+    family: "playlist_name",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["playlist_name", "spotify_playlist_name", "music_playlist_name"],
+    scalarMatchTerms: ["playlist", "spotify", "music", "created", "called", "named"],
+    eventPredicateFamilies: ["temporal_event_fact"],
+    eventMatchTerms: ["playlist", "spotify", "music", "created", "called", "named"],
+    selfOwned: true
+  },
+  last_name: {
+    family: "last_name",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["previous_last_name", "last_name", "maiden_name", "former_name"],
+    scalarMatchTerms: ["last name", "surname", "maiden", "former", "changed"],
+    eventPredicateFamilies: ["identity_history", "temporal_event_fact"],
+    eventMatchTerms: ["last name", "surname", "maiden", "former", "changed"],
+    selfOwned: true
+  },
+  venue: {
+    family: "venue",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "event_first",
+    scalarPropertyKeys: ["venue", "school", "campus", "class_location", "program_location", "study_location"],
+    scalarMatchTerms: ["venue", "school", "campus", "college", "university", "class", "study abroad", "program"],
+    eventPredicateFamilies: ["work_education_history", "temporal_event_fact", "location_history"],
+    eventMatchTerms: ["venue", "school", "campus", "college", "university", "study abroad", "program", "class"],
+    selfOwned: true
+  },
+  certification: {
+    family: "certification",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "event_first",
+    scalarPropertyKeys: ["certification", "credential", "certificate", "course_completion", "degree", "field_of_study"],
+    scalarMatchTerms: ["certification", "certificate", "credential", "course", "program", "degree", "graduate", "major"],
+    eventPredicateFamilies: ["work_education_history", "temporal_event_fact"],
+    eventMatchTerms: ["certification", "certificate", "credential", "course", "program", "degree", "graduate", "major"],
+    selfOwned: true
+  },
+  capacity: {
+    family: "capacity",
+    aggressiveCutover: true,
+    queryFamily: "current_state",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["capacity", "ram", "storage", "device_capacity", "plan_capacity"],
+    scalarMatchTerms: ["capacity", "ram", "storage", "gb", "tb"],
+    eventPredicateFamilies: [],
+    eventMatchTerms: [],
+    selfOwned: true
+  },
+  speed: {
+    family: "speed",
+    aggressiveCutover: true,
+    queryFamily: "current_state",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["speed", "internet_speed", "plan_speed", "network_speed"],
+    scalarMatchTerms: ["speed", "internet", "network", "plan", "mbps", "gbps"],
+    eventPredicateFamilies: [],
+    eventMatchTerms: [],
+    selfOwned: true
+  },
+  time_of_day: {
+    family: "time_of_day",
+    aggressiveCutover: true,
+    queryFamily: "current_state",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["time_of_day", "stop_time", "routine_time", "checking_email_stop_time"],
+    scalarMatchTerms: ["time", "time of day", "stop", "checking", "emails", "messages"],
+    eventPredicateFamilies: [],
+    eventMatchTerms: [],
+    selfOwned: true
+  },
+  duration: {
+    family: "duration",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "event_first",
+    scalarPropertyKeys: ["duration", "duration_held", "time_spent", "stay_duration"],
+    scalarMatchTerms: ["duration", "how long", "months", "years", "weeks", "days"],
+    eventPredicateFamilies: ["temporal_event_fact", "location_history", "work_history", "work_education_history"],
+    eventMatchTerms: ["duration", "months", "years", "weeks", "days", "stayed", "lived", "worked"],
+    selfOwned: true
+  },
+  role: {
+    family: "role",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "event_first",
+    scalarPropertyKeys: ["role", "job", "occupation", "title", "position"],
+    scalarMatchTerms: ["role", "job", "occupation", "title", "position"],
+    eventPredicateFamilies: ["work_history", "work_education_history", "temporal_event_fact"],
+    eventMatchTerms: ["role", "job", "occupation", "title", "position", "worked as"],
+    selfOwned: true
+  },
+  shop: {
+    family: "shop",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "event_first",
+    scalarPropertyKeys: ["shop", "store", "retailer", "purchase_source"],
+    scalarMatchTerms: ["shop", "store", "retailer", "bought from", "purchased from"],
+    eventPredicateFamilies: ["temporal_event_fact", "ownership_binding"],
+    eventMatchTerms: ["shop", "store", "retailer", "buy", "bought", "purchase", "purchased"],
+    selfOwned: true
+  },
+  creative_work: {
+    family: "creative_work",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "event_first",
+    scalarPropertyKeys: ["creative_work", "performance_title", "recipe_title", "media_title", "play_title", "cocktail_recipe"],
+    scalarMatchTerms: ["play", "production", "performance", "recipe", "cocktail", "book", "movie", "title", "called", "named"],
+    eventPredicateFamilies: ["temporal_event_fact", "creative_work", "media_event"],
+    eventMatchTerms: ["attended", "watched", "read", "tried", "made", "production", "recipe", "cocktail", "play", "title"],
+    selfOwned: true
+  },
+  price: {
+    family: "price",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "event_first",
+    scalarPropertyKeys: ["price", "cost", "purchase_price", "amount_spent", "money_amount", "expense_amount"],
+    scalarMatchTerms: ["how much", "worth", "spend", "spent", "paid", "cost", "price", "dollars", "$", "purchase"],
+    eventPredicateFamilies: ["purchase_event", "transaction", "temporal_event_fact"],
+    eventMatchTerms: ["worth", "spent", "paid", "cost", "bought", "purchased", "price", "dollars", "handbag"],
+    selfOwned: true
+  },
+  stance: {
+    family: "stance",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["stance", "belief", "view", "opinion", "position", "previous_stance", "former_stance"],
+    scalarMatchTerms: ["stance", "belief", "view", "opinion", "position", "previous", "former", "used to", "spirituality"],
+    eventPredicateFamilies: ["belief_history", "identity_history", "temporal_event_fact"],
+    eventMatchTerms: ["stance", "belief", "view", "opinion", "position", "previous", "former", "used to", "atheist"],
+    selfOwned: true
+  },
+  purchased_items: {
+    family: "purchased_items",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "event_first",
+    scalarPropertyKeys: ["purchased_item", "gift_item", "bought_item", "purchase_item", "item_type", "object_value"],
+    scalarMatchTerms: ["buy", "bought", "purchase", "gift", "coupon", "thrift", "store", "item"],
+    eventPredicateFamilies: ["temporal_event_fact", "ownership_binding", "purchase_event"],
+    eventMatchTerms: ["buy", "bought", "purchase", "gift", "redeem", "coupon", "thrift", "store", "item"],
+    selfOwned: true
+  },
+  food_drink: {
+    family: "food_drink",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["food_drink", "food_item", "drink_item", "recipe_type", "cake_type", "rice_type", "cocktail_type", "favorite_food"],
+    scalarMatchTerms: ["food", "drink", "recipe", "cake", "rice", "cocktail", "bake", "favorite"],
+    eventPredicateFamilies: ["temporal_event_fact", "food_event", "preference"],
+    eventMatchTerms: ["food", "drink", "recipe", "cake", "rice", "cocktail", "bake", "favorite"],
+    selfOwned: true
+  },
+  age_at_event: {
+    family: "age_at_event",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "event_first",
+    scalarPropertyKeys: ["age_at_event", "age", "event_age"],
+    scalarMatchTerms: ["age", "old", "birthday", "when"],
+    eventPredicateFamilies: ["temporal_event_fact", "life_event"],
+    eventMatchTerms: ["age", "old", "birthday", "gave", "gift"],
+    selfOwned: true
+  },
+  color: {
+    family: "color",
+    aggressiveCutover: true,
+    queryFamily: "exact_detail",
+    readerPriority: "current_state_first",
+    scalarPropertyKeys: ["color", "paint_color", "wall_color", "hair_color", "item_color"],
+    scalarMatchTerms: ["color", "colour", "shade", "paint", "repaint", "painted", "hair", "dyed", "dye", "gray", "grey"],
+    eventPredicateFamilies: ["temporal_event_fact"],
+    eventMatchTerms: ["color", "colour", "shade", "paint", "repaint", "painted", "wall", "hair", "dyed", "dye"],
+    selfOwned: true
+  }
+};
+
+export function getExactDetailFamilySpec(
+  family: ExactDetailQuestionFamily
+): ExactDetailFamilySpec | null {
+  return EXACT_DETAIL_FAMILY_SPECS[family] ?? null;
+}
+
+export function isAggressiveExactDetailCutoverFamily(
+  family: ExactDetailQuestionFamily
+): boolean {
+  return getExactDetailFamilySpec(family)?.aggressiveCutover === true;
+}
+
+export function isFirstPersonExactDetailQuery(queryText: string): boolean {
+  return /\b(?:my|mine|me|i|i'm|i’ve|i've|i’d|i'd|i’ll|i'll)\b/iu.test(queryText);
+}
 
 export function inferExactDetailQuestionFamily(queryText: string): ExactDetailQuestionFamily {
   const lowered = queryText.toLowerCase();
+  if (/\b(?:pet|pets|dog|dogs|cat|cats|turtle|turtles)\b/.test(lowered) && /\bname\b/.test(lowered)) {
+    return "pet_name";
+  }
+  if (/\bwhat\s+breed\b/.test(lowered) || (/\bbreed\b/.test(lowered) && /\b(?:dog|cat|pet)\b/.test(lowered))) {
+    return "breed";
+  }
+  if (/\bwhat\s+brand\b/.test(lowered)) {
+    return "brand";
+  }
+  if (/\bhow\s+many\b/.test(lowered)) {
+    return "count";
+  }
+  if (/\bhow\s+old\b/.test(lowered)) {
+    return "age_at_event";
+  }
+  if (
+    ((/\bhow\s+much\b/.test(lowered) && /\b(?:spend|spent|pay|paid|cost|price|purchase|bought|handbag|bag|item|worth)\b/.test(lowered)) ||
+      (/\bwhat(?:'s|\s+is)?\b/.test(lowered) && /\bworth\b/.test(lowered)))
+  ) {
+    return "price";
+  }
+  if (
+    /\b(?:previous|former|old|current)?\s*(?:stance|view|belief|opinion|position)\b/.test(lowered) ||
+    (/\b(?:used to|previously|formerly)\b/.test(lowered) && /\b(?:believe|think|atheist|spirituality|religion)\b/.test(lowered))
+  ) {
+    return "stance";
+  }
+  if (
+    (/\bname of the\b/.test(lowered) || /\bwhat\s+(?:is|was)\s+the\s+name\b/.test(lowered)) &&
+    /\b(?:service|platform|app|provider|music|streaming)\b/.test(lowered)
+  ) {
+    return "service_name";
+  }
+  if (/\b(?:name of the|what)\b/.test(lowered) && /\bplaylist\b/.test(lowered)) {
+    return "playlist_name";
+  }
+  if (/\blast name\b/.test(lowered) && /\b(?:before|changed|former|previous)\b/.test(lowered)) {
+    return "last_name";
+  }
+  if (
+    /\bwhere\s+do\b.+\b(?:take|go to)\b.+\bclasses?\b/.test(lowered) ||
+    /\bwhere\s+did\b.+\battend\b.+\b(?:study abroad|program|university|college|school|wedding)\b/.test(lowered) ||
+    /\bwhere\s+did\b.+\bcomplete\b.+\b(?:degree|bachelor|certification|program)\b/.test(lowered)
+  ) {
+    return "venue";
+  }
+  if (/\bwhat\s+certification\b/.test(lowered)) {
+    return "certification";
+  }
+  if (/\bwhat\s+degree\b/.test(lowered) || (/\bdegree\b/.test(lowered) && /\bgraduat/.test(lowered))) {
+    return "certification";
+  }
+  if (/\bhow\s+much\s+ram\b/.test(lowered)) {
+    return "capacity";
+  }
+  if (/\bscreen\s+time\b/.test(lowered) && /\b(?:how much|average|averaging|per day|daily)\b/.test(lowered)) {
+    return "duration";
+  }
+  if (/\bcommute\b/.test(lowered) && /\b(?:how long|daily|work|minutes?|hours?)\b/.test(lowered)) {
+    return "duration";
+  }
+  if (
+    /\bhow\s+long\b/.test(lowered) &&
+    (
+      /\b(?:take|took)\b.*\b(?:assemble|assembly|build|built|put together|bookshelf|furniture)\b/.test(lowered) ||
+      /\b(?:assemble|assembly|build|built|put together|bookshelf|furniture)\b.*\b(?:take|took)\b/.test(lowered) ||
+      /\b(?:move|moved|moving)\b.*\b(?:apartment|house|place|home)\b/.test(lowered) ||
+      /\b(?:apartment|house|place|home)\b.*\b(?:move|moved|moving)\b/.test(lowered) ||
+      /\b(?:in|around|through|visited|visit|stayed|stay|travel(?:ed|led)?|trip)\b.*\b(?:japan|country|city|place)\b/.test(lowered) ||
+      /\b(?:japan|country|city|place)\b.*\b(?:for|trip|visit|visited|stayed|travel(?:ed|led)?)\b/.test(lowered)
+    )
+  ) {
+    return "duration";
+  }
+  if (/\bwhat\s+speed\b/.test(lowered) && /\bplan\b/.test(lowered)) {
+    return "speed";
+  }
+  if (/\bwhat\s+time\b/.test(lowered)) {
+    return "time_of_day";
+  }
   if (/\bunderlying condition\b/.test(lowered) || (/\ballerg/.test(lowered) && /\bcondition\b/.test(lowered))) {
     return "underlying_condition";
   }
@@ -82,6 +482,15 @@ export function inferExactDetailQuestionFamily(queryText: string): ExactDetailQu
   }
   if (/\bwhat\s+kind\s+of\s+pastr(?:y|ies)\b/.test(lowered) || (/\bpastr(?:y|ies)\b/.test(lowered) && /\bcafe\b/.test(lowered))) {
     return "pastry_items";
+  }
+  if (
+    /\bwhat\s+(?:type|kind)\s+of\b/.test(lowered) &&
+    /\b(?:cocktail|recipe|rice|cake|food|drink|action figure)\b/.test(lowered)
+  ) {
+    return /\baction figure\b/.test(lowered) ? "purchased_items" : "food_drink";
+  }
+  if (/\bwhat\s+did\b/.test(lowered) && /\bbake\b/.test(lowered)) {
+    return "food_drink";
   }
   if (/\bhobbies?\b/.test(lowered)) {
     return "hobbies";
@@ -131,17 +540,20 @@ export function inferExactDetailQuestionFamily(queryText: string): ExactDetailQu
   if (/\bwhat\s+pets?\s+does\b/.test(lowered) || /\bwhat\s+pet\s+does\b/.test(lowered)) {
     return "owned_pets";
   }
-  if (/\bwhat\s+items?\s+(?:did|has|have)\b/.test(lowered) || (/\bwhat\s+did\b/.test(lowered) && /\b(?:buy|purchase)\b/.test(lowered))) {
+  if (
+    /\bwhat\s+items?\s+(?:did|has|have)\b/.test(lowered) ||
+    (/\bwhat\s+did\b/.test(lowered) && /\b(?:buy|purchase|redeem)\b/.test(lowered))
+  ) {
     return "purchased_items";
-  }
-  if (/\bwhich\s+bands?\b/.test(lowered) || /\bwhat\s+bands?\b/.test(lowered) || /\bmusical artists?\/bands?\b/.test(lowered)) {
-    return "bands";
   }
   if (/\bfavorite\b/.test(lowered) && /\bband\b/.test(lowered)) {
     return "favorite_band";
   }
   if (/\bfavorite\b/.test(lowered) && /\bdj\b/.test(lowered)) {
     return "favorite_dj";
+  }
+  if (/\bwhich\s+bands?\b/.test(lowered) || /\bwhat\s+bands?\b/.test(lowered) || /\bmusical artists?\/bands?\b/.test(lowered)) {
+    return "bands";
   }
   if (/\bwhat\s+kinds?\s+of\s+things?\b/.test(lowered) && /\bbroken\b/.test(lowered)) {
     return "broken_items";
@@ -154,11 +566,18 @@ export function inferExactDetailQuestionFamily(queryText: string): ExactDetailQu
   }
   if (
     /\b(?:what|which)\s+(?:position|role|title|job)\b/.test(lowered) ||
-    /\bwhat\s+is\b[^?!.]{0,80}\b(?:position|role|title|job)\b/.test(lowered)
+    /\bwhat\s+is\b[^?!.]{0,80}\b(?:position|role|title|job)\b/.test(lowered) ||
+    /\bprevious\s+occupation\b/.test(lowered)
   ) {
     return "role";
   }
   if (/\b(?:what|which)\s+(?:shop|store)\b/.test(lowered) || /\benjoy\s+visiting\b/.test(lowered)) {
+    return "shop";
+  }
+  if (
+    /\bwhere\s+did\b/.test(lowered) &&
+    /\b(?:buy|bought|purchase|purchased|redeem|redeemed|coupon)\b/.test(lowered)
+  ) {
     return "shop";
   }
   if (/\bwhich\s+country\b/.test(lowered) || /\bwhat\s+country\b/.test(lowered)) {
@@ -178,6 +597,12 @@ export function inferExactDetailQuestionFamily(queryText: string): ExactDetailQu
   }
   if (/\bwhat\s+kind\s+of\s+project\b/.test(lowered) || (/\bproject\b/.test(lowered) && /\bbeginning\s+of\s+january\s+2023\b/.test(lowered))) {
     return "project_type";
+  }
+  if (
+    /\b(?:what|which)\s+(?:play|production|performance|book|movie|film|song|title)\b/.test(lowered) ||
+    (/\bwhat\s+(?:type|kind)\s+of\b/.test(lowered) && /\b(?:cocktail|recipe)\b/.test(lowered))
+  ) {
+    return "creative_work";
   }
   if (/\bwhat\s+color\b/.test(lowered)) {
     return "color";

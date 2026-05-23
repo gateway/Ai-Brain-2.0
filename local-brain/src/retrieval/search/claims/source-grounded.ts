@@ -17,6 +17,7 @@ export interface SourceGroundedClaimRuntimeHelpers {
   readonly normalizeWhitespace: (value: string) => string;
   readonly extractEntityNameHints: (queryText: string) => readonly string[];
   readonly extractExplicitMonthDayYearLabel: (value: string) => string | null;
+  readonly extractExplicitDateLabel: (value: string) => string | null;
   readonly recallResultSourceTexts: (result: RecallResult) => readonly string[];
   readonly uniqueStrings: (values: readonly string[]) => string[];
   readonly joinExactDetailValues: (values: readonly string[]) => string;
@@ -244,7 +245,7 @@ export function deriveDepartureClaimText(
     if (!hasEntityHint || !hasDepartureCue) {
       continue;
     }
-    const explicitDate = helpers.extractExplicitMonthDayYearLabel(content);
+    const explicitDate = helpers.extractExplicitDateLabel(content);
     if (explicitDate) {
       return `The best supported date is ${explicitDate}.`;
     }
@@ -283,6 +284,9 @@ export function deriveMediaSummaryClaimText(
       /^(from|at|in|on|with|about)\b/i.test(normalized) ||
       /\b(friend|burger|thailand new year|leonardo|di caprio)\b/i.test(normalized)
     ) {
+      return null;
+    }
+    if (normalized.split(/\s+/u).filter(Boolean).length > 8 || /[.!?]\s/u.test(normalized)) {
       return null;
     }
     return normalized;

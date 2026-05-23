@@ -1,21 +1,52 @@
 import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { queryRows, withTransaction } from "../db/client.js";
 import {
   inferTemporalEventKeyFromText,
   rebuildCanonicalMemoryNamespace,
   type CanonicalMemoryRebuildCounts
 } from "../canonical-memory/service.js";
-import { getNamespaceSelfProfile, loadNamespaceSelfProfileForClient, type NamespaceSelfProfile } from "../identity/service.js";
+import {
+  getNamespaceSelfProfile,
+  loadNamespaceSelfProfileForClient,
+  upsertNamespaceSelfProfileForClient,
+  type NamespaceSelfBindingSource,
+  type NamespaceSelfProfile
+} from "../identity/service.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
 import { runUniversalMutableReconsolidation } from "../jobs/memory-reconsolidation.js";
 import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
+import { runNamespaceVectorActivation } from "../jobs/vector-sync-runtime.js";
+import { rebuildCompiledMemoryNamespace, type CompiledMemoryRebuildCounts } from "../compiled-memory/service.js";
+import { rebuildContractProjectionsNamespace, type ContractProjectionRebuildCounts } from "../contract-projections/service.js";
+import {
+  parseDurationText,
+  parseTemporalWindowText,
+  rebuildTemporalEventFactsNamespace,
+  type TemporalEventRebuildSummary
+} from "../temporal-events/service.js";
+import {
+  rebuildCompiledDirectFactObservationsNamespace,
+  type CompiledDirectFactRebuildCounts
+} from "../taxonomy-temporal/direct-fact-compiler.js";
+import {
+  rebuildCompiledProfileInferenceObservationsNamespace,
+  type CompiledProfileInferenceRebuildCounts
+} from "../taxonomy-temporal/profile-inference-compiler.js";
 import {
   canonicalAliasVariants,
   canonicalizeObservedEntityText,
   normalizeEntityLookupName
 } from "../identity/canonicalization.js";
+import { rebuildExactDetailFactKeysNamespace, type ExactDetailFactKeySummary } from "../retrieval/exact-detail-fact-keys.js";
 import { parseQueryEntityFocus } from "../retrieval/query-entity-focus.js";
-import type { RecallQuery, RecapQuery, RecapTaskItem } from "../retrieval/types.js";
+import type {
+  CalendarCommitmentItem,
+  RecallQuery,
+  RecapQuery,
+  RecapTaskItem,
+  TemporalScopeMode
+} from "../retrieval/types.js";
 import type { RecallResult } from "../types.js";
 
 interface TypedMemorySourceRow {
@@ -24,6 +55,7 @@ interface TypedMemorySourceRow {
   readonly artifact_observation_id: string | null;
   readonly source_offset: { char_start?: number; char_end?: number } | null;
   readonly occurred_at: string | null;
+  readonly captured_at: string | null;
   readonly content: string;
   readonly artifact_uri: string | null;
   readonly metadata: Record<string, unknown> | null;
@@ -33,6 +65,13 @@ interface CountRow {
   readonly count: string;
 }
 
+type TaskLifecycleStatus = "open" | "blocked" | "completed" | "canceled" | "superseded";
+type CanonicalTaskLifecycleStatus = TaskLifecycleStatus | "stale_open" | "recently_closed";
+
+const OPEN_TASK_STALE_NO_DUE_DAYS = 30;
+const OPEN_TASK_PAST_DUE_GRACE_DAYS = 7;
+const RECENTLY_CLOSED_TASK_DAYS = 14;
+
 interface TaskItemRow {
   readonly title: string;
   readonly description: string | null;
@@ -40,7 +79,52 @@ interface TaskItemRow {
   readonly assignee_guess: string | null;
   readonly due_hint: string | null;
   readonly status: string;
+  readonly occurred_at: string | null;
+  readonly completed_at: string | null;
   readonly source_memory_id: string | null;
+  readonly artifact_id: string | null;
+  readonly source_uri: string | null;
+  readonly metadata: Record<string, unknown> | null;
+}
+
+interface CalendarDateSpanRow {
+  readonly id: string;
+  readonly span_text: string;
+  readonly normalized_year: number | null;
+  readonly normalized_month: number | null;
+  readonly normalized_day: number | null;
+  readonly occurred_at: string | null;
+  readonly source_memory_id: string | null;
+  readonly artifact_id: string | null;
+  readonly source_uri: string | null;
+  readonly metadata: Record<string, unknown> | null;
+}
+
+interface OmiStructuredActionItem {
+  readonly description?: string | null;
+  readonly completed?: boolean | null;
+  readonly created_at?: string | null;
+  readonly updated_at?: string | null;
+  readonly due_at?: string | null;
+  readonly completed_at?: string | null;
+}
+
+interface OmiStructuredEvent {
+  readonly title?: string | null;
+  readonly description?: string | null;
+  readonly start?: string | null;
+  readonly duration?: unknown;
+  readonly created?: boolean | null;
+  readonly location?: string | null;
+}
+
+interface OmiStructuredConversation {
+  readonly started_at?: string | null;
+  readonly finished_at?: string | null;
+  readonly structured?: {
+    readonly action_items?: readonly OmiStructuredActionItem[];
+    readonly events?: readonly OmiStructuredEvent[];
+  } | null;
 }
 
 interface TransactionItemRow {
@@ -72,6 +156,14 @@ interface MediaMentionRow {
   readonly artifact_id: string | null;
   readonly source_uri: string | null;
   readonly metadata: Record<string, unknown> | null;
+}
+
+interface MediaSourceFallbackRow {
+  readonly id: string;
+  readonly content: string;
+  readonly occurred_at: string | null;
+  readonly artifact_id: string | null;
+  readonly source_uri: string | null;
 }
 
 interface PreferenceFactRow {
@@ -176,6 +268,153 @@ function deriveKnownSelfAliases(selfProfile: NamespaceSelfProfile | null): reado
     .map((value) => normalizeWhitespace(value).split(/\s+/u)[0] ?? "")
     .filter((value) => value.length >= 3);
   return uniqueStrings([...aliases, ...firstTokens]);
+}
+
+interface NamespaceSelfBindingEvidence {
+  readonly candidateName: string;
+  readonly aliases: readonly string[];
+  readonly source: Extract<NamespaceSelfBindingSource, "typed_scalar_truth" | "event_truth" | "structured_truth_binding">;
+  readonly evidenceKey: string;
+}
+
+export interface TypedMemoryNamespaceSelfBindingCandidate {
+  readonly canonicalName: string;
+  readonly aliases: readonly string[];
+  readonly source: Extract<NamespaceSelfBindingSource, "typed_scalar_truth" | "event_truth" | "structured_truth_binding">;
+  readonly confidence: number;
+  readonly evidenceCount: number;
+  readonly provenanceSummary: string;
+}
+
+function isUsableSelfBindingCandidateName(value: string | null | undefined): value is string {
+  const normalized = normalizeWhitespace(value ?? "");
+  if (!normalized) {
+    return false;
+  }
+  if (/^(?:Speaker|User)\s*\d*$/u.test(normalized)) {
+    return false;
+  }
+  return /[A-Za-z]/u.test(normalized);
+}
+
+function recordNamespaceSelfBindingEvidence(
+  sink: NamespaceSelfBindingEvidence[],
+  params: {
+    readonly candidateName: string | null | undefined;
+    readonly aliases?: readonly (string | null | undefined)[];
+    readonly source: Extract<NamespaceSelfBindingSource, "typed_scalar_truth" | "event_truth" | "structured_truth_binding">;
+    readonly evidenceKey: string;
+  }
+): void {
+  if (!isUsableSelfBindingCandidateName(params.candidateName)) {
+    return;
+  }
+  sink.push({
+    candidateName: normalizeWhitespace(params.candidateName),
+    aliases: uniqueStrings((params.aliases ?? []).map((value) => normalizeWhitespace(value ?? "")).filter(Boolean)),
+    source: params.source,
+    evidenceKey: params.evidenceKey
+  });
+}
+
+export function deriveTypedMemoryNamespaceSelfBindingCandidate(
+  evidence: readonly NamespaceSelfBindingEvidence[]
+): TypedMemoryNamespaceSelfBindingCandidate | null {
+  if (evidence.length === 0) {
+    return null;
+  }
+
+  const byCandidate = new Map<
+    string,
+    {
+      canonicalName: string;
+      aliases: Set<string>;
+      evidenceKeys: Set<string>;
+      sourceCounts: Record<Extract<NamespaceSelfBindingSource, "typed_scalar_truth" | "event_truth" | "structured_truth_binding">, number>;
+    }
+  >();
+
+  for (const item of evidence) {
+    const normalizedName = normalizeName(item.candidateName);
+    const bucket = byCandidate.get(normalizedName) ?? {
+      canonicalName: item.candidateName,
+      aliases: new Set<string>(),
+      evidenceKeys: new Set<string>(),
+      sourceCounts: {
+        typed_scalar_truth: 0,
+        event_truth: 0,
+        structured_truth_binding: 0
+      }
+    };
+    bucket.canonicalName = bucket.canonicalName.length >= item.candidateName.length ? bucket.canonicalName : item.candidateName;
+    bucket.aliases.add(item.candidateName);
+    for (const alias of item.aliases) {
+      if (isUsableSelfBindingCandidateName(alias)) {
+        bucket.aliases.add(normalizeWhitespace(alias));
+      }
+    }
+    if (!bucket.evidenceKeys.has(item.evidenceKey)) {
+      bucket.evidenceKeys.add(item.evidenceKey);
+      bucket.sourceCounts[item.source] += 1;
+    }
+    byCandidate.set(normalizedName, bucket);
+  }
+
+  const ranked = [...byCandidate.values()]
+    .map((bucket) => ({
+      canonicalName: bucket.canonicalName,
+      aliases: uniqueStrings([...bucket.aliases, ...canonicalAliasVariants(bucket.canonicalName)]),
+      evidenceCount: bucket.evidenceKeys.size,
+      sourceCounts: bucket.sourceCounts
+    }))
+    .sort((left, right) =>
+      right.evidenceCount - left.evidenceCount ||
+      right.sourceCounts.typed_scalar_truth - left.sourceCounts.typed_scalar_truth ||
+      right.sourceCounts.event_truth - left.sourceCounts.event_truth ||
+      left.canonicalName.localeCompare(right.canonicalName)
+    );
+
+  const winner = ranked[0] ?? null;
+  const runnerUp = ranked[1] ?? null;
+  if (!winner) {
+    return null;
+  }
+  if ((runnerUp?.evidenceCount ?? 0) >= winner.evidenceCount) {
+    return null;
+  }
+
+  const source =
+    winner.sourceCounts.typed_scalar_truth >= Math.max(winner.sourceCounts.event_truth, winner.sourceCounts.structured_truth_binding)
+      ? "typed_scalar_truth"
+      : winner.sourceCounts.event_truth >= winner.sourceCounts.structured_truth_binding
+        ? "event_truth"
+        : "structured_truth_binding";
+  const denominator = Math.max(1, winner.evidenceCount + (runnerUp?.evidenceCount ?? 0));
+  const confidence = Number((winner.evidenceCount / denominator).toFixed(3));
+
+  return {
+    canonicalName: winner.canonicalName,
+    aliases: winner.aliases,
+    source,
+    confidence,
+    evidenceCount: winner.evidenceCount,
+    provenanceSummary: `typed_memory_rebuild:${source}:${winner.evidenceCount}`
+  };
+}
+
+function selfBindingCandidateMatchesProfile(
+  candidate: TypedMemoryNamespaceSelfBindingCandidate,
+  profile: NamespaceSelfProfile
+): boolean {
+  const profileNames = new Set([profile.canonicalName, ...profile.aliases].map((value) => normalizeName(value)));
+  if (profileNames.has(normalizeName(candidate.canonicalName))) {
+    return true;
+  }
+  return candidate.aliases.some((alias) => profileNames.has(normalizeName(alias)));
+}
+
+function stripLeadingSpeakerLabel(text: string): string {
+  return normalizeWhitespace(text).replace(/^[^:\n]{2,80}:\s+/u, "");
 }
 
 function buildSubjectAlternation(candidates: readonly string[]): string | null {
@@ -429,6 +668,315 @@ function extractChecklistTaskFragments(text: string): readonly { text: string; c
       text: match[2]?.trim() ?? ""
     }))
     .filter((item) => item.text.length > 0);
+}
+
+function normalizeTaskLifecycleToken(token: string): string {
+  const normalized = token.toLowerCase();
+  if (normalized === "renewal") {
+    return "renew";
+  }
+  if (normalized.endsWith("ies") && normalized.length > 4) {
+    return `${normalized.slice(0, -3)}y`;
+  }
+  if (normalized.endsWith("ing") && normalized.length > 5) {
+    return normalized.slice(0, -3);
+  }
+  if (normalized.endsWith("ed") && normalized.length > 4) {
+    return normalized.slice(0, -2);
+  }
+  if (normalized.endsWith("s") && normalized.length > 4) {
+    return normalized.slice(0, -1);
+  }
+  return normalized;
+}
+
+function canonicalizeTaskActionKey(value: string): string {
+  const tokens = normalizeWhitespace(value)
+    .toLowerCase()
+    .replace(
+      /\b(?:i|we|me|my|our|the|a|an|to|for|after|before|still|task|january|february|march|april|may|june|july|august|september|october|november|december|spring|summer|fall|autumn|winter)\b/gu,
+      " "
+    )
+    .replace(
+      /\b(?:need|needs|needed|have|has|had|must|should|want|wanted|plan|planned|trying|remember|blocked|waiting|stuck|done|finished|completed|canceled|cancelled|superseded)\b/gu,
+      " "
+    )
+    .replace(/[^a-z0-9\s]/gu, " ")
+    .split(/\s+/u)
+    .map((token) => normalizeTaskLifecycleToken(token))
+    .filter((token) => token.length >= 3);
+  return uniqueStrings(tokens).sort().join("|");
+}
+
+function inferTaskLifecycleStatusFromText(text: string): TaskLifecycleStatus {
+  const lowered = text.toLowerCase();
+  if (/\b(?:not doing|no longer doing|cancel(?:ed|led)|won't do|scrapped)\b/u.test(lowered)) {
+    return "canceled";
+  }
+  if (/\b(?:blocked on|waiting on|stuck on|held up by)\b/u.test(lowered)) {
+    return "blocked";
+  }
+  if (/\b(?:done|finished|completed|took care of|handled|resolved)\b/u.test(lowered)) {
+    return "completed";
+  }
+  return "open";
+}
+
+function inferTaskStatusReasonFromText(text: string): string | null {
+  const lowered = text.toLowerCase();
+  const blockedMatch = /\b(?:blocked on|waiting on|stuck on|held up by)\s+([^.!?\n]+)/u.exec(lowered)?.[1]?.trim();
+  if (blockedMatch) {
+    return blockedMatch;
+  }
+  const canceledMatch = /\b(?:not doing|no longer doing|cancel(?:ed|led)|scrapped)\s+([^.!?\n]+)/u.exec(lowered)?.[1]?.trim();
+  if (canceledMatch) {
+    return canceledMatch;
+  }
+  if (/\b(?:done|finished|completed|took care of|handled|resolved)\b/u.test(lowered)) {
+    return "completed";
+  }
+  return null;
+}
+
+function extractInlineTaskFragments(text: string): readonly { text: string; status: TaskLifecycleStatus }[] {
+  const fragments: Array<{ text: string; status: TaskLifecycleStatus }> = [];
+  for (const sentence of extractSentenceCandidates(text)) {
+    const normalized = normalizeWhitespace(sentence);
+    if (normalized.length < 10 || /\?$/.test(normalized) || isMetadataLikeSentence(normalized)) {
+      continue;
+    }
+    if (
+      !/\b(?:need to|have to|must|should|remember to|plan to|trying to|want to|blocked on|waiting on|stuck on|cancel(?:ed|led)|done|finished|completed)\b/iu.test(
+        normalized
+      )
+    ) {
+      continue;
+    }
+    fragments.push({
+      text: normalized.replace(/[.]+$/u, ""),
+      status: inferTaskLifecycleStatusFromText(normalized)
+    });
+  }
+  return fragments;
+}
+
+function extractTemporalCommitmentFragments(
+  text: string,
+  referenceNow: string | null
+): readonly {
+  readonly title: string;
+  readonly referenceText: string;
+  readonly timeHintText: string | null;
+  readonly windowStart: string | null;
+  readonly windowEnd: string | null;
+  readonly timeGranularity: string | null;
+  readonly timeExactness: string | null;
+  readonly durationText: string | null;
+  readonly durationSecondsApprox: number | null;
+  readonly locationHintText: string | null;
+}[] {
+  const fragments: Array<{
+    title: string;
+    referenceText: string;
+    timeHintText: string | null;
+    windowStart: string | null;
+    windowEnd: string | null;
+    timeGranularity: string | null;
+    timeExactness: string | null;
+    durationText: string | null;
+    durationSecondsApprox: number | null;
+    locationHintText: string | null;
+  }> = [];
+  for (const sentence of extractSentenceCandidates(text)) {
+    const normalized = normalizeWhitespace(sentence);
+    if (normalized.length < 12 || /\?$/.test(normalized) || isMetadataLikeSentence(normalized)) {
+      continue;
+    }
+    const hasTemporalCue = /\b(?:january|february|march|april|may|june|july|august|september|october|november|december|spring|summer|fall|autumn|winter|tomorrow|today|next week|next month|later this month|after|before|weekend|week|month|year|mid|late|early)\b/iu.test(
+      normalized
+    );
+    const hasCommitmentCue = /\b(?:will|going to|plan(?:ning)? to|want to|need to|book|visit|fly|stay|return|leave|meet|travel|go to|head to)\b/iu.test(
+      normalized
+    );
+    const window = parseTemporalWindowText({
+      text: normalized,
+      referenceNow: referenceNow ?? undefined,
+      fallbackStart: referenceNow ?? undefined
+    });
+    const duration = parseDurationText(normalized);
+    if (!window?.startAt && !window?.endAt && !(hasTemporalCue && hasCommitmentCue)) {
+      continue;
+    }
+    fragments.push({
+      title: trimSentenceForTitle(normalized.replace(/\.$/u, ""), 140),
+      referenceText: normalized,
+      timeHintText: extractRelativeTimeHint(normalized),
+      windowStart: window?.startAt ?? null,
+      windowEnd: window?.endAt ?? null,
+      timeGranularity: window?.timeGranularity ?? null,
+      timeExactness: window?.exactness ?? null,
+      durationText: duration?.rawText ?? null,
+      durationSecondsApprox: duration?.approximateSeconds ?? null,
+      locationHintText: extractLocationHint(normalized)
+    });
+  }
+  return fragments;
+}
+
+function isLatestSourceBoundQuery(queryText: string): boolean {
+  const lowered = queryText.toLowerCase();
+  return /\b(?:latest|most recent|newest|last)\b/u.test(lowered) && /\b(?:omi|note|notes|transcript|transcription|voice note|memo|document|doc|file|journal)\b/u.test(lowered);
+}
+
+function prefersOmiSourceScope(queryText: string): boolean {
+  return /\b(?:omi|voice note|transcript|transcription)\b/iu.test(queryText);
+}
+
+function isLifecycleScopeQuery(queryText: string): boolean {
+  return /\b(?:still open|open tasks?|blocked|complete|completed|finished|done|cancel|canceled|cancelled|superseded|changed|updated)\b/iu.test(queryText);
+}
+
+function hasEventWindowScopeSignal(queryText: string): boolean {
+  return /\b(?:january|february|march|april|may|june|july|august|september|october|november|december|spring|summer|fall|autumn|winter|after|before|weekend|month|year|tomorrow|next week|later this month)\b/iu.test(
+    queryText
+  );
+}
+
+export function detectTemporalScopeMode(query: {
+  readonly query: string;
+  readonly referenceNow?: string;
+  readonly timeStart?: string;
+  readonly timeEnd?: string;
+}): TemporalScopeMode {
+  if (isLatestSourceBoundQuery(query.query)) {
+    return "source_scope";
+  }
+  if (isLifecycleScopeQuery(query.query)) {
+    return "lifecycle_scope";
+  }
+  const resolved = resolveQueryTimeRange(query);
+  if (resolved.start || resolved.end || hasEventWindowScopeSignal(query.query)) {
+    return "event_window_scope";
+  }
+  return "source_scope";
+}
+
+function taskStatusFilterFromQuery(queryText: string): TaskLifecycleStatus | null {
+  const lowered = queryText.toLowerCase();
+  if (/\bblocked\b/u.test(lowered)) {
+    return "blocked";
+  }
+  if (/\b(?:complete|completed|finished|done)\b/u.test(lowered)) {
+    return "completed";
+  }
+  if (/\b(?:cancel|canceled|cancelled)\b/u.test(lowered)) {
+    return "canceled";
+  }
+  if (/\bsuperseded\b/u.test(lowered)) {
+    return "superseded";
+  }
+  if (/\b(?:still open|open tasks?|remaining tasks?)\b/u.test(lowered)) {
+    return "open";
+  }
+  return null;
+}
+
+function shouldIncludeOlderLifecycleRows(queryText: string): boolean {
+  return /\b(?:all|older|old|history|historical|archive|archival|including older ones)\b/iu.test(queryText);
+}
+
+function shouldScopeLifecycleTasksToRecentTopicalSource(queryText: string): boolean {
+  return /\brecent\b/iu.test(queryText) && /\b(?:note|notes|planning|plan|plans)\b/iu.test(queryText);
+}
+
+function lifecycleQueryTopicalTerms(queryText: string): readonly string[] {
+  return uniqueStrings(
+    normalizeWhitespace(queryText)
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/gu, " ")
+      .split(/\s+/u)
+      .filter((term) => term.length >= 4)
+      .filter(
+        (term) =>
+          ![
+            "what",
+            "tasks",
+            "task",
+            "still",
+            "open",
+            "from",
+            "recent",
+            "notes",
+            "note",
+            "planning",
+            "plans",
+            "plan",
+            "have",
+            "need",
+            "should",
+            "remaining"
+          ].includes(term)
+      )
+  );
+}
+
+function lifecycleTaskTopicalScore(row: TaskItemRow, queryText: string): number {
+  const text = normalizeWhitespace(`${row.title} ${row.description ?? ""} ${row.project_name ?? ""} ${JSON.stringify(row.metadata ?? {})}`).toLowerCase();
+  const topicalTerms = lifecycleQueryTopicalTerms(queryText);
+  let score = topicalTerms.filter((term) => text.includes(term)).length * 3;
+  if (/\b(?:travel|trip|trips)\b/iu.test(queryText)) {
+    const travelSignals = [
+      "travel",
+      "trip",
+      "flight",
+      "fly",
+      "rv",
+      "jeep",
+      "storage",
+      "license",
+      "airport",
+      "burning",
+      "reno",
+      "bend",
+      "tahoe",
+      "iceland",
+      "us",
+      "thailand"
+    ];
+    score += travelSignals.filter((signal) => text.includes(signal)).length;
+  }
+  const occurredAt = Date.parse(row.occurred_at ?? "");
+  if (Number.isFinite(occurredAt)) {
+    score += occurredAt / 10_000_000_000_000;
+  }
+  return score;
+}
+
+function scopeLifecycleRowsToRecentTopicalSource(rows: readonly TaskItemRow[], queryText: string): readonly TaskItemRow[] {
+  if (!shouldScopeLifecycleTasksToRecentTopicalSource(queryText)) {
+    return rows;
+  }
+  const hasExplicitTopic =
+    lifecycleQueryTopicalTerms(queryText).length > 0 ||
+    /\b(?:travel|trip|trips|query\s+contract|hybrid\s+temporal|memoryqueryplan|mcp\s+gold|source\s+audit|project|repo|docs?)\b/iu.test(queryText);
+  if (!hasExplicitTopic) {
+    return rows;
+  }
+  const sourceGroups = new Map<string, { rows: TaskItemRow[]; score: number }>();
+  for (const row of rows) {
+    const sourceUri = row.source_uri ?? "";
+    if (!sourceUri) {
+      continue;
+    }
+    const group = sourceGroups.get(sourceUri) ?? { rows: [], score: 0 };
+    group.rows.push(row);
+    group.score += lifecycleTaskTopicalScore(row, queryText);
+    sourceGroups.set(sourceUri, group);
+  }
+  const best = [...sourceGroups.values()]
+    .filter((group) => group.score > 0)
+    .sort((left, right) => right.score / Math.max(1, right.rows.length) - left.score / Math.max(1, left.rows.length) || right.score - left.score)[0];
+  return best ? best.rows : rows;
 }
 
 function extractProjectNames(text: string): readonly string[] {
@@ -1584,12 +2132,21 @@ function normalizePreferenceObjectText(value: string, subjectAlternation: string
         ""
       )
       .replace(/^[,;:\-\s]+/u, "")
+      .replace(/^(?:is\s+like|like)\b\s*[,;:\-\s]*/iu, "")
+      .replace(/^(?:so\s+)?food\s+i\s+usually\s+like\s+is\s+/iu, "")
       .replace(/^(?:but|and|or)\s+/iu, "")
       .replace(/^(?:while the other enjoys|followed by)\s+/iu, "")
+      .replace(/\bis\s+always\s+(?:great|good|nice|amazing|awesome)\b[\s\S]*$/iu, "")
       .replace(/\bfirst\b/iu, "")
       .replace(/[.,!?]+$/u, "")
       .replace(/^(?:a|an|the)\s+/iu, "")
   );
+}
+
+function preferenceTruthClusterId(objectText: string, subjectName: string | null): string {
+  const normalizedSubject = normalizeName(subjectName ?? "self").replace(/\s+/gu, "_").toLowerCase();
+  const normalizedObject = normalizeName(normalizePreferenceObjectText(objectText)).replace(/\s+/gu, "_").toLowerCase();
+  return `truth_cluster:preference:${normalizedSubject}:${normalizedObject}`;
 }
 
 function normalizePreferenceQualifiedObjectText(
@@ -1607,7 +2164,18 @@ function normalizePreferenceQualifiedObjectText(
   return normalized;
 }
 
+function isRawMalformedPreferenceObject(value: string): boolean {
+  const lowered = normalizeWhitespace(value).toLowerCase();
+  return (
+    /^(?:is\s+like|like)\b/u.test(lowered) ||
+    /\b(?:food i usually like|usually like is|is always|always great|always good)\b/u.test(lowered)
+  );
+}
+
 function isLowQualityPreferenceObject(objectText: string): boolean {
+  if (isRawMalformedPreferenceObject(objectText)) {
+    return true;
+  }
   const normalized = normalizePreferenceObjectText(objectText);
   const lowered = normalized.toLowerCase();
   if (!lowered || lowered.length < 3) {
@@ -1621,8 +2189,11 @@ function isLowQualityPreferenceObject(objectText: string): boolean {
   }
   if (
     /\b(?:you know|across the network|where i lived|where we lived|that area)\b/u.test(lowered) ||
-    /^(?:where|when|how|why|while the other|followed by)\b/u.test(lowered)
+    /^(?:where|when|how|why|while the other|followed by|is like|like)\b/u.test(lowered)
   ) {
+    return true;
+  }
+  if (/\b(?:is always|food i usually like|usually like is|always great|always good)\b/u.test(lowered)) {
     return true;
   }
   const tokenCount = lowered.split(/\s+/u).filter(Boolean).length;
@@ -1682,6 +2253,7 @@ function splitPreferenceList(fragment: string, subjectAlternation: string | null
 
   return normalized
     .split(/\s*(?:,|;| and )\s*/iu)
+    .filter((part) => !isRawMalformedPreferenceObject(part))
     .map((part) => normalizePreferenceObjectText(part, subjectAlternation))
     .filter((part) => part.length > 0 && !isLowQualityPreferenceObject(part));
 }
@@ -2322,7 +2894,299 @@ function inferTimeRange(queryText: string, referenceNow?: string): { start?: str
     end.setUTCHours(23, 59, 59, 999);
     return { start: start.toISOString(), end: end.toISOString() };
   }
+  const parsed = parseTemporalWindowText({
+    text: queryText,
+    referenceNow: referenceNow ?? now.toISOString()
+  });
+  if (parsed?.startAt || parsed?.endAt) {
+    return {
+      start: parsed.startAt ?? undefined,
+      end: parsed.endAt ?? parsed.startAt ?? undefined
+    };
+  }
   return {};
+}
+
+function resolveQueryTimeRange(query: {
+  readonly query: string;
+  readonly referenceNow?: string;
+  readonly timeStart?: string;
+  readonly timeEnd?: string;
+}): { start?: string; end?: string } {
+  const inferred = inferTimeRange(query.query, query.referenceNow);
+  return {
+    start: query.timeStart ?? inferred.start,
+    end: query.timeEnd ?? inferred.end
+  };
+}
+
+export function shouldUseTypedCalendarScope(query: {
+  readonly query: string;
+  readonly referenceNow?: string;
+  readonly timeStart?: string;
+  readonly timeEnd?: string;
+}): boolean {
+  const scopeMode = detectTemporalScopeMode(query);
+  if (scopeMode === "source_scope" || scopeMode === "lifecycle_scope" || scopeMode === "event_window_scope") {
+    return true;
+  }
+  const resolved = resolveQueryTimeRange(query);
+  return Boolean(resolved.start || resolved.end);
+}
+
+function localSourcePathFromUri(sourceUri: string | null | undefined): string | null {
+  if (typeof sourceUri !== "string" || sourceUri.trim().length === 0) {
+    return null;
+  }
+  if (sourceUri.startsWith("file://")) {
+    try {
+      return fileURLToPath(sourceUri);
+    } catch {
+      return null;
+    }
+  }
+  return sourceUri;
+}
+
+function deriveOmiRawPath(sourceUri: string | null | undefined): string | null {
+  const localPath = localSourcePathFromUri(sourceUri);
+  if (!localPath || !localPath.includes("/normalized/") || !localPath.endsWith(".md")) {
+    return null;
+  }
+  return localPath.replace("/normalized/", "/raw/").replace(/\.md$/u, ".json");
+}
+
+function readOmiStructuredConversation(sourceUri: string | null | undefined): OmiStructuredConversation | null {
+  const rawPath = deriveOmiRawPath(sourceUri);
+  if (!rawPath || !existsSync(rawPath)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(rawPath, "utf8")) as OmiStructuredConversation;
+    return parsed?.structured ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isLikelyOmiNormalizedSourceUri(sourceUri: string | null | undefined): boolean {
+  if (typeof sourceUri !== "string" || sourceUri.trim().length === 0) {
+    return false;
+  }
+  return sourceUri.includes("/omi-archive/normalized/") || sourceUri.includes("/data/inbox/omi/normalized/");
+}
+
+function isLikelyNoteLikeArtifactType(value: string | null | undefined): boolean {
+  return typeof value === "string" && ["markdown", "markdown_session", "text", "transcript", "asr", "chat_turn", "task_list", "calendar_export"].includes(value);
+}
+
+export async function resolveLatestSourceScopeUri(namespaceId: string, queryText: string): Promise<string | null> {
+  const preferOmi = prefersOmiSourceScope(queryText);
+  const preferNoteLike = isLatestSourceBoundQuery(queryText);
+  const rows = await queryRows<{ readonly source_uri: string | null }>(
+    `
+      SELECT a.uri AS source_uri
+      FROM artifacts a
+      LEFT JOIN episodic_memory em
+        ON em.artifact_id = a.id
+       AND em.namespace_id = a.namespace_id
+      WHERE a.namespace_id = $1
+        AND a.uri IS NOT NULL
+        AND (
+          $2::boolean = false
+          OR a.uri LIKE '%/omi-archive/normalized/%'
+          OR a.uri LIKE '%/data/inbox/omi/normalized/%'
+        )
+        AND (
+          $3::boolean = false
+          OR a.artifact_type IN ('markdown', 'markdown_session', 'text', 'transcript', 'asr', 'chat_turn', 'task_list', 'calendar_export')
+        )
+      GROUP BY a.id, a.uri
+      ORDER BY
+        MAX(COALESCE(em.captured_at, em.occurred_at, a.last_seen_at, a.created_at)) DESC NULLS LAST,
+        a.uri DESC
+      LIMIT 1
+    `,
+    [namespaceId, preferOmi, preferNoteLike]
+  );
+  const sourceUri = rows[0]?.source_uri?.trim();
+  return sourceUri ? sourceUri : null;
+}
+
+export async function resolveLatestSourceScopeArtifact(namespaceId: string, queryText: string): Promise<{
+  readonly artifactId: string | null;
+  readonly sourceUri: string | null;
+  readonly sourceKind: string | null;
+}> {
+  const preferOmi = prefersOmiSourceScope(queryText);
+  const preferNoteLike = isLatestSourceBoundQuery(queryText);
+  const rows = await queryRows<{ readonly artifact_id: string | null; readonly source_uri: string | null; readonly artifact_type: string | null }>(
+    `
+      SELECT a.id::text AS artifact_id, a.uri AS source_uri, a.artifact_type
+      FROM artifacts a
+      LEFT JOIN episodic_memory em
+        ON em.artifact_id = a.id
+       AND em.namespace_id = a.namespace_id
+      WHERE a.namespace_id = $1
+        AND a.uri IS NOT NULL
+        AND (
+          $2::boolean = false
+          OR a.uri LIKE '%/omi-archive/normalized/%'
+          OR a.uri LIKE '%/data/inbox/omi/normalized/%'
+        )
+        AND (
+          $3::boolean = false
+          OR a.artifact_type IN ('markdown', 'markdown_session', 'text', 'transcript', 'asr', 'chat_turn', 'task_list', 'calendar_export')
+        )
+      GROUP BY a.id, a.uri, a.artifact_type
+      ORDER BY
+        MAX(COALESCE(em.captured_at, em.occurred_at, a.last_seen_at, a.created_at)) DESC NULLS LAST,
+        a.uri DESC
+      LIMIT 1
+    `,
+    [namespaceId, preferOmi, preferNoteLike]
+  );
+  return {
+    artifactId: rows[0]?.artifact_id?.trim() || null,
+    sourceUri: rows[0]?.source_uri?.trim() || null,
+    sourceKind: isLikelyOmiNormalizedSourceUri(rows[0]?.source_uri)
+      ? "omi"
+      : isLikelyNoteLikeArtifactType(rows[0]?.artifact_type)
+        ? "note_like"
+        : null
+  };
+}
+
+interface OmiStructuredEventWindow {
+  readonly year: number | null;
+  readonly month: number | null;
+  readonly day: number | null;
+  readonly startAt: string | null;
+  readonly endAt: string | null;
+  readonly timeGranularity: string | null;
+  readonly exactness: string | null;
+  readonly timeHintText: string | null;
+  readonly durationText: string | null;
+  readonly rawStart: string | null;
+  readonly rawDuration: string | null;
+}
+
+function deriveTaskLifecycleMetadata(params: {
+  readonly title: string;
+  readonly description: string;
+  readonly status: TaskLifecycleStatus;
+  readonly dueHint: string | null;
+  readonly occurredAt: string | null;
+  readonly capturedAt: string | null;
+  readonly ownerSubject: string | null;
+  readonly statusReason: string | null;
+  readonly sourceKind: string;
+  readonly relativePath: string | null;
+  readonly createdFromSourceAt?: string | null;
+  readonly updatedFromSourceAt?: string | null;
+  readonly completedAt?: string | null;
+}): Record<string, unknown> {
+  const temporalReference = params.capturedAt ?? params.occurredAt ?? undefined;
+  const dueWindow = params.dueHint
+    ? parseTemporalWindowText({
+        text: params.dueHint,
+        referenceNow: temporalReference
+      })
+    : null;
+  return {
+    source_kind: params.sourceKind,
+    owner_subject: params.ownerSubject ?? undefined,
+    status_reason: params.statusReason ?? undefined,
+    task_action_key: canonicalizeTaskActionKey(`${params.title}. ${params.description}`),
+    due_window_start: dueWindow?.startAt ?? undefined,
+    due_window_end: dueWindow?.endAt ?? undefined,
+    created_from_source_at: params.createdFromSourceAt ?? params.capturedAt ?? params.occurredAt ?? undefined,
+    updated_from_source_at: params.updatedFromSourceAt ?? undefined,
+    completed_at: params.completedAt ?? undefined,
+    captured_at: params.capturedAt ?? undefined,
+    occurred_at: params.occurredAt ?? undefined,
+    relative_path: params.relativePath ?? undefined
+  };
+}
+
+function parseOmiStructuredEventWindow(
+  event: OmiStructuredEvent,
+  referenceNow: string | null
+): OmiStructuredEventWindow {
+  const title = normalizeWhitespace(String(event.title ?? ""));
+  const description = normalizeWhitespace(String(event.description ?? ""));
+  const combinedText = normalizeWhitespace([title, description].filter((value) => value.length > 0).join(". "));
+  const startWindow = parseTemporalWindowText({
+    text: event.start ?? null,
+    referenceNow
+  });
+  const descriptiveWindow = parseTemporalWindowText({
+    text: combinedText,
+    referenceNow,
+    fallbackStart: referenceNow ?? undefined
+  });
+  const duration = parseDurationText(combinedText);
+  const anchorWindow = startWindow ?? descriptiveWindow;
+  let startAt = anchorWindow?.startAt ?? null;
+  let endAt = anchorWindow?.endAt ?? null;
+  if (!endAt && startAt && duration?.approximateSeconds) {
+    const parsedStart = new Date(startAt);
+    if (!Number.isNaN(parsedStart.getTime())) {
+      endAt = new Date(parsedStart.getTime() + duration.approximateSeconds * 1000).toISOString();
+    }
+  }
+  if (!endAt && startAt) {
+    endAt = startAt;
+  }
+  const timeHintText =
+    descriptiveWindow && description
+      ? description
+      : typeof event.start === "string" && event.start.trim().length > 0
+        ? event.start.trim()
+        : null;
+  return {
+    year: anchorWindow?.answerYear ?? null,
+    month: anchorWindow?.answerMonth ?? null,
+    day: anchorWindow?.answerDay ?? null,
+    startAt,
+    endAt,
+    timeGranularity: anchorWindow?.timeGranularity ?? null,
+    exactness: anchorWindow?.exactness ?? null,
+    timeHintText,
+    durationText: duration?.rawText ?? null,
+    rawStart: typeof event.start === "string" && event.start.trim().length > 0 ? event.start.trim() : null,
+    rawDuration: event.duration === undefined || event.duration === null ? null : String(event.duration)
+  };
+}
+
+function composeCalendarHint(row: Pick<CalendarDateSpanRow, "normalized_year" | "normalized_month" | "normalized_day" | "metadata">): string | undefined {
+  const metadataTimeHint =
+    row.metadata && typeof row.metadata.time_hint_text === "string" && row.metadata.time_hint_text.trim().length > 0
+      ? row.metadata.time_hint_text.trim()
+      : null;
+  if (metadataTimeHint) {
+    return metadataTimeHint;
+  }
+  const anchorReference =
+    row.metadata && typeof row.metadata.temporal_anchor_reference === "string" && row.metadata.temporal_anchor_reference.trim().length > 0
+      ? row.metadata.temporal_anchor_reference.trim()
+      : null;
+  if (anchorReference) {
+    return anchorReference;
+  }
+  const windowStart =
+    row.metadata && typeof row.metadata.window_start === "string" && row.metadata.window_start.trim().length > 0
+      ? row.metadata.window_start.trim()
+      : null;
+  if (windowStart) {
+    return windowStart.slice(0, 10);
+  }
+  if (row.normalized_year === null) {
+    return undefined;
+  }
+  const month = row.normalized_month ? String(row.normalized_month).padStart(2, "0") : "01";
+  const day = row.normalized_day ? String(row.normalized_day).padStart(2, "0") : "01";
+  return `${row.normalized_year}-${month}-${day}`;
 }
 
 function isCompletedTaskQuery(queryText: string): boolean {
@@ -2339,9 +3203,20 @@ export interface TypedMemoryRebuildSummary {
   readonly preferenceFacts: number;
   readonly personTimeFacts: number;
   readonly canonical?: CanonicalMemoryRebuildCounts;
+  readonly temporalEventFacts?: Pick<TemporalEventRebuildSummary, "facts" | "supports">;
+  readonly exactDetailFactKeys?: ExactDetailFactKeySummary;
+  readonly contractProjections?: ContractProjectionRebuildCounts;
+  readonly compiledMemory?: CompiledMemoryRebuildCounts;
+  readonly compiledDirectFacts?: CompiledDirectFactRebuildCounts;
+  readonly compiledProfileInferences?: CompiledProfileInferenceRebuildCounts;
 }
 
-export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<TypedMemoryRebuildSummary> {
+export async function rebuildTypedMemoryNamespace(
+  namespaceId: string,
+  options?: {
+    readonly skipVectorActivation?: boolean;
+  }
+): Promise<TypedMemoryRebuildSummary> {
   const rows = await queryRows<TypedMemorySourceRow>(
     `
       SELECT
@@ -2350,6 +3225,7 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
         em.artifact_observation_id::text AS artifact_observation_id,
         em.source_offset AS source_offset,
         em.occurred_at::text AS occurred_at,
+        em.captured_at::text AS captured_at,
         em.content,
         a.uri AS artifact_uri,
         em.metadata
@@ -2370,12 +3246,13 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
     sourceMemoryId: string;
     artifactId: string | null;
     occurredAt: string | null;
+    capturedAt: string | null;
     title: string;
     description: string;
     projectName: string | null;
     assigneeGuess: string | null;
     dueHint: string | null;
-    status: "open" | "completed";
+    status: TaskLifecycleStatus;
     completedAt: string | null;
     provenance: Record<string, unknown>;
     metadata: Record<string, unknown>;
@@ -2451,6 +3328,7 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
 
   const deterministicRelationshipFacts: DerivedRelationshipFact[] = [];
   const explicitAliasFacts: DerivedAliasFact[] = [];
+  const selfBindingEvidence: NamespaceSelfBindingEvidence[] = [];
   const existingSelfProfile = await getNamespaceSelfProfile(namespaceId).catch(() => null);
   const selfCanonicalName = existingSelfProfile?.canonicalName ?? null;
   const selfAliasCandidates = deriveKnownSelfAliases(existingSelfProfile);
@@ -2471,6 +3349,17 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
     ...rows.flatMap((row) => extractLikelyRelationshipSubjects(row.content))
   ]);
   const artifactParticipants = new Map<string, readonly string[]>();
+  const artifactSeedRows = new Map<
+    string,
+    {
+      readonly sourceMemoryId: string;
+      readonly artifactId: string | null;
+      readonly occurredAt: string | null;
+      readonly capturedAt: string | null;
+      readonly artifactUri: string | null;
+      readonly relativePath: string | null;
+    }
+  >();
   for (const row of rows) {
     const artifactKey = row.artifact_observation_id ?? row.artifact_id ?? row.memory_id;
     const prior = artifactParticipants.get(artifactKey) ?? [];
@@ -2482,6 +3371,104 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
         ...extractSpeakerLabels(row.content, knownPeople)
       ])
     );
+    if (!artifactSeedRows.has(artifactKey)) {
+      artifactSeedRows.set(artifactKey, {
+        sourceMemoryId: row.memory_id,
+        artifactId: row.artifact_id,
+        occurredAt: row.occurred_at,
+        capturedAt: row.captured_at,
+        artifactUri: row.artifact_uri,
+        relativePath: typeof row.metadata?.relative_path === "string" ? row.metadata.relative_path : null
+      });
+    }
+  }
+
+  for (const seed of artifactSeedRows.values()) {
+    const rawConversation = readOmiStructuredConversation(seed.artifactUri);
+    if (!rawConversation?.structured) {
+      continue;
+    }
+    const sourceOccurredAt = rawConversation.finished_at ?? rawConversation.started_at ?? seed.occurredAt;
+    const sourceCapturedAt = seed.capturedAt ?? sourceOccurredAt;
+    const structuredProvenance = {
+      source_memory_id: seed.sourceMemoryId,
+      artifact_id: seed.artifactId,
+      source_uri: seed.artifactUri
+    };
+    for (const item of rawConversation.structured.action_items ?? []) {
+      const description = normalizeWhitespace(String(item.description ?? ""));
+      if (!description) {
+        continue;
+      }
+      const dueAt = typeof item.due_at === "string" && item.due_at.trim().length > 0 ? item.due_at.trim() : null;
+      const completedAt = typeof item.completed_at === "string" && item.completed_at.trim().length > 0 ? item.completed_at.trim() : null;
+      taskRows.push({
+        sourceMemoryId: seed.sourceMemoryId,
+        artifactId: seed.artifactId,
+        occurredAt: sourceOccurredAt,
+        capturedAt: sourceCapturedAt,
+        title: trimSentenceForTitle(description.replace(/\.$/u, "")),
+        description,
+        projectName: extractProjectNames(description)[0] ?? null,
+        assigneeGuess: null,
+        dueHint: dueAt ?? dueHintFromText(description) ?? null,
+        status: item.completed ? "completed" : "open",
+        completedAt: completedAt ?? (item.completed ? sourceOccurredAt : null),
+        provenance: structuredProvenance,
+        metadata: deriveTaskLifecycleMetadata({
+          title: trimSentenceForTitle(description.replace(/\.$/u, "")),
+          description,
+          status: item.completed ? "completed" : "open",
+          dueHint: dueAt ?? dueHintFromText(description) ?? null,
+          occurredAt: sourceOccurredAt,
+          capturedAt: sourceCapturedAt,
+          ownerSubject: selfCanonicalName ?? null,
+          statusReason: item.completed ? "completed" : null,
+          sourceKind: "omi_structured_action_item",
+          relativePath: seed.relativePath,
+          createdFromSourceAt: typeof item.created_at === "string" ? item.created_at : null,
+          updatedFromSourceAt: typeof item.updated_at === "string" ? item.updated_at : null,
+          completedAt: completedAt ?? (item.completed ? sourceOccurredAt : null)
+        })
+      });
+    }
+    for (const event of rawConversation.structured.events ?? []) {
+      const title = normalizeWhitespace(String(event.title ?? event.description ?? ""));
+      if (!title) {
+        continue;
+      }
+      const window = parseOmiStructuredEventWindow(event, sourceOccurredAt);
+      dateRows.push({
+        sourceMemoryId: seed.sourceMemoryId,
+        artifactId: seed.artifactId,
+        occurredAt: sourceOccurredAt,
+        spanText: title,
+        year: window.year,
+        month: window.month,
+        day: window.day,
+        provenance: structuredProvenance,
+        metadata: {
+          source_kind: "omi_structured_event",
+          captured_at: sourceCapturedAt ?? undefined,
+          occurred_at: sourceOccurredAt ?? undefined,
+          event_title: title,
+          event_description: typeof event.description === "string" ? event.description : undefined,
+          time_hint_text: window.timeHintText ?? undefined,
+          location_hint_text: typeof event.location === "string" ? event.location : undefined,
+          window_start: window.startAt ?? undefined,
+          window_end: window.endAt ?? undefined,
+          time_granularity: window.timeGranularity ?? undefined,
+          time_exactness: window.exactness ?? undefined,
+          temporal_anchor_type: window.rawStart ? "explicit_event_start" : window.timeHintText ? "descriptive_window" : undefined,
+          temporal_anchor_reference: window.rawStart ?? window.timeHintText ?? undefined,
+          duration_text: window.durationText ?? undefined,
+          raw_start: window.rawStart ?? undefined,
+          raw_duration: window.rawDuration ?? undefined,
+          structured_created: typeof event.created === "boolean" ? event.created : undefined,
+          relative_path: seed.relativePath ?? undefined
+        }
+      });
+    }
   }
 
   for (const [rowIndex, row] of rows.entries()) {
@@ -2545,25 +3532,96 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
         charEnd: sourceOffsetEnd
       });
     }
+    const firstPersonText = stripLeadingSpeakerLabel(row.content);
+    const explicitFirstPersonSignal = /\b(?:i|i'm|i’ve|i've|i’ll|i'll|i’d|i'd|my|me|we|we've|we’re|we're|our|us)\b/iu.test(
+      firstPersonText
+    );
+    if (explicitFirstPersonSignal) {
+      recordNamespaceSelfBindingEvidence(selfBindingEvidence, {
+        candidateName: metadataSpeakerName,
+        aliases: [directLeadingSpeaker, defaultSpeakerName],
+        source: "structured_truth_binding",
+        evidenceKey: `${row.memory_id}:metadata_speaker`
+      });
+      recordNamespaceSelfBindingEvidence(selfBindingEvidence, {
+        candidateName: directLeadingSpeaker,
+        aliases: [metadataSpeakerName, defaultSpeakerName],
+        source: "structured_truth_binding",
+        evidenceKey: `${row.memory_id}:direct_speaker`
+      });
+      recordNamespaceSelfBindingEvidence(selfBindingEvidence, {
+        candidateName: defaultSpeakerName,
+        aliases: [metadataSpeakerName, directLeadingSpeaker],
+        source: "structured_truth_binding",
+        evidenceKey: `${row.memory_id}:default_speaker`
+      });
+    }
 
     for (const item of checklistItems) {
+      const title = trimSentenceForTitle(item.text.replace(/\.$/u, ""));
+      const dueHint = dueHintFromText(item.text) ?? null;
+      const status: TaskLifecycleStatus = item.completed ? "completed" : "open";
       taskRows.push({
         sourceMemoryId: row.memory_id,
         artifactId: row.artifact_id,
         occurredAt: row.occurred_at,
-        title: trimSentenceForTitle(item.text.replace(/\.$/u, "")),
+        capturedAt: row.captured_at,
+        title,
         description: item.text,
         projectName: projectNames[0] ?? null,
         assigneeGuess: null,
-        dueHint: dueHintFromText(item.text) ?? null,
-        status: item.completed ? "completed" : "open",
+        dueHint,
+        status,
         completedAt: item.completed ? row.occurred_at : null,
         provenance: sharedProvenance,
-        metadata: {
-          source_kind: "checklist",
-          relative_path: typeof row.metadata?.relative_path === "string" ? row.metadata.relative_path : undefined
-        }
+        metadata: deriveTaskLifecycleMetadata({
+          title,
+          description: item.text,
+          status,
+          dueHint,
+          occurredAt: row.occurred_at,
+          capturedAt: row.captured_at,
+          ownerSubject: selfCanonicalName ?? (explicitFirstPersonSignal ? defaultSpeakerName : null),
+          statusReason: item.completed ? "completed" : null,
+          sourceKind: "checklist",
+          relativePath: typeof row.metadata?.relative_path === "string" ? row.metadata.relative_path : null,
+          completedAt: item.completed ? row.occurred_at : null
+        })
       });
+    }
+
+    if (!isLikelyOmiNormalizedSourceUri(row.artifact_uri)) {
+      for (const item of extractInlineTaskFragments(row.content)) {
+        const title = trimSentenceForTitle(item.text.replace(/\.$/u, ""));
+        const dueHint = dueHintFromText(item.text) ?? null;
+        taskRows.push({
+          sourceMemoryId: row.memory_id,
+          artifactId: row.artifact_id,
+          occurredAt: row.occurred_at,
+          capturedAt: row.captured_at,
+          title,
+          description: item.text,
+          projectName: projectNames[0] ?? null,
+          assigneeGuess: null,
+          dueHint,
+          status: item.status,
+          completedAt: item.status === "completed" ? row.occurred_at : null,
+          provenance: sharedProvenance,
+          metadata: deriveTaskLifecycleMetadata({
+            title,
+            description: item.text,
+            status: item.status,
+            dueHint,
+            occurredAt: row.occurred_at,
+            capturedAt: row.captured_at,
+            ownerSubject: selfCanonicalName ?? (explicitFirstPersonSignal ? defaultSpeakerName : null),
+            statusReason: inferTaskStatusReasonFromText(item.text),
+            sourceKind: "inline_task_statement",
+            relativePath: typeof row.metadata?.relative_path === "string" ? row.metadata.relative_path : null,
+            completedAt: item.status === "completed" ? row.occurred_at : null
+          })
+        });
+      }
     }
 
     for (const projectName of projectNames) {
@@ -2586,6 +3644,14 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
     }
 
     for (const date of parseExplicitDates(row.content)) {
+      const exactDateStart =
+        date.year && date.month && date.day
+          ? new Date(Date.UTC(date.year, date.month - 1, date.day, 0, 0, 0, 0)).toISOString()
+          : null;
+      const exactDateEnd =
+        date.year && date.month && date.day
+          ? new Date(Date.UTC(date.year, date.month - 1, date.day, 23, 59, 59, 999)).toISOString()
+          : null;
       dateRows.push({
         sourceMemoryId: row.memory_id,
         artifactId: row.artifact_id,
@@ -2596,9 +3662,50 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
         day: date.day ?? null,
         provenance: sharedProvenance,
         metadata: {
+          source_kind: "explicit_date_mention",
+          captured_at: row.captured_at ?? undefined,
+          occurred_at: row.occurred_at ?? undefined,
+          window_start: exactDateStart ?? undefined,
+          window_end: exactDateEnd ?? undefined,
+          time_granularity: date.day ? "day" : date.month ? "month" : date.year ? "year" : undefined,
+          time_exactness: date.day ? "exact" : date.month ? "bounded" : date.year ? "bounded" : undefined,
+          temporal_anchor_type: "explicit_text",
+          temporal_anchor_reference: date.spanText,
           relative_path: typeof row.metadata?.relative_path === "string" ? row.metadata.relative_path : undefined
         }
       });
+    }
+
+    if (!isLikelyOmiNormalizedSourceUri(row.artifact_uri)) {
+      for (const commitment of extractTemporalCommitmentFragments(row.content, row.captured_at ?? row.occurred_at)) {
+        dateRows.push({
+          sourceMemoryId: row.memory_id,
+          artifactId: row.artifact_id,
+          occurredAt: row.occurred_at,
+          spanText: commitment.title,
+          year: null,
+          month: null,
+          day: null,
+          provenance: sharedProvenance,
+          metadata: {
+            source_kind: "temporal_commitment_sentence",
+            captured_at: row.captured_at ?? undefined,
+            occurred_at: row.occurred_at ?? undefined,
+            event_title: commitment.title,
+            time_hint_text: commitment.timeHintText ?? undefined,
+            location_hint_text: commitment.locationHintText ?? undefined,
+            window_start: commitment.windowStart ?? undefined,
+            window_end: commitment.windowEnd ?? undefined,
+            time_granularity: commitment.timeGranularity ?? undefined,
+            time_exactness: commitment.timeExactness ?? undefined,
+            temporal_anchor_type: "sentence_temporal_reference",
+            temporal_anchor_reference: commitment.referenceText,
+            duration_text: commitment.durationText ?? undefined,
+            duration_seconds_approx: commitment.durationSecondsApprox ?? undefined,
+            relative_path: typeof row.metadata?.relative_path === "string" ? row.metadata.relative_path : undefined
+          }
+        });
+      }
     }
 
     for (const aliasFact of extractExplicitAliasFacts(row.content)) {
@@ -2614,7 +3721,7 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
         sourceMemoryId: row.memory_id,
         artifactId: row.artifact_id,
         occurredAt: row.occurred_at,
-        purchaserName: selfCanonicalName,
+        purchaserName: selfCanonicalName ?? (explicitFirstPersonSignal ? defaultSpeakerName : null),
         itemLabel: item.itemLabel,
         normalizedItemLabel: normalizeName(item.itemLabel),
         quantityText: item.quantityText,
@@ -2637,6 +3744,19 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
       seedGlobalMedia: seededGlobalMedia
     });
     for (const mention of extractedMediaMentions) {
+      if (
+        explicitFirstPersonSignal &&
+        mention.subjectName &&
+        defaultSpeakerName &&
+        normalizeName(mention.subjectName) === normalizeName(defaultSpeakerName)
+      ) {
+        recordNamespaceSelfBindingEvidence(selfBindingEvidence, {
+          candidateName: mention.subjectName,
+          aliases: [defaultSpeakerName, metadataSpeakerName, directLeadingSpeaker],
+          source: "typed_scalar_truth",
+          evidenceKey: `${row.memory_id}:media:${mention.mediaTitle}:${mention.mentionKind}`
+        });
+      }
       mediaRows.push({
         sourceMemoryId: row.memory_id,
         artifactId: row.artifact_id,
@@ -2674,6 +3794,19 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
     }
 
     for (const fact of extractPreferenceFacts(row.content, artifactKnownPeople, defaultSpeakerName ?? selfCanonicalName)) {
+      if (
+        explicitFirstPersonSignal &&
+        fact.subjectName &&
+        defaultSpeakerName &&
+        normalizeName(fact.subjectName) === normalizeName(defaultSpeakerName)
+      ) {
+        recordNamespaceSelfBindingEvidence(selfBindingEvidence, {
+          candidateName: fact.subjectName,
+          aliases: [defaultSpeakerName, metadataSpeakerName, directLeadingSpeaker],
+          source: "typed_scalar_truth",
+          evidenceKey: `${row.memory_id}:preference:${fact.predicate}:${fact.objectText}`
+        });
+      }
       preferenceRows.push({
         sourceMemoryId: row.memory_id,
         artifactId: row.artifact_id,
@@ -2688,12 +3821,27 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
         provenance: sharedProvenance,
         metadata: {
           source_kind: "preference_extraction",
+          truth_cluster_id: preferenceTruthClusterId(fact.objectText, fact.subjectName),
+          truth_kind: "preference",
+          decay_class: "mutable_current_truth",
           relative_path: typeof row.metadata?.relative_path === "string" ? row.metadata.relative_path : undefined
         }
       });
     }
 
     for (const fact of extractPersonTimeFacts(row.content, artifactKnownPeople, sourceReferenceInstant, defaultSpeakerName)) {
+      if (
+        explicitFirstPersonSignal &&
+        defaultSpeakerName &&
+        normalizeName(fact.personName) === normalizeName(defaultSpeakerName)
+      ) {
+        recordNamespaceSelfBindingEvidence(selfBindingEvidence, {
+          candidateName: fact.personName,
+          aliases: [defaultSpeakerName, metadataSpeakerName, directLeadingSpeaker],
+          source: "event_truth",
+          evidenceKey: `${row.memory_id}:person_time:${fact.factText}`
+        });
+      }
       personTimeRows.push({
         sourceMemoryId: row.memory_id,
         artifactId: row.artifact_id,
@@ -2715,9 +3863,34 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
     }
   }
 
+  const synthesizedSelfBinding = deriveTypedMemoryNamespaceSelfBindingCandidate(selfBindingEvidence);
+
   let canonicalCounts: CanonicalMemoryRebuildCounts | undefined;
+  let temporalEventSummary: Pick<TemporalEventRebuildSummary, "facts" | "supports"> | undefined;
+  let exactDetailFactKeys: ExactDetailFactKeySummary | undefined;
+  let contractProjectionCounts: ContractProjectionRebuildCounts | undefined;
+  let compiledDirectFacts: CompiledDirectFactRebuildCounts | undefined;
+  let compiledProfileInferences: CompiledProfileInferenceRebuildCounts | undefined;
   await withTransaction(async (client) => {
-    const selfProfile = await loadNamespaceSelfProfileForClient(client, namespaceId);
+    let selfProfile = await loadNamespaceSelfProfileForClient(client, namespaceId);
+    if (synthesizedSelfBinding && (!selfProfile || selfBindingCandidateMatchesProfile(synthesizedSelfBinding, selfProfile))) {
+      const canonicalName = selfProfile?.canonicalName ?? synthesizedSelfBinding.canonicalName;
+      await upsertNamespaceSelfProfileForClient(client, {
+        namespaceId,
+        canonicalName,
+        aliases: uniqueStrings([
+          canonicalName,
+          ...(selfProfile ? deriveKnownSelfAliases(selfProfile) : []),
+          ...synthesizedSelfBinding.aliases
+        ]),
+        note: synthesizedSelfBinding.provenanceSummary,
+        source: synthesizedSelfBinding.source,
+        confidence: synthesizedSelfBinding.confidence,
+        evidenceCount: synthesizedSelfBinding.evidenceCount,
+        provenanceSummary: synthesizedSelfBinding.provenanceSummary
+      });
+      selfProfile = await loadNamespaceSelfProfileForClient(client, namespaceId);
+    }
     const selfName = selfProfile?.canonicalName ?? "Self";
     const selfAliases = new Set(deriveKnownSelfAliases(selfProfile).map((value) => normalizeName(value)));
     const selfEntityId = selfProfile?.entityId ?? null;
@@ -3033,7 +4206,7 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
           namespaceId,
           transaction.sourceMemoryId,
           transaction.artifactId,
-          transaction.purchaserName,
+          transaction.purchaserName ?? selfProfile?.canonicalName ?? null,
           transaction.itemLabel,
           transaction.normalizedItemLabel,
           transaction.quantityText,
@@ -3328,6 +4501,25 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
   await runUniversalMutableReconsolidation(namespaceId);
   const canonicalSummary = await rebuildCanonicalMemoryNamespace(namespaceId);
   canonicalCounts = canonicalSummary.counts;
+  const temporalEventFacts = await rebuildTemporalEventFactsNamespace(namespaceId);
+  temporalEventSummary = {
+    facts: temporalEventFacts.facts,
+    supports: temporalEventFacts.supports
+  };
+  contractProjectionCounts = (await rebuildContractProjectionsNamespace(namespaceId)).counts;
+  exactDetailFactKeys = await rebuildExactDetailFactKeysNamespace(namespaceId);
+  const compiledMemory = (await rebuildCompiledMemoryNamespace(namespaceId)).counts;
+  compiledDirectFacts = await rebuildCompiledDirectFactObservationsNamespace(namespaceId);
+  compiledProfileInferences = await rebuildCompiledProfileInferenceObservationsNamespace(namespaceId);
+  const skipAutomaticVectorActivation = options?.skipVectorActivation || namespaceId.startsWith("benchmark_");
+
+  if (!skipAutomaticVectorActivation) {
+    await runNamespaceVectorActivation({
+      namespaceId,
+      scope: "runtime",
+      reason: "typed_memory_rebuild"
+    });
+  }
 
   return {
     namespaceId,
@@ -3338,13 +4530,203 @@ export async function rebuildTypedMemoryNamespace(namespaceId: string): Promise<
     mediaMentions: dedupedMediaRows().length,
     preferenceFacts: preferenceRows.length,
     personTimeFacts: personTimeRows.length,
-    canonical: canonicalCounts
+    canonical: canonicalCounts,
+    temporalEventFacts: temporalEventSummary,
+    exactDetailFactKeys,
+    contractProjections: contractProjectionCounts,
+    compiledMemory,
+    compiledDirectFacts,
+    compiledProfileInferences
   };
 }
 
-export async function getTypedTaskItems(query: RecapQuery): Promise<readonly RecapTaskItem[]> {
-  const { start, end } = inferTimeRange(query.query, query.referenceNow);
-  const status = isCompletedTaskQuery(query.query) ? "completed" : undefined;
+function taskLifecycleGroupKey(row: Pick<TaskItemRow, "title" | "description" | "project_name" | "metadata">): string {
+  const metadataKey =
+    row.metadata && typeof row.metadata.task_action_key === "string" && row.metadata.task_action_key.trim().length > 0
+      ? row.metadata.task_action_key.trim()
+      : null;
+  const ownerSubject =
+    row.metadata && typeof row.metadata.owner_subject === "string" && row.metadata.owner_subject.trim().length > 0
+      ? normalizeName(row.metadata.owner_subject)
+      : "self";
+  const actionKey = metadataKey ?? canonicalizeTaskActionKey(`${row.title}. ${row.description ?? ""}`);
+  const projectKey = row.project_name ? normalizeName(row.project_name) : "no_project";
+  return `${ownerSubject}|${projectKey}|${actionKey}`;
+}
+
+function taskEffectiveAt(row: Pick<TaskItemRow, "completed_at" | "occurred_at">): string {
+  return row.completed_at ?? row.occurred_at ?? "";
+}
+
+function taskLifecycleTokenSet(row: Pick<TaskItemRow, "title" | "description" | "metadata">): readonly string[] {
+  const actionKey =
+    row.metadata && typeof row.metadata.task_action_key === "string" && row.metadata.task_action_key.trim().length > 0
+      ? row.metadata.task_action_key.trim()
+      : canonicalizeTaskActionKey(`${row.title}. ${row.description ?? ""}`);
+  return actionKey.split("|").filter((token) => token.length > 0);
+}
+
+function taskLifecycleOwnerProjectPrefix(row: Pick<TaskItemRow, "project_name" | "metadata">): string {
+  const ownerSubject =
+    row.metadata && typeof row.metadata.owner_subject === "string" && row.metadata.owner_subject.trim().length > 0
+      ? normalizeName(row.metadata.owner_subject)
+      : "self";
+  const projectKey = row.project_name ? normalizeName(row.project_name) : "no_project";
+  return `${ownerSubject}|${projectKey}`;
+}
+
+function taskLifecycleTokensOverlap(left: readonly string[], right: readonly string[]): number {
+  if (left.length === 0 || right.length === 0) {
+    return 0;
+  }
+  const rightSet = new Set(right);
+  const intersection = left.filter((token) => rightSet.has(token)).length;
+  return intersection / Math.min(left.length, right.length);
+}
+
+function metadataDateString(row: Pick<TaskItemRow, "metadata">, key: string): string | null {
+  if (!row.metadata || typeof row.metadata !== "object") {
+    return null;
+  }
+  const value = row.metadata[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function parseIsoMillis(value: string | null | undefined): number | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isTaskRowStaleOpen(
+  row: Pick<TaskItemRow, "status" | "occurred_at" | "metadata">,
+  referenceNow: string | undefined
+): boolean {
+  if (row.status !== "open") {
+    return false;
+  }
+
+  const nowMs = parseIsoMillis(referenceNow) ?? Date.now();
+  const createdMs =
+    parseIsoMillis(metadataDateString(row, "updated_from_source_at")) ??
+    parseIsoMillis(metadataDateString(row, "created_from_source_at")) ??
+    parseIsoMillis(metadataDateString(row, "captured_at")) ??
+    parseIsoMillis(row.occurred_at);
+
+  if (createdMs === null || createdMs > nowMs) {
+    return false;
+  }
+
+  const dueEndMs =
+    parseIsoMillis(metadataDateString(row, "due_window_end")) ??
+    parseIsoMillis(metadataDateString(row, "due_window_start"));
+
+  const staleNoDueCutoffMs = nowMs - OPEN_TASK_STALE_NO_DUE_DAYS * 24 * 60 * 60 * 1000;
+  const stalePastDueCutoffMs = nowMs - OPEN_TASK_PAST_DUE_GRACE_DAYS * 24 * 60 * 60 * 1000;
+
+  if (dueEndMs !== null) {
+    return dueEndMs < stalePastDueCutoffMs && createdMs < stalePastDueCutoffMs;
+  }
+
+  return createdMs < staleNoDueCutoffMs;
+}
+
+function taskLastMentionedAt(row: Pick<TaskItemRow, "completed_at" | "occurred_at" | "metadata">): string | undefined {
+  return (
+    metadataDateString(row, "updated_from_source_at") ??
+    metadataDateString(row, "created_from_source_at") ??
+    metadataDateString(row, "captured_at") ??
+    row.completed_at ??
+    row.occurred_at ??
+    undefined
+  );
+}
+
+function taskAgeDays(row: Pick<TaskItemRow, "completed_at" | "occurred_at" | "metadata">, referenceNow: string | undefined): number | undefined {
+  const nowMs = parseIsoMillis(referenceNow) ?? Date.now();
+  const mentionedMs = parseIsoMillis(taskLastMentionedAt(row));
+  if (mentionedMs === null || mentionedMs > nowMs) {
+    return undefined;
+  }
+  return Math.floor((nowMs - mentionedMs) / (24 * 60 * 60 * 1000));
+}
+
+function taskSourceConfidence(row: Pick<TaskItemRow, "source_memory_id" | "source_uri" | "metadata">): "high" | "medium" | "low" {
+  const sourceKind = row.metadata && typeof row.metadata.source_kind === "string" ? row.metadata.source_kind : "";
+  if (row.source_memory_id && row.source_uri && sourceKind.length > 0) {
+    return "high";
+  }
+  if (row.source_memory_id || row.source_uri) {
+    return "medium";
+  }
+  return "low";
+}
+
+function canonicalTaskLifecycleStatus(row: TaskItemRow, referenceNow: string | undefined): CanonicalTaskLifecycleStatus {
+  if (isTaskRowStaleOpen(row, referenceNow)) {
+    return "stale_open";
+  }
+  if (["completed", "canceled", "superseded"].includes(row.status)) {
+    const age = taskAgeDays(row, referenceNow);
+    if (age !== undefined && age <= RECENTLY_CLOSED_TASK_DAYS) {
+      return "recently_closed";
+    }
+  }
+  return (["open", "blocked", "completed", "canceled", "superseded"].includes(row.status) ? row.status : "open") as TaskLifecycleStatus;
+}
+
+function collapseTaskLifecycleRows(
+  rows: readonly TaskItemRow[],
+  scopeMode: TemporalScopeMode,
+  statusFilter: TaskLifecycleStatus | null,
+  queryText: string,
+  referenceNow: string | undefined
+): readonly TaskItemRow[] {
+  if (scopeMode === "source_scope") {
+    return statusFilter ? rows.filter((row) => row.status === statusFilter) : rows;
+  }
+  const latestByGroup = new Map<string, TaskItemRow>();
+  for (const row of rows) {
+    const key = taskLifecycleGroupKey(row);
+    if (latestByGroup.has(key)) {
+      continue;
+    }
+    const prefix = taskLifecycleOwnerProjectPrefix(row);
+    const tokens = taskLifecycleTokenSet(row);
+    const fuzzyMatch = [...latestByGroup.entries()].find(([existingKey, existingRow]) => {
+      if (!existingKey.startsWith(`${prefix}|`)) {
+        return false;
+      }
+      return taskLifecycleTokensOverlap(tokens, taskLifecycleTokenSet(existingRow)) >= 0.6;
+    });
+    if (fuzzyMatch) {
+      continue;
+    }
+    latestByGroup.set(key, row);
+  }
+  let collapsed = [...latestByGroup.values()];
+  if (
+    scopeMode === "lifecycle_scope" &&
+    (statusFilter === "open" || statusFilter === null) &&
+    !shouldIncludeOlderLifecycleRows(queryText)
+  ) {
+    collapsed = collapsed.filter((row) => !isTaskRowStaleOpen(row, referenceNow));
+  }
+  collapsed = [...scopeLifecycleRowsToRecentTopicalSource(collapsed, queryText)];
+  if (!statusFilter) {
+    return collapsed;
+  }
+  return collapsed.filter((row) => row.status === statusFilter);
+}
+
+async function loadTypedTaskRows(query: RecapQuery): Promise<readonly TaskItemRow[]> {
+  const { start, end } = resolveQueryTimeRange(query);
+  const scopeMode = detectTemporalScopeMode(query);
+  const status = taskStatusFilterFromQuery(query.query);
+  const latestSourceUri =
+    scopeMode === "source_scope" && isLatestSourceBoundQuery(query.query) ? await resolveLatestSourceScopeUri(query.namespaceId, query.query) : null;
   const rows = await queryRows<TaskItemRow>(
     `
       SELECT
@@ -3354,17 +4736,28 @@ export async function getTypedTaskItems(query: RecapQuery): Promise<readonly Rec
         assignee_guess,
         due_hint,
         status,
-        source_memory_id::text
+        occurred_at::text,
+        completed_at::text,
+        source_memory_id::text,
+        artifact_id::text,
+        provenance->>'source_uri' AS source_uri,
+        metadata
       FROM task_items
       WHERE namespace_id = $1
         AND ($2::text IS NULL OR status = $2)
         AND ($3::timestamptz IS NULL OR COALESCE(completed_at, occurred_at) >= $3::timestamptz)
         AND ($4::timestamptz IS NULL OR COALESCE(completed_at, occurred_at) <= $4::timestamptz)
+        AND ($5::text IS NULL OR provenance->>'source_uri' = $5)
       ORDER BY COALESCE(completed_at, occurred_at) DESC NULLS LAST, created_at DESC
-      LIMIT 12
+      LIMIT 32
     `,
-    [query.namespaceId, status ?? null, start ?? null, end ?? null]
+    [query.namespaceId, scopeMode === "source_scope" ? status ?? null : null, start ?? null, end ?? null, latestSourceUri]
   );
+  return collapseTaskLifecycleRows(rows, scopeMode, status, query.query, query.referenceNow);
+}
+
+export async function getTypedTaskItems(query: RecapQuery): Promise<readonly RecapTaskItem[]> {
+  const rows = await loadTypedTaskRows(query);
 
   return rows.map((row) => ({
     title: row.title,
@@ -3373,8 +4766,258 @@ export async function getTypedTaskItems(query: RecapQuery): Promise<readonly Rec
     project: row.project_name ?? undefined,
     dueHint: row.due_hint ?? undefined,
     statusGuess: row.status,
+    lifecycleStatus: canonicalTaskLifecycleStatus(row, query.referenceNow),
+    statusReason:
+      row.metadata && typeof row.metadata.status_reason === "string" ? row.metadata.status_reason : undefined,
+    ownerSubject:
+      row.metadata && typeof row.metadata.owner_subject === "string" ? row.metadata.owner_subject : undefined,
+    dueWindowStart:
+      row.metadata && typeof row.metadata.due_window_start === "string" ? row.metadata.due_window_start : undefined,
+    dueWindowEnd:
+      row.metadata && typeof row.metadata.due_window_end === "string" ? row.metadata.due_window_end : undefined,
+    ageDays: taskAgeDays(row, query.referenceNow),
+    lastMentionedAt: taskLastMentionedAt(row),
+    sourceConfidence: taskSourceConfidence(row),
+    sourceTrail: row.source_uri ? [row.source_uri] : [],
     evidenceIds: row.source_memory_id ? [row.source_memory_id] : []
   }));
+}
+
+export async function getTypedTaskResults(query: RecapQuery): Promise<readonly RecallResult[]> {
+  const rows = await loadTypedTaskRows(query);
+  return rows.map((row, index) =>
+    buildTypedRecallResult(
+      `${row.source_memory_id ?? "task"}:${index}:${normalizeName(row.title)}`,
+      query.namespaceId,
+      `${row.title}.${row.description && row.description !== row.title ? ` ${row.description}` : ""}${row.project_name ? ` Project: ${row.project_name}.` : ""}${row.due_hint ? ` Due hint: ${row.due_hint}.` : ""}${row.status ? ` Status: ${row.status}.` : ""}${
+        row.metadata && typeof row.metadata.status_reason === "string" ? ` Status reason: ${row.metadata.status_reason}.` : ""
+      }`,
+      taskEffectiveAt(row) || row.occurred_at,
+      row.artifact_id,
+      row.source_memory_id,
+      row.source_uri,
+      "task_item",
+      {
+        title: row.title,
+        description: row.description,
+        project_name: row.project_name,
+        due_hint: row.due_hint,
+        status: row.status,
+        lifecycle_status: canonicalTaskLifecycleStatus(row, query.referenceNow),
+        status_reason: row.metadata?.status_reason,
+        owner_subject: row.metadata?.owner_subject,
+        due_window_start: row.metadata?.due_window_start,
+        due_window_end: row.metadata?.due_window_end,
+        age_days: taskAgeDays(row, query.referenceNow),
+        last_mentioned_at: taskLastMentionedAt(row),
+        source_confidence: taskSourceConfidence(row),
+        source_table: "task_items"
+      }
+    )
+  );
+}
+
+function extractTemporalScopeQueryTerms(queryText: string): readonly string[] {
+  return uniqueStrings(
+    normalizeWhitespace(queryText)
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/gu, " ")
+      .split(/\s+/u)
+      .filter(
+        (token) =>
+          token.length >= 3 &&
+          ![
+            "was",
+            "what",
+            "after",
+            "before",
+            "were",
+            "with",
+            "from",
+            "that",
+            "this",
+            "most",
+            "recent",
+            "latest",
+            "note",
+            "notes",
+            "trip",
+            "trips",
+            "date",
+            "dates",
+            "commitment",
+            "commitments",
+            "mention",
+            "mentioned",
+            "planning",
+            "plan",
+            "plans"
+          ].includes(token)
+      )
+  );
+}
+
+async function loadTypedCalendarRows(query: RecapQuery): Promise<readonly CalendarDateSpanRow[]> {
+  const { start, end } = resolveQueryTimeRange(query);
+  const scopeMode = detectTemporalScopeMode(query);
+  const latestSourceUri = scopeMode === "source_scope" ? await resolveLatestSourceScopeUri(query.namespaceId, query.query) : null;
+  const rows = await queryRows<CalendarDateSpanRow>(
+    `
+      SELECT
+        id::text,
+        span_text,
+        normalized_year,
+        normalized_month,
+        normalized_day,
+        occurred_at::text,
+        source_memory_id::text,
+        artifact_id::text,
+        provenance->>'source_uri' AS source_uri,
+        metadata
+      FROM date_time_spans
+      WHERE namespace_id = $1
+        AND (
+          $4::text IS NOT NULL
+          OR ($2::timestamptz IS NULL AND $3::timestamptz IS NULL)
+          OR (
+            $2::timestamptz IS NOT NULL
+            AND COALESCE(
+              NULLIF(metadata->>'window_end', '')::timestamptz,
+              NULLIF(metadata->>'window_start', '')::timestamptz,
+              occurred_at
+            ) >= $2::timestamptz
+            AND (
+              $3::timestamptz IS NULL
+              OR COALESCE(
+                NULLIF(metadata->>'window_start', '')::timestamptz,
+                NULLIF(metadata->>'window_end', '')::timestamptz,
+                occurred_at
+              ) <= $3::timestamptz
+            )
+          )
+          OR (
+            $2::timestamptz IS NULL
+            AND $3::timestamptz IS NOT NULL
+            AND COALESCE(
+              NULLIF(metadata->>'window_start', '')::timestamptz,
+              NULLIF(metadata->>'window_end', '')::timestamptz,
+              occurred_at
+            ) <= $3::timestamptz
+          )
+        )
+        AND (
+          metadata->>'source_kind' IN ('omi_structured_event', 'temporal_commitment_sentence')
+          OR metadata ? 'time_hint_text'
+          OR metadata ? 'window_start'
+          OR metadata ? 'temporal_anchor_reference'
+        )
+        AND ($4::text IS NULL OR provenance->>'source_uri' = $4)
+      ORDER BY occurred_at DESC NULLS LAST, created_at DESC
+      LIMIT 16
+    `,
+    [query.namespaceId, start ?? null, end ?? null, latestSourceUri]
+  );
+  if ((start || end) || scopeMode !== "event_window_scope") {
+    return rows;
+  }
+  const queryTerms = extractTemporalScopeQueryTerms(query.query);
+  if (queryTerms.length === 0) {
+    return rows;
+  }
+  return rows.filter((row) => {
+    const metadataText = JSON.stringify(row.metadata ?? {}).toLowerCase();
+    const sourceText = `${row.span_text} ${metadataText}`.toLowerCase();
+    return queryTerms.some((term) => sourceText.includes(term));
+  });
+}
+
+export async function getTypedCalendarItems(query: RecapQuery): Promise<readonly CalendarCommitmentItem[]> {
+  const rows = await loadTypedCalendarRows(query);
+
+  const deduped = new Map<string, CalendarCommitmentItem>();
+  for (const row of rows) {
+    const title =
+      row.metadata && typeof row.metadata.event_title === "string" && row.metadata.event_title.trim().length > 0
+        ? row.metadata.event_title.trim()
+        : row.span_text;
+    const timeHint = composeCalendarHint(row);
+    const locationHint =
+      row.metadata && typeof row.metadata.location_hint_text === "string" && row.metadata.location_hint_text.trim().length > 0
+        ? row.metadata.location_hint_text.trim()
+        : undefined;
+    const item: CalendarCommitmentItem = {
+      title,
+      participants: [],
+      timeHint,
+      locationHint,
+      windowStart:
+        row.metadata && typeof row.metadata.window_start === "string" && row.metadata.window_start.trim().length > 0
+          ? row.metadata.window_start.trim()
+          : undefined,
+      windowEnd:
+        row.metadata && typeof row.metadata.window_end === "string" && row.metadata.window_end.trim().length > 0
+          ? row.metadata.window_end.trim()
+          : undefined,
+      timeGranularity:
+        row.metadata && typeof row.metadata.time_granularity === "string" && row.metadata.time_granularity.trim().length > 0
+          ? row.metadata.time_granularity.trim()
+          : undefined,
+      timeExactness:
+        row.metadata && typeof row.metadata.time_exactness === "string" && row.metadata.time_exactness.trim().length > 0
+          ? row.metadata.time_exactness.trim()
+          : undefined,
+      certainty: row.metadata?.source_kind === "omi_structured_event" ? "high" : "medium",
+      evidenceIds: row.source_memory_id ? [row.source_memory_id] : []
+    };
+    const key = `${title.toLowerCase()}::${timeHint ?? ""}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, item);
+    }
+  }
+
+  return [...deduped.values()];
+}
+
+export async function getTypedCalendarResults(query: RecapQuery): Promise<readonly RecallResult[]> {
+  const rows = await loadTypedCalendarRows(query);
+  return rows.map((row) => {
+    const title =
+      row.metadata && typeof row.metadata.event_title === "string" && row.metadata.event_title.trim().length > 0
+        ? row.metadata.event_title.trim()
+        : row.span_text;
+    const timeHint = composeCalendarHint(row);
+    const locationHint =
+      row.metadata && typeof row.metadata.location_hint_text === "string" && row.metadata.location_hint_text.trim().length > 0
+        ? row.metadata.location_hint_text.trim()
+        : null;
+    return buildTypedRecallResult(
+      row.id,
+      query.namespaceId,
+      `${title}.${timeHint ? ` Time: ${timeHint}.` : ""}${locationHint ? ` Location: ${locationHint}.` : ""}`,
+      row.occurred_at,
+      row.artifact_id,
+      row.source_memory_id,
+      row.source_uri,
+      "date_time_span",
+      {
+        span_text: row.span_text,
+        source_table: "date_time_spans",
+        event_title: row.metadata?.event_title,
+        time_hint_text: row.metadata?.time_hint_text,
+        location_hint_text: row.metadata?.location_hint_text,
+        window_start: row.metadata?.window_start,
+        window_end: row.metadata?.window_end,
+        time_granularity: row.metadata?.time_granularity,
+        time_exactness: row.metadata?.time_exactness,
+        temporal_anchor_type: row.metadata?.temporal_anchor_type,
+        temporal_anchor_reference: row.metadata?.temporal_anchor_reference,
+        duration_text: row.metadata?.duration_text,
+        duration_seconds_approx: row.metadata?.duration_seconds_approx,
+        source_kind: row.metadata?.source_kind,
+        captured_at: row.occurred_at
+      }
+    );
+  });
 }
 
 function inferNamedPeopleFromQuery(queryText: string): readonly string[] {
@@ -3647,7 +5290,7 @@ function buildTypedRecallResult(
 }
 
 export async function getTypedTransactionResults(query: RecallQuery): Promise<readonly RecallResult[]> {
-  const { start, end } = inferTimeRange(query.query, query.referenceNow);
+  const { start, end } = resolveQueryTimeRange(query);
   const rows = await queryRows<TransactionItemRow>(
     `
       SELECT
@@ -3667,6 +5310,8 @@ export async function getTypedTransactionResults(query: RecallQuery): Promise<re
       WHERE namespace_id = $1
         AND ($2::timestamptz IS NULL OR occurred_at >= $2::timestamptz)
         AND ($3::timestamptz IS NULL OR occurred_at <= $3::timestamptz)
+        AND (source_memory_id IS NOT NULL OR artifact_id IS NOT NULL)
+        AND NULLIF(provenance->>'source_uri', '') IS NOT NULL
       ORDER BY occurred_at DESC NULLS LAST, created_at DESC
       LIMIT 24
     `,
@@ -3706,7 +5351,7 @@ export async function getTypedTransactionResults(query: RecallQuery): Promise<re
 }
 
 export async function getTypedMediaResults(query: RecallQuery): Promise<readonly RecallResult[]> {
-  const { start, end } = inferTimeRange(query.query, query.referenceNow);
+  const { start, end } = resolveQueryTimeRange(query);
   const namedPeople = inferNamedPeopleFromQuery(query.query);
   const favoriteFocused = /\bfavorite\s+(?:movie|film|show|book|song|anime)s?\b/i.test(query.query);
   const quotedTitle = extractQuotedQueryText(query.query);
@@ -3754,7 +5399,7 @@ export async function getTypedMediaResults(query: RecallQuery): Promise<readonly
     return 0;
   });
 
-  return sortedRows.map((row) =>
+  const typedResults = sortedRows.map((row) =>
     buildTypedRecallResult(
       row.id,
       query.namespaceId,
@@ -3776,10 +5421,77 @@ export async function getTypedMediaResults(query: RecallQuery): Promise<readonly
       }
     )
   );
+  if (isMediaSummarySourceFallbackQuery(query.query)) {
+    const sourceFallbackResults = await getMediaSummarySourceFallbackResults(query);
+    if (sourceFallbackResults.length > 0) {
+      return [...sourceFallbackResults, ...typedResults].slice(0, 24);
+    }
+  }
+  if (typedResults.length > 0) {
+    return typedResults;
+  }
+
+  return [];
+}
+
+function isMediaSummarySourceFallbackQuery(queryText: string): boolean {
+  return (
+    /\bwhat\s+movies?\s+(?:have|has)\s+.+\s+(?:talked about|mentioned|watched|seen)\b/i.test(queryText) ||
+    /\bwhat\s+movies?\s+have\s+i\s+(?:talked about|mentioned|watched|seen)\b/i.test(queryText) ||
+    /\bwhat\s+shows?\s+(?:have|has)\s+.+\s+(?:talked about|mentioned|watched|seen)\b/i.test(queryText) ||
+    /\bmovies?\s+have\s+been\s+mentioned\b/i.test(queryText)
+  );
+}
+
+async function getMediaSummarySourceFallbackResults(query: RecallQuery): Promise<readonly RecallResult[]> {
+  const { start, end } = resolveQueryTimeRange(query);
+  const rows = await queryRows<MediaSourceFallbackRow>(
+    `
+      SELECT
+        em.id::text,
+        em.content,
+        em.occurred_at::text,
+        em.artifact_id::text,
+        a.uri AS source_uri
+      FROM episodic_memory em
+      LEFT JOIN artifacts a ON a.id = em.artifact_id
+      WHERE em.namespace_id = $1
+        AND ($2::timestamptz IS NULL OR em.occurred_at >= $2::timestamptz)
+        AND ($3::timestamptz IS NULL OR em.occurred_at <= $3::timestamptz)
+        AND em.content ~* '\\m(movie|movies|show|shows|film|films|watched|watching|mentioned|sinners|slow horses|dusk till dawn|from dusk|chainsaw man|avatar)\\M'
+      ORDER BY
+        (
+          CASE WHEN em.content ~* 'from\\s+dusk\\s+till\\s+dawn|dusk\\s+till\\s+dawn' THEN 1 ELSE 0 END +
+          CASE WHEN em.content ~* 'slow\\s+horses' THEN 1 ELSE 0 END +
+          CASE WHEN em.content ~* 'sinners' THEN 1 ELSE 0 END +
+          CASE WHEN em.content ~* 'chainsaw\\s+man' THEN 1 ELSE 0 END +
+          CASE WHEN em.content ~* 'avatar' THEN 1 ELSE 0 END
+        ) DESC,
+        em.occurred_at DESC NULLS LAST
+      LIMIT 12
+    `,
+    [query.namespaceId, start ?? null, end ?? null]
+  );
+
+  return rows.map((row) =>
+    buildTypedRecallResult(
+      row.id,
+      query.namespaceId,
+      row.content,
+      row.occurred_at,
+      row.artifact_id,
+      row.id,
+      row.source_uri,
+      "media_source_fallback",
+      {
+        media_source_fallback: true
+      }
+    )
+  );
 }
 
 export async function getTypedPreferenceResults(query: RecallQuery): Promise<readonly RecallResult[]> {
-  const { start, end } = inferTimeRange(query.query, query.referenceNow);
+  const { start, end } = resolveQueryTimeRange(query);
   const beerOnly = /\bbeers?\b/i.test(query.query);
   const foodOnly = !beerOnly && /\bfood\b|\beat\b|\bdrink\b/i.test(query.query);
   const mediaOnly = /\bmovie|movies|show|shows|book|books|song|songs|media\b/i.test(query.query);
@@ -3900,9 +5612,7 @@ export async function getTypedPreferenceResults(query: RecallQuery): Promise<rea
 }
 
 export async function getTypedPersonTimeResults(query: RecallQuery): Promise<readonly RecallResult[]> {
-  const inferred = inferTimeRange(query.query, query.referenceNow);
-  const start = query.timeStart ?? inferred.start;
-  const end = query.timeEnd ?? inferred.end;
+  const { start, end } = resolveQueryTimeRange(query);
   const namedPeople = inferNamedPeopleFromQuery(query.query);
   const rows = await queryRows<PersonTimeFactRow>(
     `

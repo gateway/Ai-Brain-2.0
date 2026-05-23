@@ -2,13 +2,21 @@ import type { PoolClient } from "pg";
 import { withTransaction } from "../db/client.js";
 import { registerArtifactObservation, toArtifactRecord } from "../artifacts/registry.js";
 import { upsertMemoryGraphEdge } from "../jobs/memory-graph.js";
-import { stageNarrativeClaims } from "../relationships/narrative.js";
+import { runNamespaceVectorActivation } from "../jobs/vector-sync-runtime.js";
+import { stageNarrativeClaims, type DeferredExternalRelationCandidatePlan } from "../relationships/narrative.js";
+import { stageExternalRelationCandidatesForScenes } from "../relationships/external-ie.js";
+import { buildExtractionUnits, persistExtractionUnitsForClient } from "../taxonomy-temporal/extraction-units.js";
 import type { ArtifactRecord, SourceType } from "../types.js";
 import { attachAnswerableUnitsForClient } from "./answerable-units.js";
 import { splitIntoFragments, splitIntoScenes } from "./fragment.js";
 import { deriveSalienceMetadata, insertFragment, normalizeText } from "./persist.js";
+import { buildIngestionRouterV2Packet, ingestionRouterV2Metadata } from "./router-v2.js";
 import { promoteTranscriptArtifactForClient } from "./transcript.js";
 import type { CandidateMemoryWrite, IngestRequest, IngestResult } from "./types.js";
+
+interface IngestResultWithDeferredRelationPlan extends IngestResult {
+  readonly deferredExternalRelationPlan?: DeferredExternalRelationCandidatePlan;
+}
 
 interface ConversationTurn {
   readonly turnIndex: number;
@@ -51,6 +59,93 @@ interface ParticipantBoundDerivation {
   readonly charStart: number;
   readonly charEnd: number;
   readonly turnIndex: number;
+}
+
+function normalizeIsoDateLike(value: string): string {
+  const trimmed = value.trim();
+  const compactDate = trimmed.match(/^(\d{4})(\d{2})(\d{2})$/u);
+  if (compactDate) {
+    return `${compactDate[1]}-${compactDate[2]}-${compactDate[3]}`;
+  }
+  const compactDateTime = trimmed.match(/^(\d{4})(\d{2})(\d{2})T/u);
+  if (compactDateTime) {
+    return `${compactDateTime[1]}-${compactDateTime[2]}-${compactDateTime[3]}`;
+  }
+  return trimmed;
+}
+
+function normalizeCalendarExportText(rawText: string): string {
+  if (!/BEGIN:VCALENDAR|BEGIN:VEVENT/iu.test(rawText)) {
+    return rawText;
+  }
+  const events = rawText.split(/BEGIN:VEVENT/iu).slice(1);
+  const lines: string[] = [];
+  for (const eventText of events) {
+    const readField = (name: string): string | null => {
+      const match = eventText.match(new RegExp(`^${name}(?:;[^:]*)?:(.+)$`, "imu"));
+      return match?.[1]?.trim() || null;
+    };
+    const summary = readField("SUMMARY");
+    const description = readField("DESCRIPTION");
+    const location = readField("LOCATION");
+    const start = readField("DTSTART");
+    if (!summary && !description) {
+      continue;
+    }
+    const dateText = start ? normalizeIsoDateLike(start) : "an unknown date";
+    lines.push(
+      [
+        `Calendar event: ${summary ?? "Untitled event"} on ${dateText}.`,
+        description ? `Details: ${description}.` : null,
+        location ? `Location: ${location}.` : null
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
+  }
+  return lines.length > 0 ? lines.join("\n") : rawText;
+}
+
+function normalizeTaskListExportText(rawText: string): string {
+  try {
+    const parsed = JSON.parse(rawText) as { readonly tasks?: readonly Record<string, unknown>[] };
+    if (!Array.isArray(parsed.tasks)) {
+      return rawText;
+    }
+    const lines = parsed.tasks
+      .map((task) => {
+        const title = typeof task.title === "string" ? task.title.trim() : "";
+        if (!title) {
+          return null;
+        }
+        const status = typeof task.status === "string" ? task.status.trim() : "open";
+        const project = typeof task.project === "string" ? task.project.trim() : "";
+        const due = typeof task.due === "string" ? task.due.trim() : "";
+        const actionPrefix = /^(?:done|completed|closed)$/iu.test(status) ? "I completed" : "I need to";
+        return [
+          `${actionPrefix} ${title}.`,
+          `Status: ${status}.`,
+          project ? `Project: ${project}.` : null,
+          due ? `Due: ${due}.` : null
+        ]
+          .filter(Boolean)
+          .join(" ");
+      })
+      .filter((line): line is string => Boolean(line));
+    return lines.length > 0 ? lines.join("\n") : rawText;
+  } catch {
+    return rawText;
+  }
+}
+
+function normalizeStructuredExportText(sourceType: string, rawText: string): string {
+  if (sourceType === "calendar_export") {
+    return normalizeCalendarExportText(rawText);
+  }
+  if (sourceType === "task_list") {
+    return normalizeTaskListExportText(rawText);
+  }
+  return rawText;
 }
 
 const TOPIC_SEGMENT_STOP_WORDS = new Set([
@@ -832,7 +927,7 @@ async function attachTopicAndCommunityDerivationsForClient(
 }
 
 export async function ingestArtifact(request: IngestRequest): Promise<IngestResult> {
-  return withTransaction(async (client) => {
+  const result = await withTransaction(async (client): Promise<IngestResultWithDeferredRelationPlan> => {
     if (request.artifactId && request.observationId && typeof request.rawText === "string") {
       const artifactRows = await client.query<{
         artifact_id: string;
@@ -891,6 +986,10 @@ export async function ingestArtifact(request: IngestRequest): Promise<IngestResu
         scenes: request.scenes,
         fragments: request.fragments,
         skipNarrativeClaims: request.skipNarrativeClaims,
+        skipExternalRelationCandidates: request.skipExternalRelationCandidates,
+        forceExternalRelationCandidates: request.forceExternalRelationCandidates,
+        relationIeMode: request.relationIeMode,
+        relationIeExtractors: request.relationIeExtractors,
         artifact
       });
     }
@@ -930,10 +1029,40 @@ export async function ingestArtifact(request: IngestRequest): Promise<IngestResu
       scenes: request.scenes,
       fragments: request.fragments,
       skipNarrativeClaims: request.skipNarrativeClaims,
+      skipExternalRelationCandidates: request.skipExternalRelationCandidates,
+      forceExternalRelationCandidates: request.forceExternalRelationCandidates,
+      relationIeMode: request.relationIeMode,
+      relationIeExtractors: request.relationIeExtractors,
       artifact,
       hasTextContent: observation.hasTextContent
     });
   });
+
+  if (result.deferredExternalRelationPlan && result.deferredExternalRelationPlan.scenes.length > 0) {
+    await withTransaction((client) =>
+      stageExternalRelationCandidatesForScenes(client, {
+        namespaceId: result.deferredExternalRelationPlan!.namespaceId,
+        forceRun: result.deferredExternalRelationPlan!.forceRun,
+        relationIeMode: result.deferredExternalRelationPlan!.relationIeMode,
+        extractors: result.deferredExternalRelationPlan!.extractors,
+        scenes: result.deferredExternalRelationPlan!.scenes
+      })
+    );
+  }
+
+  const skipAutomaticVectorActivation =
+    request.skipVectorActivation || request.sourceChannel?.startsWith("benchmark:") || false;
+
+  if (!skipAutomaticVectorActivation) {
+    await runNamespaceVectorActivation({
+      namespaceId: request.namespaceId,
+      scope: "runtime",
+      reason: "artifact_ingest"
+    });
+  }
+
+  const { deferredExternalRelationPlan: _deferredExternalRelationPlan, ...publicResult } = result;
+  return publicResult;
 }
 
 export async function ingestObservationTextForClient(
@@ -951,22 +1080,43 @@ export async function ingestObservationTextForClient(
     readonly scenes?: readonly import("../types.js").SceneRecord[];
     readonly fragments?: readonly import("../types.js").FragmentRecord[];
     readonly skipNarrativeClaims?: boolean;
+    readonly skipExternalRelationCandidates?: boolean;
+    readonly forceExternalRelationCandidates?: boolean;
+    readonly relationIeMode?: "support_only" | "support_and_promote";
+    readonly relationIeExtractors?: readonly string[];
     readonly artifact: ArtifactRecord;
     readonly hasTextContent?: boolean;
   }
-): Promise<IngestResult> {
+): Promise<IngestResultWithDeferredRelationPlan> {
   if (request.sourceType === "transcript") {
+    const routerV2Packet = buildIngestionRouterV2Packet({
+      namespaceId: request.namespaceId,
+      sourceType: request.sourceType,
+      sourceUri: request.artifact.uri,
+      capturedAt: request.capturedAt,
+      rawText: normalizeText(request.rawText),
+      mimeType: request.artifact.mimeType ?? null,
+      sourceChannel: request.sourceChannel ?? null,
+      metadata: request.metadata
+    });
+    const routerV2Metadata = ingestionRouterV2Metadata(routerV2Packet);
     const promoted = await promoteTranscriptArtifactForClient(client, {
       namespaceId: request.namespaceId,
       artifactId: request.artifactId,
       observationId: request.observationId,
       capturedAt: request.capturedAt,
       transcriptText: request.rawText,
-      transcriptMetadata: request.metadata,
+      transcriptMetadata: {
+        ...(request.metadata ?? {}),
+        ingestion_router_v2: routerV2Metadata
+      },
       sessionId: request.sessionId,
       sourceType: request.sourceType as SourceType,
       sourceChannel: request.sourceChannel,
-      baseMetadata: request.metadata,
+      baseMetadata: {
+        ...(request.metadata ?? {}),
+        ingestion_router_v2: routerV2Metadata
+      },
       sourceUri: request.artifact.uri
     });
 
@@ -974,11 +1124,22 @@ export async function ingestObservationTextForClient(
       artifact: request.artifact,
       fragments: [...promoted.fragments],
       candidateWrites: [...promoted.candidateWrites],
-      episodicInsertCount: promoted.episodicInsertCount
+      episodicInsertCount: promoted.episodicInsertCount,
+      deferredExternalRelationPlan: promoted.deferredExternalRelationPlan
     };
   }
 
-  const normalizedText = normalizeText(request.rawText);
+  const normalizedText = normalizeText(normalizeStructuredExportText(request.sourceType, request.rawText));
+  const routerV2Packet = buildIngestionRouterV2Packet({
+    namespaceId: request.namespaceId,
+    sourceType: request.sourceType,
+    sourceUri: request.artifact.uri,
+    capturedAt: request.capturedAt,
+    rawText: normalizedText,
+    mimeType: request.artifact.mimeType ?? null,
+    sourceChannel: request.sourceChannel ?? null,
+    metadata: request.metadata
+  });
   const scenes = request.scenes ?? splitIntoScenes(normalizedText, request.capturedAt);
   const fragments = request.fragments ?? splitIntoFragments(normalizedText, request.capturedAt);
 
@@ -1012,6 +1173,7 @@ export async function ingestObservationTextForClient(
         tags: fragment.tags ?? [],
         source_type: request.sourceType,
         speaker_name: fragment.speaker ?? null,
+        ingestion_router_v2: ingestionRouterV2Metadata(routerV2Packet),
         ...(deriveSalienceMetadata(fragment.text) ?? {})
       };
 
@@ -1045,6 +1207,22 @@ export async function ingestObservationTextForClient(
         bucket.sourceMemoryIds.push(inserted.sourceMemoryId);
       }
       bucket.sourceChunkIds.push(inserted.sourceChunkId);
+      if (routerV2Packet.envelopeSourceType) {
+        await persistExtractionUnitsForClient(
+          client,
+          buildExtractionUnits({
+            namespaceId: request.namespaceId,
+            sourceType: routerV2Packet.envelopeSourceType,
+            sourceId: routerV2Packet.sourceId,
+            sourceMemoryId: inserted.sourceMemoryId ?? null,
+            sourceChunkId: inserted.sourceChunkId,
+            capturedAt: request.capturedAt,
+            speaker: fragment.speaker ?? null,
+            text: fragment.text,
+            metadata
+          })
+        );
+      }
       sceneSources.set(fragment.sceneIndex, bucket);
       insertedFragments.push({
         sourceMemoryId: inserted.sourceMemoryId,
@@ -1096,12 +1274,18 @@ export async function ingestObservationTextForClient(
     metadata: request.metadata
   });
 
+  let deferredExternalRelationPlan: DeferredExternalRelationCandidatePlan | undefined;
   if (!request.skipNarrativeClaims) {
-    await stageNarrativeClaims(client, {
+    const stagedNarrativeClaims = await stageNarrativeClaims(client, {
       namespaceId: request.namespaceId,
       artifactId: request.artifactId,
       observationId: request.observationId,
       capturedAt: request.capturedAt,
+      skipExternalRelationCandidates: request.skipExternalRelationCandidates,
+      deferExternalRelationCandidates: !request.skipExternalRelationCandidates,
+      forceExternalRelationCandidates: request.forceExternalRelationCandidates,
+      relationIeMode: request.relationIeMode,
+      relationIeExtractors: request.relationIeExtractors,
       scenes,
       sceneSources: scenes.map((scene) => ({
         sceneIndex: scene.sceneIndex,
@@ -1110,12 +1294,14 @@ export async function ingestObservationTextForClient(
         occurredAt: sceneSources.get(scene.sceneIndex)?.occurredAt ?? scene.occurredAt
       }))
     });
+    deferredExternalRelationPlan = stagedNarrativeClaims.deferredExternalRelationPlan;
   }
 
   return {
     artifact: request.artifact,
     fragments: [...fragments],
     candidateWrites,
-    episodicInsertCount
+    episodicInsertCount,
+    deferredExternalRelationPlan
   };
 }

@@ -100,7 +100,7 @@ function functionCallsIdentifier(functionDeclaration, identifierName) {
   return found;
 }
 
-function collectSearchFiles(searchRoot) {
+function collectTypeScriptFiles(rootPath) {
   const results = [];
   function walk(currentPath) {
     for (const entry of fs.readdirSync(currentPath, { withFileTypes: true })) {
@@ -112,8 +112,8 @@ function collectSearchFiles(searchRoot) {
       }
     }
   }
-  if (fs.existsSync(searchRoot)) {
-    walk(searchRoot);
+  if (fs.existsSync(rootPath)) {
+    walk(rootPath);
   }
   return results.sort();
 }
@@ -141,21 +141,45 @@ function resolveCap(relativePath, caps) {
 
 function buildBaselineConfig() {
   const servicePath = path.join(LOCAL_BRAIN_DIR, "src/retrieval/service.ts");
+  const supportObjectsPath = path.join(LOCAL_BRAIN_DIR, "src/retrieval/support-objects.ts");
   const searchRoot = path.join(LOCAL_BRAIN_DIR, "src/retrieval/search");
+  const retrievalRoot = path.join(LOCAL_BRAIN_DIR, "src/retrieval");
   const serviceSource = parseSource(servicePath);
+  const fileCaps = {
+    "src/retrieval/service.ts": fileLineCount(servicePath),
+    "src/retrieval/support-objects.ts": fileLineCount(supportObjectsPath),
+    "src/retrieval/search/runtime.ts": 2000,
+    "src/retrieval/search/**/*.ts": 1500,
+    "src/retrieval/candidate-assembly/**/*.ts": 1200,
+    "src/retrieval/typed-contract-registry.ts": 1200,
+    "src/retrieval/typed-contract-completeness.ts": 1500,
+    "src/retrieval/typed-backfill-engine.ts": 1000,
+    "src/retrieval/artifact-derivation-search.ts": 1000,
+    "src/retrieval/book-list-support.ts": 1000,
+    "src/retrieval/typed-render-contracts.ts": 1500,
+    "src/retrieval/typed-backfill-policy.ts": 1500,
+    "src/retrieval/typed-support-extractors.ts": 1200,
+    "src/retrieval/contract-first-runtime-policy.ts": 1000,
+    "src/retrieval/retrieval-controller.ts": 1500,
+    "src/retrieval/retrieval-controller-types.ts": 1000,
+    "src/retrieval/planner-intent-budgets.ts": 1000,
+    "src/retrieval/profile-contracts.ts": 1000,
+    "src/retrieval/location-history/**/*.ts": 1000,
+    "src/retrieval/temporal/pair-event-gating.ts": 1000
+  };
   return {
     serviceFile: "src/retrieval/service.ts",
     maxLines: fileLineCount(servicePath),
+    supportObjectsFile: "src/retrieval/support-objects.ts",
+    maxSupportObjectsLines: fileLineCount(supportObjectsPath),
     allowedTopLevelSymbols: collectTopLevelSymbols(serviceSource),
     delegationRequirements: {
       searchMemoryMustCall: "runSearchMemory"
     },
-    fileCaps: {
-      "src/retrieval/service.ts": fileLineCount(servicePath),
-      "src/retrieval/search/runtime.ts": 2000,
-      "src/retrieval/search/**/*.ts": 1500
-    },
-    trackedSearchFiles: collectSearchFiles(searchRoot).map((filePath) => relativePosix(LOCAL_BRAIN_DIR, filePath))
+    fileCaps,
+    trackedRetrievalFiles: collectTypeScriptFiles(retrievalRoot)
+      .map((filePath) => relativePosix(LOCAL_BRAIN_DIR, filePath))
+      .filter((relativePath) => resolveCap(relativePath, fileCaps) !== null)
   };
 }
 
@@ -166,6 +190,15 @@ function checkConfig(config) {
   const serviceLineCount = fileLineCount(servicePath);
   if (serviceLineCount > Number(config.maxLines)) {
     failures.push(`${config.serviceFile} grew to ${serviceLineCount} lines (max ${config.maxLines})`);
+  }
+  const supportObjectsFile = config.supportObjectsFile;
+  const maxSupportObjectsLines = Number(config.maxSupportObjectsLines ?? 0);
+  if (supportObjectsFile && maxSupportObjectsLines > 0) {
+    const supportObjectsPath = path.join(LOCAL_BRAIN_DIR, supportObjectsFile);
+    const supportObjectsLineCount = fileLineCount(supportObjectsPath);
+    if (supportObjectsLineCount > maxSupportObjectsLines) {
+      failures.push(`${supportObjectsFile} grew to ${supportObjectsLineCount} lines (max ${maxSupportObjectsLines})`);
+    }
   }
 
   const currentSymbols = collectTopLevelSymbols(serviceSource);
@@ -183,8 +216,8 @@ function checkConfig(config) {
     failures.push(`searchMemory must delegate to ${requiredCallee}`);
   }
 
-  const searchFiles = collectSearchFiles(path.join(LOCAL_BRAIN_DIR, "src/retrieval/search"));
-  for (const filePath of searchFiles) {
+  const retrievalFiles = collectTypeScriptFiles(path.join(LOCAL_BRAIN_DIR, "src/retrieval"));
+  for (const filePath of retrievalFiles) {
     const relativePath = relativePosix(LOCAL_BRAIN_DIR, filePath);
     const maxLines = resolveCap(relativePath, config.fileCaps ?? {});
     if (maxLines !== null) {

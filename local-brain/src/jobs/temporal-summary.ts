@@ -373,16 +373,21 @@ async function loadTopEvents(
 ): Promise<string> {
   const topEvents = await client.query<TopEventRow>(
     `
+      WITH source_memory_times AS (
+        SELECT
+          em.artifact_observation_id,
+          min(em.occurred_at) AS occurred_at
+        FROM episodic_memory em
+        WHERE em.namespace_id = $1
+          AND em.artifact_observation_id IS NOT NULL
+          AND em.occurred_at >= $2::timestamptz
+          AND em.occurred_at < $3::timestamptz
+        GROUP BY em.artifact_observation_id
+      )
       SELECT ne.event_label, count(*)::text AS event_count
       FROM narrative_events ne
-      LEFT JOIN LATERAL (
-        SELECT em.occurred_at
-        FROM episodic_memory em
-        WHERE em.namespace_id = ne.namespace_id
-          AND em.artifact_observation_id = ne.artifact_observation_id
-        ORDER BY em.occurred_at ASC, em.id ASC
-        LIMIT 1
-      ) AS source_memory ON TRUE
+      LEFT JOIN source_memory_times source_memory
+        ON source_memory.artifact_observation_id = ne.artifact_observation_id
       WHERE ne.namespace_id = $1
         AND coalesce(ne.event_kind, '') <> 'story_scene'
         AND COALESCE(ne.time_start, source_memory.occurred_at, ne.created_at) >= $2::timestamptz

@@ -2,8 +2,50 @@ export function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
+function stripDiacritics(value: string): string {
+  return value.normalize("NFKD").replace(/\p{Mark}+/gu, "");
+}
+
+function stripLeadingArticle(value: string): string {
+  return value.replace(/^(?:the|a|an)\s+/u, "");
+}
+
 export function normalizeEntityLookupName(value: string): string {
-  return normalizeWhitespace(value.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/gu, "")).toLowerCase();
+  const normalized = stripDiacritics(value ?? "")
+    .replace(/\b([\p{Letter}\p{Number}]+)[’']s\b/gu, "$1")
+    .replace(/[’']/gu, "")
+    .replace(/&/gu, " and ")
+    .replace(/[\/+-]+/gu, " ")
+    .replace(/^[^\p{Letter}\p{Number}]+|[^\p{Letter}\p{Number}]+$/gu, "");
+  return normalizeWhitespace(normalized).toLowerCase();
+}
+
+function baseLookupCandidates(value: string): readonly string[] {
+  const normalized = normalizeEntityLookupName(value);
+  if (!normalized) {
+    return [];
+  }
+  const candidates = new Set<string>([normalized]);
+  const withoutArticle = stripLeadingArticle(normalized);
+  if (withoutArticle && withoutArticle !== normalized) {
+    candidates.add(withoutArticle);
+  }
+  if (normalized.includes(" and ")) {
+    candidates.add(normalized.replace(/\band\b/gu, "&"));
+  }
+  if (normalized.includes("&")) {
+    candidates.add(normalized.replace(/&/gu, "and"));
+  }
+  return [...candidates].map((candidate) => normalizeWhitespace(candidate)).filter(Boolean);
+}
+
+function matchesAliasVariant(candidate: string, variant: string): boolean {
+  return (
+    candidate === variant ||
+    candidate.startsWith(`${variant} `) ||
+    candidate.endsWith(` ${variant}`) ||
+    stripLeadingArticle(candidate) === variant
+  );
 }
 
 const CANONICAL_ALIAS_GROUPS = [
@@ -36,14 +78,14 @@ const CANONICAL_DISPLAY_NAMES: Record<string, string> = {
 };
 
 export function expandEntityLookupCandidates(value: string): readonly string[] {
-  const normalized = normalizeEntityLookupName(value);
-  if (!normalized) {
+  const baseCandidates = baseLookupCandidates(value);
+  if (baseCandidates.length === 0) {
     return [];
   }
 
-  const candidates = new Set<string>([normalized]);
+  const candidates = new Set<string>(baseCandidates);
   for (const group of CANONICAL_ALIAS_GROUPS) {
-    if (group.variants.some((variant) => normalized === variant || normalized.includes(variant))) {
+    if (baseCandidates.some((candidate) => group.variants.some((variant) => matchesAliasVariant(candidate, variant)))) {
       candidates.add(group.canonical);
       for (const variant of group.variants) {
         candidates.add(variant);

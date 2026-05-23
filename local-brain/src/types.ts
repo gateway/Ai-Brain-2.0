@@ -10,6 +10,8 @@ export type SourceType =
   | "video"
   | "transcript"
   | "pdf"
+  | "task_list"
+  | "calendar_export"
   | "image"
   | "project_note"
   | "chat_turn";

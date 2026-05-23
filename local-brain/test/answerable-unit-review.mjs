@@ -331,6 +331,49 @@ test("reader resolves temporal-qualified meal companion units without requiring 
   assert.equal(reader.claimText, "her mother");
 });
 
+test("reader aggregates support-network units from friends, family, and mentors", () => {
+  const candidates = [
+    {
+      unit: {
+        id: "support-1",
+        namespaceId: "ns",
+        sourceKind: "episodic_memory",
+        sourceMemoryId: "m1",
+        sourceDerivationId: null,
+        artifactId: null,
+        artifactObservationId: null,
+        sourceChunkId: "c1",
+        unitType: "participant_turn",
+        contentText: "Caroline: My friends, family and mentors are my rocks and help me push on.",
+        ownerEntityHint: "Caroline",
+        speakerEntityHint: "Caroline",
+        participantNames: ["Caroline", "Melanie"],
+        occurredAt: null,
+        validFrom: null,
+        validUntil: null,
+        isCurrent: null,
+        ownershipConfidence: 1,
+        provenance: {},
+        metadata: {},
+        lexicalScore: 0.9
+      },
+      ownershipStatus: "owned",
+      subjectMatchScore: 1.45,
+      temporalScore: 0,
+      authorityScore: 1,
+      supportScore: 0.4,
+      totalScore: 5.1
+    }
+  ];
+
+  const reader = selectReaderResult("Who supports Caroline when she has a negative experience?", candidates);
+  assert.equal(reader.applied, true);
+  assert.equal(reader.decision, "resolved");
+  assert.match(reader.claimText ?? "", /friends/i);
+  assert.match(reader.claimText ?? "", /family/i);
+  assert.match(reader.claimText ?? "", /mentors/i);
+});
+
 test("companion exclusion query resolves with aggregated social evidence rows", () => {
   const candidates = [
     {

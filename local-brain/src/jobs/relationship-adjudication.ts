@@ -960,6 +960,12 @@ export async function runRelationshipAdjudication(
               metadata
             )
             VALUES ($1, $2, 'significant_other_of', $3, $4, 'active', $5, $6, $7::jsonb)
+            ON CONFLICT (namespace_id, subject_entity_id, predicate, object_entity_id, valid_from)
+            DO UPDATE SET
+              confidence = GREATEST(relationship_memory.confidence, EXCLUDED.confidence),
+              status = 'active',
+              source_candidate_id = EXCLUDED.source_candidate_id,
+              metadata = relationship_memory.metadata || EXCLUDED.metadata
             RETURNING id
           `,
           [
@@ -1313,6 +1319,12 @@ export async function runRelationshipAdjudication(
             metadata
           )
           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8::jsonb)
+          ON CONFLICT (namespace_id, subject_entity_id, predicate, object_entity_id, valid_from)
+          DO UPDATE SET
+            confidence = GREATEST(relationship_memory.confidence, EXCLUDED.confidence),
+            status = 'active',
+            source_candidate_id = EXCLUDED.source_candidate_id,
+            metadata = relationship_memory.metadata || EXCLUDED.metadata
           RETURNING id
         `,
         [

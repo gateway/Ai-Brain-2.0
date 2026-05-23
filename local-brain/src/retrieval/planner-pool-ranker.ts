@@ -385,7 +385,12 @@ function queryRequestsRelativeTemporalPhrasing(queryText: string): boolean {
   const normalized = normalizeLower(queryText);
   return (
     /\b(last|next|before|after|week(?:end)?|month|year)\b/u.test(normalized) ||
-    /\bhow long before\b|\bhow long after\b/u.test(normalized)
+    /\bhow long before\b|\bhow long after\b/u.test(normalized) ||
+    (
+      /\bwhen\b/u.test(normalized) &&
+      /\bfirst\b/u.test(normalized) &&
+      /\b(?:watch(?:ed)?|win|won|travel(?:ed)?|went|visit(?:ed)?|met|see|saw|start(?:ed)?)\b/u.test(normalized)
+    )
   );
 }
 
@@ -464,6 +469,64 @@ function isDatedVentureStateQuery(queryText: string): boolean {
 
 function isEducationProfileQuery(queryText: string): boolean {
   return /\bfields?\b|\bdegree\b|\bmajor\b|\beducat(?:ion|e|on)\b|\bstud(?:y|ied|ying)\b|\bcertification\b/iu.test(queryText);
+}
+
+function isRelationshipStatusQuery(queryText: string): boolean {
+  return /\brelationship status\b|\bsingle\b|\bdating\b|\bin a relationship\b|\bseeing someone\b/iu.test(queryText);
+}
+
+function extractProfileQuerySubjectHints(queryText: string): readonly string[] {
+  return [...new Set((queryText.match(/\b[A-Z][a-z]+\b/gu) ?? [])
+    .map((value) => normalizeLower(value))
+    .filter((value) => !["what", "which", "when", "where", "who", "why", "how", "is", "are"].includes(value)))];
+}
+
+function extractLabeledSpeakerSegments(text: string): ReadonlyArray<{ readonly speaker: string; readonly segment: string }> {
+  const matches = [...text.matchAll(/([A-Z][A-Za-z'’.-]{1,40}):\s*/gu)];
+  if (matches.length === 0) {
+    return [];
+  }
+  const segments: Array<{ readonly speaker: string; readonly segment: string }> = [];
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index]!;
+    const start = match.index! + match[0].length;
+    const end = index + 1 < matches.length ? matches[index + 1]!.index! : text.length;
+    const speaker = normalizeLower(match[1]);
+    const segment = normalizeLower(text.slice(start, end));
+    if (!speaker || !segment) {
+      continue;
+    }
+    segments.push({ speaker, segment });
+  }
+  return segments;
+}
+
+function relationshipCueBalance(queryText: string, content: string): number {
+  if (!isRelationshipStatusQuery(queryText)) {
+    return 0;
+  }
+  const subjectHints = extractProfileQuerySubjectHints(queryText);
+  if (subjectHints.length === 0) {
+    return 0;
+  }
+  const segments = extractLabeledSpeakerSegments(content);
+  const relationshipCue = /\b(single|single parent|breakup|broke up|not dating|not seeing anyone|on my own|girlfriend|boyfriend|partner|wife|husband|fianc[eé]|fiancée|engaged|married)\b/u;
+  if (segments.length === 0) {
+    const hasSubjectCue = subjectHints.some((hint) => content.includes(hint)) && relationshipCue.test(content);
+    return hasSubjectCue ? 1.4 : 0;
+  }
+  let score = 0;
+  for (const segment of segments) {
+    if (!relationshipCue.test(segment.segment)) {
+      continue;
+    }
+    if (subjectHints.includes(segment.speaker)) {
+      score += /\b(single|single parent|breakup|broke up|not dating|not seeing anyone|on my own)\b/u.test(segment.segment) ? 3.2 : 2.5;
+    } else {
+      score -= /\b(girlfriend|boyfriend|partner|wife|husband|fianc[eé]|fiancée|engaged|married)\b/u.test(segment.segment) ? 3 : 1.2;
+    }
+  }
+  return score;
 }
 
 function hasEducationIntentCue(content: string): boolean {
@@ -723,6 +786,7 @@ function profileStructureWeight(
           ? 1.2
           : 0
       : 0;
+  const relationshipStatusBoost = relationshipCueBalance(queryText, content);
   const praisePenalty =
     wantsEducation && isPraiseOnlyProfileText(content)
       ? 1.2 + Math.min(0.4, (clusterSummary?.praiseOnlyCount ?? 0) * 0.08)
@@ -747,6 +811,7 @@ function profileStructureWeight(
     basketballGoalBoost +
     authorPreferenceBoost +
     travelPayloadBoost +
+    relationshipStatusBoost +
     ventureStateBoost -
     offCourtPenaltyForBasketballGoals -
     basketballPenaltyForOffCourtGoals -

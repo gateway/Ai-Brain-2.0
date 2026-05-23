@@ -115,7 +115,7 @@ export async function enqueueVectorSyncBackfill(
           )
         FROM semantic_memory sm
         WHERE sm.namespace_id = $1
-          AND sm.embedding IS NULL
+          AND (sm.embedding IS NULL OR sm.embedding_model IS DISTINCT FROM $3::text)
           AND sm.status = 'active'
           AND sm.valid_until IS NULL
         ORDER BY sm.valid_from DESC
@@ -185,7 +185,11 @@ export async function enqueueVectorSyncBackfill(
         JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
         JOIN artifacts a ON a.id = ao.artifact_id
         WHERE a.namespace_id = $1
-          AND ad.embedding IS NULL
+          AND (
+            ad.embedding IS NULL
+            OR ad.model IS DISTINCT FROM $3::text
+            OR ad.output_dimensionality IS DISTINCT FROM $4::integer
+          )
           AND coalesce(ad.content_text, '') <> ''
         ORDER BY ad.created_at DESC
         LIMIT $7::int
@@ -415,8 +419,8 @@ async function writeVectorSyncEmbedding(job: ClaimedVectorSyncRow, embedding: re
         `
           UPDATE artifact_derivations
           SET embedding = $2::vector,
-              provider = COALESCE(provider, $3),
-              model = COALESCE(model, $4),
+              provider = $3,
+              model = $4,
               output_dimensionality = $5
           WHERE id = $1
         `,

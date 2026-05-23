@@ -1,10 +1,21 @@
 import type { PoolClient } from "pg";
 import { splitIntoFragments } from "./fragment.js";
 import { deriveSalienceMetadata, insertFragment, normalizeText } from "./persist.js";
-import { stageNarrativeClaims } from "../relationships/narrative.js";
+import { stageNarrativeClaims, type DeferredExternalRelationCandidatePlan } from "../relationships/narrative.js";
+import { stageExternalRelationCandidatesForScenes } from "../relationships/external-ie.js";
+import { buildExtractionUnits, persistExtractionUnitsForClient } from "../taxonomy-temporal/extraction-units.js";
 import { withTransaction } from "../db/client.js";
 import type { CandidateMemoryWrite } from "./types.js";
 import type { FragmentRecord, SceneRecord, SourceType } from "../types.js";
+
+interface TranscriptPromotionResult {
+  readonly fragments: readonly FragmentRecord[];
+  readonly candidateWrites: readonly CandidateMemoryWrite[];
+  readonly episodicInsertCount: number;
+  readonly utteranceCount: number;
+  readonly claimPromotionSkipped: boolean;
+  readonly deferredExternalRelationPlan?: DeferredExternalRelationCandidatePlan;
+}
 
 interface TranscriptSegmentLike {
   readonly id?: number;
@@ -67,6 +78,15 @@ function asString(value: unknown): string | undefined {
 function asNumber(value: unknown): number | undefined {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function readRouterSourceId(metadata: Record<string, unknown> | undefined): string | null {
+  const routerMetadata = metadata?.ingestion_router_v2;
+  if (!routerMetadata || typeof routerMetadata !== "object" || Array.isArray(routerMetadata)) {
+    return null;
+  }
+  const sourceId = (routerMetadata as Record<string, unknown>).source_id;
+  return typeof sourceId === "string" && sourceId.trim() ? sourceId : null;
 }
 
 function normalizeSpeakerLabel(raw: string | undefined): string | undefined {
@@ -454,6 +474,7 @@ export async function promoteTranscriptArtifactForClient(
   readonly episodicInsertCount: number;
   readonly utteranceCount: number;
   readonly claimPromotionSkipped: boolean;
+  readonly deferredExternalRelationPlan?: DeferredExternalRelationCandidatePlan;
 }> {
   const priorObservationRows = await client.query<{ artifact_observation_id: string }>(
     `
@@ -630,7 +651,7 @@ export async function promoteTranscriptArtifactForClient(
     }
 
     for (const fragment of utteranceFragments) {
-      const metadata = {
+      const metadata: Record<string, unknown> = {
         ...(input.baseMetadata ?? {}),
         transcript_derivation_id: input.derivationId ?? null,
         transcript_utterance_index: utterance.utteranceIndex,
@@ -662,6 +683,23 @@ export async function promoteTranscriptArtifactForClient(
         disableCandidatePromotion: true
       });
 
+      if (metadata.ingestion_router_v2) {
+        await persistExtractionUnitsForClient(
+          client,
+          buildExtractionUnits({
+            namespaceId: input.namespaceId,
+            sourceType: "asr",
+            sourceId: readRouterSourceId(input.baseMetadata),
+            sourceMemoryId: inserted.sourceMemoryId ?? null,
+            sourceChunkId: inserted.sourceChunkId,
+            capturedAt: input.capturedAt,
+            speaker: utterance.speakerLabel ?? utterance.speakerName ?? null,
+            text: fragment.text,
+            metadata
+          })
+        );
+      }
+
       fragments.push(fragment);
       candidateWrites.push(...inserted.candidates);
       if (inserted.episodicInserted) {
@@ -681,12 +719,14 @@ export async function promoteTranscriptArtifactForClient(
     }
   }
 
+  let deferredExternalRelationPlan: DeferredExternalRelationCandidatePlan | undefined;
   if (!claimPromotionSkipped) {
-    await stageNarrativeClaims(client, {
+    const stagedNarrativeClaims = await stageNarrativeClaims(client, {
       namespaceId: input.namespaceId,
       artifactId: input.artifactId,
       observationId: input.observationId,
       capturedAt: input.capturedAt,
+      deferExternalRelationCandidates: true,
       scenes,
       sceneSources: scenes.map((scene) => ({
         sceneIndex: scene.sceneIndex,
@@ -695,6 +735,7 @@ export async function promoteTranscriptArtifactForClient(
         occurredAt: sceneSources.get(scene.sceneIndex)?.occurredAt ?? scene.occurredAt
       }))
     });
+    deferredExternalRelationPlan = stagedNarrativeClaims.deferredExternalRelationPlan;
   }
 
   return {
@@ -702,7 +743,8 @@ export async function promoteTranscriptArtifactForClient(
     candidateWrites,
     episodicInsertCount,
     utteranceCount: utterances.length,
-    claimPromotionSkipped
+    claimPromotionSkipped,
+    deferredExternalRelationPlan
   };
 }
 
@@ -725,7 +767,7 @@ export async function ingestTranscriptDerivation(input: {
   readonly utteranceCount: number;
   readonly claimPromotionSkipped: boolean;
 }> {
-  return withTransaction(async (client) =>
+  const result: TranscriptPromotionResult = await withTransaction(async (client) =>
     promoteTranscriptArtifactForClient(client, {
       namespaceId: input.namespaceId,
       artifactId: input.artifactId,
@@ -741,4 +783,17 @@ export async function ingestTranscriptDerivation(input: {
       sourceUri: input.sourceUri
     })
   );
+  if (result.deferredExternalRelationPlan && result.deferredExternalRelationPlan.scenes.length > 0) {
+    await withTransaction((client) =>
+      stageExternalRelationCandidatesForScenes(client, {
+        namespaceId: result.deferredExternalRelationPlan!.namespaceId,
+        forceRun: result.deferredExternalRelationPlan!.forceRun,
+        relationIeMode: result.deferredExternalRelationPlan!.relationIeMode,
+        extractors: result.deferredExternalRelationPlan!.extractors,
+        scenes: result.deferredExternalRelationPlan!.scenes
+      })
+    );
+  }
+  const { deferredExternalRelationPlan: _deferredExternalRelationPlan, ...publicResult } = result;
+  return publicResult;
 }

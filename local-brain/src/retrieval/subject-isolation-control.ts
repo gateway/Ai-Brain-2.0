@@ -168,8 +168,16 @@ export function evaluateSubjectIsolationResult(
   const fallbackRow = isFallbackRow(result);
 
   let status: SubjectIsolationStatus = "no_subject_signal";
-  if (targetHints.length !== 1) {
-    status = "subject_owned";
+  if (targetHints.length > 1) {
+    if (targetSignalHit || hasSourceSentenceTargetHit || primarySpeakerTurnCount > 0) {
+      status = foreignSignalCount > 0 || foreignSpeakerTurnCount > 0 ? "mixed_subject" : "subject_owned";
+    } else if (foreignSignalCount > 0 || foreignSpeakerTurnCount > 0) {
+      status = "foreign_subject";
+    } else {
+      status = "no_subject_signal";
+    }
+  } else if (targetHints.length !== 1) {
+    status = "no_subject_signal";
   } else if (fallbackRow && !targetSignalHit && primarySpeakerTurnCount === 0 && !hasSourceSentenceTargetHit) {
     status = foreignSignalCount > 0 ? "foreign_subject" : "no_subject_signal";
   } else if (derivationType === "participant_turn" || derivationType === "source_sentence") {
@@ -229,7 +237,7 @@ export function retainSubjectIsolatedRecallResults(
   const targetHints = parseQueryEntityFocus(queryText).primaryHints
     .map((value) => normalizeWhitespace(value).toLowerCase())
     .filter(Boolean);
-  if (targetHints.length !== 1) {
+  if (targetHints.length === 0) {
     return {
       results,
       telemetry: {

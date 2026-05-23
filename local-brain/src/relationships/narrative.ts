@@ -101,12 +101,35 @@ interface StageNarrativeClaimsInput {
   readonly capturedAt: string;
   readonly scenes: readonly SceneRecord[];
   readonly sceneSources: readonly SceneSourceRef[];
+  readonly skipExternalRelationCandidates?: boolean;
+  readonly forceExternalRelationCandidates?: boolean;
+  readonly deferExternalRelationCandidates?: boolean;
+  readonly relationIeMode?: "support_only" | "support_and_promote";
+  readonly relationIeExtractors?: readonly string[];
 }
 
-interface StageNarrativeClaimsResult {
+export interface DeferredExternalRelationCandidateSceneInput {
+  readonly sceneIndex: number;
+  readonly sceneId: string;
+  readonly text: string;
+  readonly occurredAt: string;
+  readonly sourceMemoryId: string | null;
+  readonly sourceChunkId: string | null;
+}
+
+export interface DeferredExternalRelationCandidatePlan {
+  readonly namespaceId: string;
+  readonly forceRun?: boolean;
+  readonly relationIeMode?: "support_only" | "support_and_promote";
+  readonly extractors?: readonly string[];
+  readonly scenes: readonly DeferredExternalRelationCandidateSceneInput[];
+}
+
+export interface StageNarrativeClaimsResult {
   readonly sceneCount: number;
   readonly claimCount: number;
   readonly relationshipCount: number;
+  readonly deferredExternalRelationPlan?: DeferredExternalRelationCandidatePlan;
 }
 
 interface SessionEntityContext {
@@ -193,6 +216,14 @@ const WEEKDAY_NAMES = [
 ] as const;
 
 const STOP_PERSON_NAMES = new Set([
+  "And",
+  "But",
+  "So",
+  "Then",
+  "Also",
+  "Well",
+  "Sorry",
+  "Because",
   "He",
   "Her",
   "Him",
@@ -383,6 +414,10 @@ function stripLeadingTemporalPhrase(value: string): string {
   }
 
   return cleaned;
+}
+
+function stripLeadingSceneConnector(value: string): string {
+  return normalizeWhitespace(value).replace(/^(?:And|But|So|Then|Also|Well|Sorry|Because)\b[,:]?\s*/u, "");
 }
 
 function levenshteinDistance(left: string, right: string): number {
@@ -705,8 +740,8 @@ function selectPrimaryWorkTarget(value: string): string {
 function inferOrgOrProjectType(name: string): EntityType {
   const normalized = normalizeWhitespace(name);
   if (
-    /\b(?:Software|Entertainment|Studio|Studios|Company|Computers|Association|Air|Realms)\b/iu.test(normalized) ||
-    /^(?:Apogee Software|3D Realms|Rogue Entertainment|Nihilistic Software|Sync-a-Lot Software|Factor 5|TouchFactor|Likemoji|Dreaming Computers|Icelandic Air|Pilot Association)$/iu.test(
+    /\b(?:Software|Entertainment|Studio|Studios|Company|Computers|Association|Air|Realms|Labs|Systems|Technologies|Technology|Games|Interactive)\b/iu.test(normalized) ||
+    /^(?:Apogee Software|3D Realms|Rogue Entertainment|Nihilistic Software|Sync-a-Lot Software|Factor 5|TouchFactor|Likemoji|Dreaming Computers|Icelandic Air|Pilot Association|Two(?:-|\s)Way|Well Inked)$/iu.test(
       normalized
     )
   ) {
@@ -714,6 +749,18 @@ function inferOrgOrProjectType(name: string): EntityType {
   }
 
   return "project";
+}
+
+function inferEmploymentObjectType(name: string, contextText?: string | null): EntityType {
+  const normalizedContext = normalizeWhitespace(contextText ?? "");
+  if (
+    /\b(?:company|employer|organization|firm|studio|association|cofounder|cto|advisor|adviser|intern|hired|works?\s+at|works?\s+for|worked\s+at|worked\s+for)\b/iu.test(
+      normalizedContext
+    )
+  ) {
+    return "org";
+  }
+  return inferOrgOrProjectType(name);
 }
 
 function looksLikeRoleLabel(value: string): boolean {
@@ -987,7 +1034,7 @@ function extractClaimsFromScene(
 
   for (const sentence of sentences) {
     const sentenceText = expandContractions(sentence);
-    const sentenceTextForSubject = stripLeadingTemporalPhrase(sentenceText);
+    const sentenceTextForSubject = stripLeadingSceneConnector(stripLeadingTemporalPhrase(sentenceText));
     const selfMatch = sentenceText.match(/\bmy name is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/iu);
     if (selfMatch) {
       resolvedSelfName = normalizeWhitespace(selfMatch[1] ?? "");
@@ -1867,20 +1914,75 @@ function extractClaimsFromScene(
       }
     }
 
+    const selfHiredAtMatch = sentenceText.match(
+      /\bI(?:\s+was|\s+got)?\s+hired\b[\s\S]{0,160}\bto\s+work\s+at\s+([A-Z][A-Za-z0-9]+(?:-[A-Z][A-Za-z0-9]+)?(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4}?)(?=\s+(?:and|as|with|who|that|which|we|he|she|they|there|in)\b|[.,;]|$)/iu
+    );
+    if (resolvedSelfName && selfHiredAtMatch) {
+      const orgName = selectPrimaryWorkTarget(normalizeWhitespace(selfHiredAtMatch[1] ?? ""));
+      const objectType = inferEmploymentObjectType(orgName, sentenceText);
+      if (orgName) {
+        if (objectType === "org") {
+          lastOrg = orgName;
+        } else {
+          lastProject = orgName;
+        }
+        claims.push({
+          claimType: "employment",
+          subjectName: resolvedSelfName,
+          subjectType: "self",
+          predicate: "worked_at",
+          objectName: orgName,
+          objectType,
+          confidence: 0.9,
+          status: "accepted"
+        });
+      }
+    }
+
+    const selfHiredWithCompanyMatch = sentenceText.match(
+      /\bI(?:\s+was|\s+got)?\s+hired\b[\s\S]{0,200}\bwith\s+([A-Z][A-Za-z0-9]+(?:-[A-Z][A-Za-z0-9]+)?(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4}?)(?=\s+(?:in|where|who|that|which|and)\b|[.,;]|$)/iu
+    );
+    if (resolvedSelfName && selfHiredWithCompanyMatch) {
+      const orgName = selectPrimaryWorkTarget(normalizeWhitespace(selfHiredWithCompanyMatch[1] ?? ""));
+      const objectType = inferEmploymentObjectType(orgName, sentenceText);
+      if (orgName) {
+        if (objectType === "org") {
+          lastOrg = orgName;
+        } else {
+          lastProject = orgName;
+        }
+        claims.push({
+          claimType: "employment",
+          subjectName: resolvedSelfName,
+          subjectType: "self",
+          predicate: "worked_at",
+          objectName: orgName,
+          objectType,
+          confidence: 0.86,
+          status: "accepted"
+        });
+      }
+    }
+
     const selfWorksAtMatch = sentenceText.match(
       /\bI\s+work\s+at\s+([A-Z][A-Za-z0-9]+(?:-[A-Z][A-Za-z0-9]+)?(?:\s+[A-Z][A-Za-z0-9.&-]+){0,4}?)(?=\s+(?:and|as|with|who|that|which|we|he|she|they|there)\b|[.,;]|$)/iu
     );
     if (resolvedSelfName && selfWorksAtMatch) {
       const orgOrProject = normalizeWhitespace(selfWorksAtMatch[1] ?? "");
       if (orgOrProject) {
-        lastProject = orgOrProject;
+        const objectType = inferEmploymentObjectType(orgOrProject, sentenceText);
+        if (objectType === "org") {
+          lastOrg = orgOrProject;
+        } else {
+          lastProject = orgOrProject;
+        }
         claims.push({
           claimType: "employment",
           subjectName: resolvedSelfName,
           subjectType: "self",
           predicate: "works_at",
           objectName: orgOrProject,
-          objectType: "project",
+          objectType,
           confidence: 0.9,
           status: "accepted"
         });
@@ -1895,14 +1997,19 @@ function extractClaimsFromScene(
       const person = resolvePersonName(rawSubject, aliasMap, resolvedSelfName, explicitPeople);
       const orgOrProject = normalizeWhitespace(worksAtMatch[3] ?? "");
       if (person && orgOrProject) {
-        lastProject = orgOrProject;
+        const objectType = inferEmploymentObjectType(orgOrProject, sentenceText);
+        if (objectType === "org") {
+          lastOrg = orgOrProject;
+        } else {
+          lastProject = orgOrProject;
+        }
         claims.push({
           claimType: "employment",
           subjectName: person,
           subjectType: person === resolvedSelfName ? "self" : "person",
           predicate: "works_at",
           objectName: orgOrProject,
-          objectType: "project",
+          objectType,
           confidence: 0.88,
           status: "accepted"
         });
@@ -1919,7 +2026,12 @@ function extractClaimsFromScene(
     if (resolvedSelfName && companionPerson && bothWorkingAtMatch) {
       const orgOrProject = normalizeWhitespace(bothWorkingAtMatch[1] ?? "");
       if (orgOrProject) {
-        lastProject = orgOrProject;
+        const objectType = inferEmploymentObjectType(orgOrProject, sentenceText);
+        if (objectType === "org") {
+          lastOrg = orgOrProject;
+        } else {
+          lastProject = orgOrProject;
+        }
         for (const person of unique([resolvedSelfName, companionPerson])) {
           claims.push({
             claimType: "employment",
@@ -1927,7 +2039,7 @@ function extractClaimsFromScene(
             subjectType: person === resolvedSelfName ? "self" : "person",
             predicate: "worked_at",
             objectName: orgOrProject,
-            objectType: "project",
+            objectType,
             confidence: 0.86,
             status: "accepted"
           });
@@ -2070,14 +2182,16 @@ function extractClaimsFromScene(
     }
 
     if (resolvedSelfName && /\bstarted working for his company\b/iu.test(sentenceText)) {
-      if (lastProject) {
+      const orgOrProject = lastOrg ?? lastProject;
+      const objectType = orgOrProject ? inferEmploymentObjectType(orgOrProject, sentenceText) : "org";
+      if (orgOrProject) {
         claims.push({
           claimType: "employment",
           subjectName: resolvedSelfName,
           subjectType: "self",
           predicate: "worked_at",
-          objectName: lastProject,
-          objectType: "project",
+          objectName: orgOrProject,
+          objectType,
           confidence: 0.92,
           status: "accepted",
           metadata: { role: sentenceText.match(/\bas\s+([A-Za-z ]+?)\b(?:just recently|for|now|$)/iu)?.[1]?.trim() ?? null }
@@ -2109,14 +2223,16 @@ function extractClaimsFromScene(
           metadata: { role: sentenceText.match(/\bas\s+([A-Za-z ]+?)\b(?:as well|$)/iu)?.[1]?.trim() ?? null }
         });
 
-        if (lastProject) {
+        const orgOrProject = lastOrg ?? lastProject;
+        const objectType = orgOrProject ? inferEmploymentObjectType(orgOrProject, sentenceText) : "org";
+        if (orgOrProject) {
           claims.push({
             claimType: "employment",
             subjectName: resolvedSelfName,
             subjectType: "self",
             predicate: "worked_at",
-            objectName: lastProject,
-            objectType: "project",
+            objectName: orgOrProject,
+            objectType,
             confidence: 0.82,
             status: "accepted",
             metadata: { role: sentenceText.match(/\bas\s+([A-Za-z ]+?)\b(?:as well|$)/iu)?.[1]?.trim() ?? null }
@@ -4787,30 +4903,46 @@ export async function stageNarrativeClaims(
     }
   }
 
-  await stageExternalRelationCandidatesForScenes(client, {
-    namespaceId: input.namespaceId,
-    scenes: input.scenes
-      .map((scene) => {
-        const sceneId = sceneIdByIndex.get(scene.sceneIndex);
-        if (!sceneId) {
-          return null;
-        }
-        const sceneSource = input.sceneSources.find((entry) => entry.sceneIndex === scene.sceneIndex);
-        return {
-          sceneIndex: scene.sceneIndex,
-          sceneId,
-          text: scene.text,
-          occurredAt: normalizeNarrativeTimestamp(scene.occurredAt, normalizedInputCapturedAt),
-          sourceMemoryId: sceneSource?.sourceMemoryIds[0] ?? null,
-          sourceChunkId: sceneSource?.sourceChunkIds[0] ?? null
-        };
-      })
-      .filter((scene): scene is NonNullable<typeof scene> => scene !== null)
-  });
+  const deferredExternalRelationPlan = !input.skipExternalRelationCandidates
+    ? {
+        namespaceId: input.namespaceId,
+        forceRun: input.forceExternalRelationCandidates,
+        relationIeMode: input.relationIeMode,
+        extractors: input.relationIeExtractors,
+        scenes: input.scenes
+          .map((scene) => {
+            const sceneId = sceneIdByIndex.get(scene.sceneIndex);
+            if (!sceneId) {
+              return null;
+            }
+            const sceneSource = input.sceneSources.find((entry) => entry.sceneIndex === scene.sceneIndex);
+            return {
+              sceneIndex: scene.sceneIndex,
+              sceneId,
+              text: scene.text,
+              occurredAt: normalizeNarrativeTimestamp(scene.occurredAt, normalizedInputCapturedAt),
+              sourceMemoryId: sceneSource?.sourceMemoryIds[0] ?? null,
+              sourceChunkId: sceneSource?.sourceChunkIds[0] ?? null
+            };
+          })
+          .filter((scene): scene is DeferredExternalRelationCandidateSceneInput => scene !== null)
+      } satisfies DeferredExternalRelationCandidatePlan
+    : undefined;
+
+  if (deferredExternalRelationPlan && !input.deferExternalRelationCandidates) {
+    await stageExternalRelationCandidatesForScenes(client, {
+      namespaceId: input.namespaceId,
+      forceRun: deferredExternalRelationPlan.forceRun,
+      relationIeMode: deferredExternalRelationPlan.relationIeMode,
+      extractors: deferredExternalRelationPlan.extractors,
+      scenes: deferredExternalRelationPlan.scenes
+    });
+  }
 
   return {
     sceneCount: input.scenes.length,
     claimCount,
-    relationshipCount
+    relationshipCount,
+    deferredExternalRelationPlan
   };
 }

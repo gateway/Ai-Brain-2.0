@@ -34,6 +34,11 @@ import { buildReasoningChain } from "./reasoning-chain.js";
 import { buildAnswerRetrievalPlan, extractAtomicMemoryUnits, isPreferenceChoiceQuery } from "./answer-retrieval-plan.js";
 import { inferExactDetailQuestionFamily } from "./exact-detail-question-family.js";
 import {
+  isConcreteCountryOriginQuery,
+  isConcreteEnumerativeListQuery,
+  isConcreteReasonValueQuery
+} from "./query-signals.js";
+import {
   buildCollectionInferenceSupport,
   buildCounterfactualCareerSupport,
   buildDirectDetailSupport,
@@ -226,6 +231,7 @@ function renderCanonicalReportSupport(params: {
     retrievalPlan
   });
   const answerPayload =
+    reportKind !== "relationship_report" &&
     typeof params.storedCanonical?.answerPayload === "object" && params.storedCanonical.answerPayload !== null
       ? params.storedCanonical.answerPayload
       : null;
@@ -451,6 +457,9 @@ function inferPredicateFamily(queryText: string, exactDetailFamily: string): Can
   if (/\bidentity\b|\bgender identity\b|\btransgender\b|\bnonbinary\b|\bqueer\b/i.test(queryText)) {
     return "alias_identity";
   }
+  if (/\brelationship status\b|\bsingle\b|\bdating\b|\bin a relationship\b|\bseeing someone\b/i.test(queryText)) {
+    return "relationship_state";
+  }
   if (exactDetailFamily === "favorite_books" || (/\bwhat\s+kind\s+of\s+flowers?\b/i.test(queryText) && /\btattoo\b/i.test(queryText))) {
     return "ownership_binding";
   }
@@ -492,6 +501,9 @@ function inferPredicateFamily(queryText: string, exactDetailFamily: string): Can
   if (/\bwhat books?\b/i.test(queryText) || /\bwho supports?\b/i.test(queryText) || /\bdestress\b/i.test(queryText) || /\bin what ways\b/i.test(queryText) && /\blgbtq\+?\b/i.test(queryText)) {
     return "list_set";
   }
+  if (isConcreteEnumerativeListQuery(queryText)) {
+    return "list_set";
+  }
   if (/\bwhat\s+(?:[a-z0-9+&'’ -]+\s+)?events?\b/i.test(queryText) && /\bparticipat(?:e|ed|es|ing)\b|\battend(?:ed|ing|s)?\b/i.test(queryText)) {
     return "list_set";
   }
@@ -500,6 +512,9 @@ function inferPredicateFamily(queryText: string, exactDetailFamily: string): Can
   }
   if (/\bgoal|career|plan\b/i.test(queryText)) {
     return "profile_state";
+  }
+  if (isConcreteReasonValueQuery(queryText) || isConcreteCountryOriginQuery(queryText)) {
+    return "generic_fact";
   }
   if (/\bwould\b/i.test(queryText) && (/\benjoy\b/i.test(queryText) || /\binterested in\b/i.test(queryText) || /\bbookshelf\b/i.test(queryText) || /\bmember of the lgbtq community\b/i.test(queryText) || /\bally\b/i.test(queryText))) {
     return "profile_state";

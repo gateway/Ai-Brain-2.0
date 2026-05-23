@@ -1,5 +1,7 @@
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { GLINER_RELEX_MODEL_ID, GLINER_RELEX_SCHEMA_VERSION, RELEX_RELATION_DESCRIPTIONS, RELEX_RELATION_LABELS } from "./relationships/relex-schema.js";
 
 export interface BrainConfig {
   readonly databaseUrl: string;
@@ -8,6 +10,9 @@ export interface BrainConfig {
   readonly namespaceDefault: string;
   readonly relationIeEnabled: boolean;
   readonly relationIeExtractors: readonly string[];
+  readonly relationIeGlinerRelexEnabled: boolean;
+  readonly relationIeGlinerRelexPromote: boolean;
+  readonly relationIeGlinerRelexSchemaVersion: string;
   readonly relationIePythonExecutable: string;
   readonly relationIeScriptPath: string;
   readonly relationIeDevice: "cpu" | "mps";
@@ -22,12 +27,26 @@ export interface BrainConfig {
   readonly relationIeEntityThreshold: number;
   readonly relationIeAdjacencyThreshold: number;
   readonly relationIeRelationThreshold: number;
+  readonly relationIeClassificationThreshold: number;
+  readonly relationIeStructureThreshold: number;
+  readonly extractionUnitMaxChars: number;
+  readonly extractionUnitContextChars: number;
+  readonly extractionUnitOverlapSentences: number;
+  readonly extractionAssistantEnabled: boolean;
+  readonly extractionAssistantMode: "off" | "shadow" | "assist" | "strict_review";
+  readonly extractionAssistantProvider: "openrouter";
+  readonly extractionAssistantModel: string;
+  readonly extractionAssistantMaxInputChars: number;
+  readonly extractionAssistantMaxOutputTokens: number;
+  readonly extractionAssistantTimeoutMs: number;
   readonly localRerankerEnabled: boolean;
   readonly localRerankerVersion: string;
   readonly canonicalAdjudicationEnabled: boolean;
   readonly retrievalFusionVersion: string;
   readonly benchmarkFastScorerVersion: string;
   readonly benchmarkOfficialishScorerVersion: string;
+  readonly sqlFusedKernelMode: "shadow" | "preferred" | "required";
+  readonly renderPayloadMode: "shadow" | "preferred" | "required";
   readonly pgvectorIterativeScanMode: "off" | "relaxed_order" | "strict_order";
   readonly pgvectorMaxScanTuples?: number;
   readonly lexicalProvider: "fts" | "bm25";
@@ -35,10 +54,17 @@ export interface BrainConfig {
   readonly embeddingProvider: string;
   readonly embeddingModel: string;
   readonly embeddingDimensions?: number;
+  readonly runtimeVectorActivationMode: "off" | "queue_only" | "bounded" | "full";
+  readonly runtimeVectorActivationLimit: number;
+  readonly runtimeVectorActivationMaxPasses: number;
+  readonly benchmarkVectorActivationMode: "off" | "queue_only" | "bounded" | "full";
+  readonly benchmarkVectorActivationLimit: number;
+  readonly benchmarkVectorActivationMaxPasses: number;
   readonly openRouterApiKey?: string;
   readonly openRouterBaseUrl: string;
   readonly openRouterEmbeddingModel: string;
   readonly openRouterClassifyModel: string;
+  readonly openRouterDeriveModel: string;
   readonly geminiApiKey?: string;
   readonly geminiBaseUrl: string;
   readonly geminiEmbeddingModel: string;
@@ -134,10 +160,95 @@ function parsePositiveInteger(value: string | undefined): number | undefined {
   return Math.floor(parsed);
 }
 
+function parseEnvFile(filePath: string): Record<string, string> {
+  if (!existsSync(filePath)) {
+    return {};
+  }
+  const parsed: Record<string, string> = {};
+  const content = readFileSync(filePath, "utf8");
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || !line.includes("=")) {
+      continue;
+    }
+    const separatorIndex = line.indexOf("=");
+    const key = line.slice(0, separatorIndex).trim();
+    const rawValue = line.slice(separatorIndex + 1).trim();
+    if (!key || key.startsWith("export ")) {
+      continue;
+    }
+    parsed[key] = rawValue.replace(/^['"]|['"]$/gu, "");
+  }
+  return parsed;
+}
+
+function withLocalEnvDefaults(env: NodeJS.ProcessEnv, moduleRoot: string): NodeJS.ProcessEnv {
+  return {
+    ...parseEnvFile(path.resolve(moduleRoot, ".env")),
+    ...parseEnvFile(path.resolve(moduleRoot, "local-brain/.env")),
+    ...env
+  };
+}
+
+function parseVectorActivationMode(
+  value: string | undefined,
+  fallback: "off" | "queue_only" | "bounded" | "full"
+): "off" | "queue_only" | "bounded" | "full" {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "off":
+      return "off";
+    case "queue_only":
+    case "queue-only":
+      return "queue_only";
+    case "full":
+      return "full";
+    case "bounded":
+      return "bounded";
+    default:
+      return fallback;
+  }
+}
+
+function parseServingMode(
+  value: string | undefined,
+  fallback: "shadow" | "preferred" | "required"
+): "shadow" | "preferred" | "required" {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "shadow":
+      return "shadow";
+    case "preferred":
+      return "preferred";
+    case "required":
+      return "required";
+    default:
+      return fallback;
+  }
+}
+
+function parseExtractionAssistantMode(
+  value: string | undefined,
+  fallback: "off" | "shadow" | "assist" | "strict_review"
+): "off" | "shadow" | "assist" | "strict_review" {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "off":
+      return "off";
+    case "shadow":
+      return "shadow";
+    case "strict_review":
+    case "strict-review":
+      return "strict_review";
+    case "assist":
+      return "assist";
+    default:
+      return fallback;
+  }
+}
+
 export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
+  const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  env = withLocalEnvDefaults(env, moduleRoot);
   const artifactRoot = env.BRAIN_ARTIFACT_ROOT ?? "";
   const producerInboxRoot = env.BRAIN_PRODUCER_INBOX_ROOT ?? (artifactRoot ? `${artifactRoot}/producer-inbox` : "producer-inbox");
-  const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const relationIeRoot = env.BRAIN_RELATION_IE_ROOT ?? moduleRoot;
   const defaultEmbeddingDimensions = 1536;
   const embeddingDimensions =
@@ -158,12 +269,28 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     modelRuntimeBaseUrl;
   const defaultEmbeddingProvider = env.OPENROUTER_API_KEY ? "openrouter" : "external";
   const defaultExternalEmbeddingModel = "Qwen/Qwen3-Embedding-4B";
+  const embeddingProvider = env.BRAIN_EMBEDDING_PROVIDER ?? defaultEmbeddingProvider;
+  const embeddingModel =
+    env.BRAIN_EMBEDDING_MODEL ??
+    (embeddingProvider === "openrouter"
+      ? env.BRAIN_OPENROUTER_EMBEDDING_MODEL ?? "text-embedding-3-small"
+      : defaultExternalEmbeddingModel);
   const defaultRelationIeEntityLabels = [
     "person",
     "organization",
     "place",
+    "venue",
+    "team",
+    "institution",
     "project",
+    "product",
+    "tool",
+    "app",
+    "initiative",
     "media",
+    "book",
+    "show",
+    "song",
     "other"
   ] as const;
   const defaultRelationIeRelationLabels = [
@@ -183,8 +310,18 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     person: "human individual, friend, family member, coworker, or named speaker",
     organization: "company, employer, team, institution, or group",
     place: "location, city, country, venue, or region",
+    venue: "specific venue, building, studio, office, theater, restaurant, or event location",
+    team: "named team, department, crew, band, working group, or sports side",
+    institution: "school, university, nonprofit, hospital, or formal institution",
     project: "project, initiative, product, roadmap item, or named effort",
+    product: "named product, app, tool, feature, or service",
+    tool: "named software tool, system, platform, or technical product",
+    app: "application, website, or software product name",
+    initiative: "program, initiative, campaign, or structured effort",
     media: "movie, film, book, song, artwork, or media work",
+    book: "book, novel, memoir, or written title",
+    show: "show, series, podcast, performance, or episode title",
+    song: "song, album, band, or musical work title",
     other: "named entity that matters to a relation even if it does not fit the core schema"
   };
   const defaultRelationIeRelationDescriptions: Record<string, string> = {
@@ -208,6 +345,14 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     ...defaultRelationIeRelationDescriptions,
     ...parseJsonRecord(env.BRAIN_RELATION_IE_RELATION_DESCRIPTIONS)
   };
+  const relationIeGlinerRelexEnabled = parseBoolean(env.BRAIN_RELATION_IE_GLINER_RELEX_ENABLED, false);
+  const configuredRelationExtractors = parseList(env.BRAIN_RELATION_IE_EXTRACTORS);
+  const baseRelationExtractors = configuredRelationExtractors.length > 0 ? configuredRelationExtractors : ["gliner2", "spacy"];
+  const relationIeExtractors =
+    relationIeGlinerRelexEnabled && !baseRelationExtractors.includes("gliner_relex_v1")
+      ? [...baseRelationExtractors, "gliner_relex_v1"]
+      : baseRelationExtractors;
+  const configuredRelationLabels = parseList(env.BRAIN_RELATION_IE_RELATION_LABELS);
 
   return {
     databaseUrl: env.BRAIN_DATABASE_URL ?? "postgresql:///ai_brain_local",
@@ -215,17 +360,17 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     producerInboxRoot,
     namespaceDefault: env.BRAIN_NAMESPACE_DEFAULT ?? "personal",
     relationIeEnabled: parseBoolean(env.BRAIN_RELATION_IE_ENABLED, false),
-    relationIeExtractors:
-      parseList(env.BRAIN_RELATION_IE_EXTRACTORS).length > 0
-        ? parseList(env.BRAIN_RELATION_IE_EXTRACTORS)
-        : ["gliner_relex", "spacy"],
+    relationIeExtractors,
+    relationIeGlinerRelexEnabled,
+    relationIeGlinerRelexPromote: parseBoolean(env.BRAIN_RELATION_IE_GLINER_RELEX_PROMOTE, false),
+    relationIeGlinerRelexSchemaVersion: env.BRAIN_RELATION_IE_GLINER_RELEX_SCHEMA_VERSION ?? GLINER_RELEX_SCHEMA_VERSION,
     relationIePythonExecutable:
       env.BRAIN_RELATION_IE_PYTHON_EXECUTABLE ?? `${relationIeRoot}/.venv-brain/bin/python`,
     relationIeScriptPath:
       env.BRAIN_RELATION_IE_SCRIPT_PATH ?? `${relationIeRoot}/tools/relation-ie/extract_relations.py`,
     relationIeDevice: env.BRAIN_RELATION_IE_DEVICE === "mps" ? "mps" : "cpu",
     relationIeGlinerRelexModel:
-      env.BRAIN_RELATION_IE_GLINER_RELEX_MODEL ?? "knowledgator/gliner-relex-large-v0.5",
+      env.BRAIN_RELATION_IE_GLINER_RELEX_MODEL ?? GLINER_RELEX_MODEL_ID,
     relationIeGliner2Model:
       env.BRAIN_RELATION_IE_GLINER2_MODEL ?? "fastino/gliner2-base-v1",
     relationIeSpacyModel:
@@ -237,14 +382,30 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
         ? parseList(env.BRAIN_RELATION_IE_ENTITY_LABELS)
         : defaultRelationIeEntityLabels,
     relationIeRelationLabels:
-      parseList(env.BRAIN_RELATION_IE_RELATION_LABELS).length > 0
-        ? parseList(env.BRAIN_RELATION_IE_RELATION_LABELS)
-        : defaultRelationIeRelationLabels,
+      configuredRelationLabels.length > 0
+        ? configuredRelationLabels
+        : relationIeGlinerRelexEnabled
+          ? RELEX_RELATION_LABELS
+          : defaultRelationIeRelationLabels,
     relationIeEntityDescriptions,
-    relationIeRelationDescriptions,
+    relationIeRelationDescriptions: relationIeGlinerRelexEnabled
+      ? { ...RELEX_RELATION_DESCRIPTIONS, ...relationIeRelationDescriptions }
+      : relationIeRelationDescriptions,
     relationIeEntityThreshold: parseThreshold(env.BRAIN_RELATION_IE_ENTITY_THRESHOLD, 0.45),
     relationIeAdjacencyThreshold: parseThreshold(env.BRAIN_RELATION_IE_ADJACENCY_THRESHOLD, 0.35),
     relationIeRelationThreshold: parseThreshold(env.BRAIN_RELATION_IE_RELATION_THRESHOLD, 0.45),
+    relationIeClassificationThreshold: parseThreshold(env.BRAIN_RELATION_IE_CLASSIFICATION_THRESHOLD, 0.6),
+    relationIeStructureThreshold: parseThreshold(env.BRAIN_RELATION_IE_STRUCTURE_THRESHOLD, 0.65),
+    extractionUnitMaxChars: parsePositiveInteger(env.BRAIN_EXTRACTION_UNIT_MAX_CHARS) ?? 1800,
+    extractionUnitContextChars: parsePositiveInteger(env.BRAIN_EXTRACTION_UNIT_CONTEXT_CHARS) ?? 500,
+    extractionUnitOverlapSentences: parsePositiveInteger(env.BRAIN_EXTRACTION_UNIT_OVERLAP_SENTENCES) ?? 1,
+    extractionAssistantEnabled: parseBoolean(env.BRAIN_EXTRACTION_ASSISTANT_ENABLED, true),
+    extractionAssistantMode: parseExtractionAssistantMode(env.BRAIN_EXTRACTION_ASSISTANT_MODE, "assist"),
+    extractionAssistantProvider: "openrouter",
+    extractionAssistantModel: env.BRAIN_EXTRACTION_ASSISTANT_MODEL ?? "openai/gpt-5.4-mini",
+    extractionAssistantMaxInputChars: parsePositiveInteger(env.BRAIN_EXTRACTION_ASSISTANT_MAX_INPUT_CHARS) ?? 2600,
+    extractionAssistantMaxOutputTokens: parsePositiveInteger(env.BRAIN_EXTRACTION_ASSISTANT_MAX_OUTPUT_TOKENS) ?? 420,
+    extractionAssistantTimeoutMs: parsePositiveInteger(env.BRAIN_EXTRACTION_ASSISTANT_TIMEOUT_MS) ?? 45_000,
     localRerankerEnabled: parseBoolean(env.BRAIN_LOCAL_RERANKER_ENABLED, true),
     localRerankerVersion: env.BRAIN_LOCAL_RERANKER_VERSION ?? "local_reasoning_reranker_v3",
     canonicalAdjudicationEnabled: parseBoolean(env.BRAIN_CANONICAL_ADJUDICATION, true),
@@ -252,6 +413,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     benchmarkFastScorerVersion: env.BRAIN_BENCHMARK_FAST_SCORER_VERSION ?? "benchmark_fast_v1",
     benchmarkOfficialishScorerVersion:
       env.BRAIN_BENCHMARK_OFFICIALISH_SCORER_VERSION ?? "benchmark_officialish_v1",
+    sqlFusedKernelMode: parseServingMode(env.BRAIN_SQL_FUSED_KERNEL_MODE, "preferred"),
+    renderPayloadMode: parseServingMode(env.BRAIN_RENDER_PAYLOAD_MODE, "preferred"),
     pgvectorIterativeScanMode:
       env.BRAIN_PGVECTOR_ITERATIVE_SCAN_MODE === "relaxed_order"
         ? "relaxed_order"
@@ -261,13 +424,20 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BrainConfig {
     pgvectorMaxScanTuples: parsePositiveInteger(env.BRAIN_PGVECTOR_MAX_SCAN_TUPLES),
     lexicalProvider: env.BRAIN_LEXICAL_PROVIDER === "fts" ? "fts" : "bm25",
     lexicalFallbackEnabled: parseBoolean(env.BRAIN_LEXICAL_FALLBACK_ENABLED, true),
-    embeddingProvider: env.BRAIN_EMBEDDING_PROVIDER ?? defaultEmbeddingProvider,
-    embeddingModel: env.BRAIN_EMBEDDING_MODEL ?? defaultExternalEmbeddingModel,
+    embeddingProvider,
+    embeddingModel,
     embeddingDimensions: Number.isFinite(embeddingDimensions) ? embeddingDimensions : undefined,
+    runtimeVectorActivationMode: parseVectorActivationMode(env.BRAIN_RUNTIME_VECTOR_ACTIVATION_MODE, "bounded"),
+    runtimeVectorActivationLimit: parsePositiveInteger(env.BRAIN_RUNTIME_VECTOR_ACTIVATION_LIMIT) ?? 256,
+    runtimeVectorActivationMaxPasses: parsePositiveInteger(env.BRAIN_RUNTIME_VECTOR_ACTIVATION_MAX_PASSES) ?? 2,
+    benchmarkVectorActivationMode: parseVectorActivationMode(env.BRAIN_BENCHMARK_VECTOR_ACTIVATION_MODE, "off"),
+    benchmarkVectorActivationLimit: parsePositiveInteger(env.BRAIN_BENCHMARK_VECTOR_ACTIVATION_LIMIT) ?? 400,
+    benchmarkVectorActivationMaxPasses: parsePositiveInteger(env.BRAIN_BENCHMARK_VECTOR_ACTIVATION_MAX_PASSES) ?? 4,
     openRouterApiKey: env.OPENROUTER_API_KEY ?? undefined,
     openRouterBaseUrl: env.BRAIN_OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
     openRouterEmbeddingModel: env.BRAIN_OPENROUTER_EMBEDDING_MODEL ?? env.BRAIN_EMBEDDING_MODEL ?? "text-embedding-3-small",
     openRouterClassifyModel: env.BRAIN_OPENROUTER_CLASSIFY_MODEL ?? "openai/gpt-4.1-mini",
+    openRouterDeriveModel: env.BRAIN_OPENROUTER_DERIVE_MODEL ?? env.BRAIN_OPENROUTER_CLASSIFY_MODEL ?? "openai/gpt-4.1-mini",
     geminiApiKey: env.GEMINI_API_KEY ?? undefined,
     geminiBaseUrl: env.BRAIN_GEMINI_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta",
     geminiEmbeddingModel: env.BRAIN_GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001",

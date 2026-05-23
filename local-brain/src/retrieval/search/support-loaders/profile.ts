@@ -285,7 +285,7 @@ export function loadSharedCommonalityRows(params: {
       ORDER BY raw_score DESC, em.occurred_at DESC, em.id DESC
       LIMIT $${match.values.length + 4}
     `,
-    [namespaceId, timeStart, timeEnd, ...match.values, Math.max(candidateLimit * 2, 16)]
+    [namespaceId, timeStart, timeEnd, ...match.values, Math.min(Math.max(candidateLimit * 2 + 2, 12), 16)]
   );
 }
 

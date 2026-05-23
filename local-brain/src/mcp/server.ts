@@ -1,8 +1,17 @@
 import { stdin, stdout } from "node:process";
 import { queryRows, withTransaction } from "../db/client.js";
+import { keepIdentityConflictSeparate, mergeEntityAlias, mergeEntityRoleCorrection, processBrainOutboxEvents } from "../clarifications/service.js";
+import { loadEntityRoleConflictProjection, rebuildEntityRoleConflictProjection } from "../identity/entity-role-resolution.js";
 import { getOpsClarificationInbox, getOpsOverview, getOpsRelationshipGraph } from "../ops/service.js";
 import { getBootstrapState, listMonitoredSources } from "../ops/source-service.js";
 import { getRuntimeWorkerStatus } from "../ops/runtime-worker-service.js";
+import {
+  applySourcePrivacyOverlay,
+  evaluateSourcePrivacyEnforcement,
+  getSourcePrivacyStatus,
+  revertSourcePrivacyOverlay,
+  type SourcePrivacyActionType
+} from "../privacy/source-privacy.js";
 import {
   explainRecap,
   extractCalendarMemory,
@@ -13,6 +22,8 @@ import {
   searchMemory,
   timelineMemory
 } from "../retrieval/service.js";
+import { attachStableQueryContractEnvelope } from "./query-contract-envelope.js";
+import { presentHumanReadableQueryResult } from "./query-presenter.js";
 import { toolDescriptors } from "./tool-contracts.js";
 
 type JsonRpcId = string | number | null;
@@ -57,6 +68,21 @@ interface McpResultPayload {
   readonly structuredContent: unknown;
 }
 
+interface SessionClaimRegistryEntry {
+  readonly id: string;
+  readonly query: string;
+  readonly claimText: string;
+  readonly claimFamily: string;
+  readonly finalClaimSource: string | null;
+  readonly evidenceCount: number;
+  readonly sourceTrail: readonly Record<string, unknown>[];
+  readonly sourceQuotes: readonly string[];
+  readonly answerSectionId?: string | null;
+  readonly recordedAt: string;
+}
+
+const sessionClaimRegistry = new Map<string, SessionClaimRegistryEntry[]>();
+
 function requireString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`Missing or invalid ${name}.`);
@@ -67,6 +93,25 @@ function requireString(value: unknown, name: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function optionalSessionId(args: ToolCallArgs): string | undefined {
+  return optionalString(args.session_id) ?? optionalString(args.conversation_id);
+}
+
+function optionalDetailMode(value: unknown): "compact" | "full" | undefined {
+  return value === "compact" || value === "full" ? value : undefined;
+}
+
+function optionalFocusMode(value: unknown): "timeline" | "employers_only" | "advisory_only" | "ventures_only" | "roles_and_dates" | "source_audit" | undefined {
+  return value === "timeline" ||
+    value === "employers_only" ||
+    value === "advisory_only" ||
+    value === "ventures_only" ||
+    value === "roles_and_dates" ||
+    value === "source_audit"
+    ? value
+    : undefined;
 }
 
 function optionalNumber(value: unknown): number | undefined {
@@ -95,8 +140,80 @@ function optionalStringArray(value: unknown): readonly string[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function requireSourcePrivacyActionType(value: unknown): SourcePrivacyActionType {
+  if (value === "logical_delete" || value === "redact" || value === "access_label" || value === "retention_policy") {
+    return value;
+  }
+  throw new Error("Missing or invalid action_type.");
+}
+
 function jsonText(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+async function applySourcePrivacyGuard(input: {
+  readonly namespaceId: string;
+  readonly query: string;
+  readonly payload: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+  const enforcement = await evaluateSourcePrivacyEnforcement({
+    namespaceId: input.namespaceId,
+    queryText: input.query,
+    payload: input.payload
+  });
+  if (!enforcement.blocked) return input.payload;
+  return {
+    namespaceId: input.namespaceId,
+    answer: "I can’t return that source content because an active source privacy overlay blocks it.",
+    queryContract: "privacy_guard",
+    retrievalDomain: "source_privacy",
+    answerShape: "typed_abstention",
+    finalClaimSource: null,
+    evidenceCount: 0,
+    sourceTrail: [],
+    sourceQuotes: [],
+    answerSections: [],
+    claimAudit: [
+      {
+        id: "privacy:source_overlay",
+        claimText: "Source content withheld by active privacy overlay.",
+        claimFamily: "abstention",
+        supportKind: "abstention",
+        finalClaimSource: null,
+        evidenceCount: 0,
+        sourceTrail: [],
+        sourceQuotes: [],
+        supportStatus: "abstained",
+        faithfulnessStatus: "verified"
+      }
+    ],
+    selectionTrace: [
+      {
+        stage: "source_privacy_guard",
+        decision: "abstained",
+        reason: enforcement.reason
+      }
+    ],
+    abstentionReason: enforcement.reason,
+    sourcePrivacy: {
+      blocked: true,
+      reason: enforcement.reason,
+      overlays: enforcement.overlays.map((overlay) => ({
+        id: overlay.id,
+        actionType: overlay.actionType,
+        status: overlay.status,
+        reason: overlay.reason,
+        createdAt: overlay.createdAt
+      })),
+      rawSourcePolicy: "Raw source truth is retained; privacy operations are overlay decisions with audit and rollback visibility."
+    },
+    meta: {
+      finalClaimSource: null,
+      queryTimeModelCalls: 0,
+      selectedReader: "source_privacy_guard",
+      dominantStage: "source_privacy_guard"
+    }
+  };
 }
 
 function writeFrame(message: JsonRpcSuccessResponse | JsonRpcErrorResponse): void {
@@ -144,7 +261,11 @@ function toolSchema(name: string): Record<string, unknown> {
           topics: { type: "array", items: { type: "string" } },
           projects: { type: "array", items: { type: "string" } },
           provider: { type: "string", enum: ["none", "local", "openrouter"] },
-          model: { type: "string" }
+          model: { type: "string" },
+          session_id: { type: "string" },
+          conversation_id: { type: "string" },
+          detail_mode: { type: "string", enum: ["compact", "full"] },
+          focus_mode: { type: "string", enum: ["timeline", "employers_only", "advisory_only", "ventures_only", "roles_and_dates", "source_audit"] }
         },
         required: ["query", "namespace_id"]
       };
@@ -158,7 +279,11 @@ function toolSchema(name: string): Record<string, unknown> {
           time_start: { type: "string" },
           time_end: { type: "string" },
           reference_now: { type: "string" },
-          limit: { type: "integer", minimum: 1, maximum: 50 }
+          limit: { type: "integer", minimum: 1, maximum: 50 },
+          session_id: { type: "string" },
+          conversation_id: { type: "string" },
+          detail_mode: { type: "string", enum: ["compact", "full"] },
+          focus_mode: { type: "string", enum: ["timeline", "employers_only", "advisory_only", "ventures_only", "roles_and_dates", "source_audit"] }
         },
         required: ["query", "namespace_id"]
       };
@@ -219,6 +344,105 @@ function toolSchema(name: string): Record<string, unknown> {
           namespace_id: { type: "string" },
           query: { type: "string" },
           limit: { type: "integer", minimum: 1, maximum: 50 }
+        },
+        required: ["namespace_id"]
+      };
+    case "memory.list_corrections":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          namespace_id: { type: "string" },
+          query: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 50 }
+        },
+        required: ["namespace_id"]
+      };
+    case "memory.apply_correction":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          namespace_id: { type: "string" },
+          source_name: { type: "string" },
+          canonical_name: { type: "string" },
+          entity_type: { type: "string" },
+          target_entity_id: { type: "string" },
+          source_entity_type: { type: "string" },
+          canonical_entity_type: { type: "string" },
+          aliases: { type: "array", items: { type: "string" } },
+          preserve_aliases: { type: "boolean" },
+          note: { type: "string" }
+        },
+        required: ["namespace_id", "source_name", "canonical_name", "entity_type"]
+      };
+    case "memory.keep_correction_separate":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          namespace_id: { type: "string" },
+          left_name: { type: "string" },
+          right_name: { type: "string" },
+          entity_type: { type: "string" },
+          left_entity_id: { type: "string" },
+          right_entity_id: { type: "string" },
+          note: { type: "string" }
+        },
+        required: ["namespace_id", "left_name", "right_name", "entity_type"]
+      };
+    case "memory.get_correction_status":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          namespace_id: { type: "string" },
+          source_name: { type: "string" },
+          canonical_name: { type: "string" },
+          entity_type: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 50 }
+        },
+        required: ["namespace_id", "canonical_name"]
+      };
+    case "memory.apply_source_privacy":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          namespace_id: { type: "string" },
+          action_type: { type: "string", enum: ["logical_delete", "redact", "access_label", "retention_policy"] },
+          target_artifact_id: { type: "string" },
+          target_source_uri: { type: "string" },
+          target_chunk_id: { type: "string" },
+          redaction_text: { type: "string" },
+          access_label: { type: "string" },
+          retention_policy: { type: "string" },
+          reason: { type: "string" },
+          actor: { type: "string" }
+        },
+        required: ["namespace_id", "action_type"]
+      };
+    case "memory.revert_source_privacy":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          namespace_id: { type: "string" },
+          overlay_id: { type: "string" },
+          reason: { type: "string" },
+          actor: { type: "string" }
+        },
+        required: ["namespace_id", "overlay_id"]
+      };
+    case "memory.get_source_privacy_status":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          namespace_id: { type: "string" },
+          target_artifact_id: { type: "string" },
+          target_source_uri: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 100 }
         },
         required: ["namespace_id"]
       };
@@ -295,6 +519,720 @@ function wrapResult(payload: unknown): McpResultPayload {
       }
     ],
     structuredContent: payload
+  };
+}
+
+function normalizeCorrectionName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/gu, " ").trim();
+}
+
+function correctionNameTokens(value: string): readonly string[] {
+  return normalizeCorrectionName(value).split(/\s+/u).filter((token) => token.length >= 3);
+}
+
+async function buildCorrectionPreflight(input: {
+  readonly namespaceId: string;
+  readonly sourceName: string;
+  readonly canonicalName: string;
+  readonly entityType: string;
+  readonly sourceEntityType: string;
+  readonly canonicalEntityType: string;
+}): Promise<Record<string, unknown>> {
+  const normalizedSource = normalizeCorrectionName(input.sourceName);
+  const normalizedCanonical = normalizeCorrectionName(input.canonicalName);
+  const tokens = [...new Set([...correctionNameTokens(input.sourceName), ...correctionNameTokens(input.canonicalName)])];
+  const rows = await queryRows<{
+    readonly entity_id: string;
+    readonly canonical_name: string;
+    readonly entity_type: string;
+    readonly normalized_name: string;
+    readonly merged_into_entity_id: string | null;
+    readonly alias: string | null;
+    readonly alias_type: string | null;
+    readonly is_user_verified: boolean | null;
+    readonly score: number;
+  }>(
+    `
+      WITH candidates AS (
+        SELECT
+          e.id,
+          e.canonical_name,
+          e.entity_type,
+          e.normalized_name,
+          e.merged_into_entity_id::text,
+          NULL::text AS alias,
+          NULL::text AS alias_type,
+          NULL::boolean AS is_user_verified,
+          CASE
+            WHEN e.normalized_name = $3 THEN 100
+            WHEN e.normalized_name = $2 THEN 95
+            WHEN $4::text[] && regexp_split_to_array(e.normalized_name, '\\s+') THEN 35
+            ELSE 0
+          END AS score
+        FROM entities e
+        WHERE e.namespace_id = $1
+          AND e.entity_type IN ($5, $6)
+          AND (
+            e.normalized_name IN ($2, $3)
+            OR $4::text[] && regexp_split_to_array(e.normalized_name, '\\s+')
+          )
+        UNION ALL
+        SELECT
+          e.id,
+          e.canonical_name,
+          e.entity_type,
+          e.normalized_name,
+          e.merged_into_entity_id::text,
+          ea.alias,
+          ea.alias_type,
+          ea.is_user_verified,
+          CASE
+            WHEN ea.normalized_alias = $3 AND ea.is_user_verified THEN 98
+            WHEN ea.normalized_alias = $2 AND ea.is_user_verified THEN 96
+            WHEN ea.normalized_alias = $3 THEN 80
+            WHEN ea.normalized_alias = $2 THEN 75
+            WHEN $4::text[] && regexp_split_to_array(ea.normalized_alias, '\\s+') THEN
+              CASE WHEN ea.is_user_verified THEN 45 ELSE 25 END
+            ELSE 0
+          END AS score
+        FROM entity_aliases ea
+        JOIN entities e ON e.id = ea.entity_id
+        WHERE e.namespace_id = $1
+          AND e.entity_type IN ($5, $6)
+          AND (
+            ea.normalized_alias IN ($2, $3)
+            OR $4::text[] && regexp_split_to_array(ea.normalized_alias, '\\s+')
+          )
+      )
+      SELECT
+        id::text AS entity_id,
+        canonical_name,
+        entity_type,
+        normalized_name,
+        merged_into_entity_id,
+        alias,
+        alias_type,
+        is_user_verified,
+        max(score)::float8 AS score
+      FROM candidates
+      WHERE score > 0
+      GROUP BY id, canonical_name, entity_type, normalized_name, merged_into_entity_id, alias, alias_type, is_user_verified
+      ORDER BY
+        CASE WHEN merged_into_entity_id IS NULL THEN 0 ELSE 1 END,
+        score DESC,
+        coalesce(is_user_verified, false) DESC,
+        canonical_name ASC
+      LIMIT 12
+    `,
+    [input.namespaceId, normalizedSource, normalizedCanonical, tokens, input.sourceEntityType, input.canonicalEntityType]
+  );
+  const uniqueTargets = new Map<string, {
+    readonly entityId: string;
+    readonly canonicalName: string;
+    readonly entityType: string;
+    readonly active: boolean;
+    readonly aliases: string[];
+    score: number;
+    verifiedAlias: boolean;
+  }>();
+  for (const row of rows) {
+    const existing = uniqueTargets.get(row.entity_id) ?? {
+      entityId: row.entity_id,
+      canonicalName: row.canonical_name,
+      entityType: row.entity_type,
+      active: row.merged_into_entity_id === null,
+      aliases: [],
+      score: row.score,
+      verifiedAlias: false
+    };
+    if (row.alias) existing.aliases.push(row.alias);
+    existing.score = Math.max(existing.score, row.score);
+    existing.verifiedAlias = existing.verifiedAlias || row.is_user_verified === true;
+    uniqueTargets.set(row.entity_id, existing);
+  }
+  const candidates = [...uniqueTargets.values()]
+    .map((candidate) => ({
+      ...candidate,
+      aliases: [...new Set(candidate.aliases)].slice(0, 6)
+    }))
+    .sort((left, right) =>
+      Number(right.active) - Number(left.active) ||
+      right.score - left.score ||
+      Number(right.verifiedAlias) - Number(left.verifiedAlias) ||
+      left.canonicalName.localeCompare(right.canonicalName)
+    );
+  const activeCandidates = candidates.filter((candidate) => candidate.active);
+  const exactCanonical = activeCandidates.filter((candidate) => normalizeCorrectionName(candidate.canonicalName) === normalizedCanonical);
+  const exactSource = activeCandidates.filter((candidate) => normalizeCorrectionName(candidate.canonicalName) === normalizedSource);
+  const ambiguous =
+    input.sourceEntityType === input.canonicalEntityType &&
+    activeCandidates.length > 1 &&
+    exactSource.length === 0;
+  return {
+    sourceName: input.sourceName,
+    canonicalName: input.canonicalName,
+    entityType: input.canonicalEntityType,
+    candidates,
+    selectedCandidate: exactCanonical[0] ?? null,
+    sourceCandidates: exactSource,
+    ambiguous,
+    requiresUserChoice: ambiguous,
+    guidance: ambiguous
+      ? "Multiple plausible active entities match this correction. Ask the user which canonical entity to merge into, or use keep-separate if they are different people."
+      : "A single canonical target was selected or the operation can proceed as an alias-only correction."
+  };
+}
+
+async function resolveCorrectionEntityId(input: {
+  readonly namespaceId: string;
+  readonly entityId?: string | null;
+  readonly entityName: string;
+  readonly entityType: string;
+  readonly fieldName: string;
+}): Promise<string> {
+  if (input.entityId?.trim()) {
+    return input.entityId.trim();
+  }
+  const rows = await queryRows<{ readonly id: string }>(
+    `
+      SELECT id::text
+      FROM entities
+      WHERE namespace_id = $1
+        AND entity_type = $2
+        AND normalized_name = $3
+        AND merged_into_entity_id IS NULL
+      ORDER BY last_seen_at DESC
+      LIMIT 1
+    `,
+    [input.namespaceId, input.entityType, normalizeCorrectionName(input.entityName)]
+  );
+  const id = rows[0]?.id;
+  if (!id) {
+    throw new Error(`Could not resolve ${input.fieldName} (${input.entityName}) as ${input.entityType}.`);
+  }
+  return id;
+}
+
+async function listCorrections(args: ToolCallArgs): Promise<unknown> {
+  const namespaceId = requireString(args.namespace_id, "namespace_id");
+  const query = optionalString(args.query);
+  const limit = optionalNumber(args.limit) ?? 10;
+  const normalizedQuery = query ? normalizeCorrectionName(query) : null;
+  const inbox = await getOpsClarificationInbox(namespaceId, limit);
+  const roleConflicts = await loadEntityRoleConflictProjection(namespaceId);
+  const recentDecisions = await queryRows<{
+    readonly kind: string;
+    readonly source_name: string | null;
+    readonly canonical_name: string | null;
+    readonly action: string;
+    readonly created_at: string;
+    readonly metadata: Record<string, unknown>;
+  }>(
+    `
+      SELECT
+        'entity_role_resolution' AS kind,
+        surface_name AS source_name,
+        canonical_name,
+        action,
+        decided_at::text AS created_at,
+        metadata
+      FROM entity_role_resolution_decisions
+      WHERE namespace_id = $1
+      UNION ALL
+      SELECT
+        'clarification_resolution' AS kind,
+        raw_text AS source_name,
+        canonical_name,
+        resolution_state AS action,
+        updated_at::text AS created_at,
+        metadata
+      FROM clarification_resolutions
+      WHERE namespace_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2
+    `,
+    [namespaceId, limit]
+  );
+  const matchesQuery = (value: unknown): boolean => {
+    if (!normalizedQuery) {
+      return true;
+    }
+    return normalizeCorrectionName(JSON.stringify(value ?? "")).includes(normalizedQuery);
+  };
+  const correctionItems = [
+    ...inbox.items.map((item) => ({ kind: "clarification", item })).filter(matchesQuery),
+    ...roleConflicts.map((item) => ({ kind: "role_conflict_projection", item })).filter(matchesQuery),
+    ...recentDecisions.map((item) => ({ kind: item.kind, item })).filter(matchesQuery)
+  ].slice(0, limit);
+
+  return {
+    namespaceId,
+    query: query ?? null,
+    summary: {
+      clarificationOpenCount: inbox.summary.total,
+      roleConflictProjectionCount: roleConflicts.length,
+      returnedCount: correctionItems.length
+    },
+    items: correctionItems,
+    guidance: {
+      applyCorrectionTool: "memory.apply_correction",
+      keepSeparateTool: "memory.keep_correction_separate",
+      statusTool: "memory.get_correction_status",
+      examples: [
+        {
+          source_name: "Omi Gummi",
+          canonical_name: "Gummi",
+          entity_type: "person",
+          aliases: ["Omi Gummi"]
+        },
+        {
+          source_name: "Steven",
+          canonical_name: "Stephen",
+          entity_type: "person",
+          aliases: ["Steven"]
+        },
+        {
+          source_name: "Chiang Mai",
+          canonical_name: "Chiang Mai",
+          source_entity_type: "person",
+          canonical_entity_type: "place",
+          entity_type: "place",
+          aliases: ["Chiang Mai"]
+        }
+      ]
+    }
+  };
+}
+
+async function applyCorrection(args: ToolCallArgs): Promise<unknown> {
+  const namespaceId = requireString(args.namespace_id, "namespace_id");
+  const sourceName = requireString(args.source_name, "source_name");
+  const canonicalName = requireString(args.canonical_name, "canonical_name");
+  const entityType = requireString(args.entity_type, "entity_type");
+  const sourceEntityType = optionalString(args.source_entity_type) ?? entityType;
+  const canonicalEntityType = optionalString(args.canonical_entity_type) ?? entityType;
+  const aliases = optionalStringArray(args.aliases) ?? [sourceName];
+  const preserveAliases = typeof args.preserve_aliases === "boolean" ? args.preserve_aliases : true;
+  const note = optionalString(args.note) ?? `MCP correction: ${sourceName} -> ${canonicalName}`;
+  const preflight = await buildCorrectionPreflight({
+    namespaceId,
+    sourceName,
+    canonicalName,
+    entityType,
+    sourceEntityType,
+    canonicalEntityType
+  });
+  if ((preflight as { readonly requiresUserChoice?: unknown }).requiresUserChoice === true && optionalString(args.target_entity_id) === undefined) {
+    return {
+      namespaceId,
+      correctionType: "entity_alias_or_spelling",
+      sourceName,
+      canonicalName,
+      entityType: canonicalEntityType,
+      sourceEntityType,
+      canonicalEntityType,
+      applied: false,
+      requiresUserChoice: true,
+      correctionPreflight: preflight,
+      guidance: {
+        message: "Multiple plausible entities matched this correction. Do not silently merge. Ask the user which target to merge into, or keep them separate.",
+        nextTool: "memory.apply_correction",
+        optionalTargetField: "target_entity_id",
+        keepSeparateTool: "memory.keep_correction_separate"
+      },
+      propagation: {
+        rawEvidenceDeleted: false,
+        durableDecisionWritten: false,
+        outboxProcessed: false,
+        correctionStatusTool: "memory.get_correction_status"
+      }
+    };
+  }
+  const result =
+    sourceEntityType === canonicalEntityType
+      ? await mergeEntityAlias({
+          namespaceId,
+          sourceName,
+          canonicalName,
+          entityType,
+          targetEntityId: optionalString(args.target_entity_id),
+          aliases,
+          preserveAliases,
+          note
+        })
+      : await mergeEntityRoleCorrection({
+          namespaceId,
+          sourceName,
+          sourceEntityType,
+          canonicalName,
+          canonicalEntityType,
+          aliases,
+          preserveAliases,
+          note
+        });
+  const outbox = await processBrainOutboxEvents({ namespaceId, limit: 25 });
+  const roleProjection = await rebuildEntityRoleConflictProjection(namespaceId);
+  const status = await getCorrectionStatus({
+    namespace_id: namespaceId,
+    source_name: sourceName,
+    canonical_name: canonicalName,
+    entity_type: sourceEntityType === canonicalEntityType ? canonicalEntityType : undefined,
+    limit: 10
+  });
+
+  return {
+    namespaceId,
+    correctionType: "entity_alias_or_spelling",
+    sourceName,
+    canonicalName,
+    entityType: canonicalEntityType,
+    sourceEntityType,
+    canonicalEntityType,
+    aliases,
+    preserveAliases,
+    correctionPreflight: preflight,
+    result,
+    outbox,
+    roleProjectionCount: roleProjection.length,
+    status,
+    propagation: {
+      rawEvidenceDeleted: false,
+      durableDecisionWritten: Boolean(result.outboxEventId),
+      outboxProcessed: outbox.processed > 0,
+      correctionStatusTool: "memory.get_correction_status"
+    }
+  };
+}
+
+async function keepCorrectionSeparate(args: ToolCallArgs): Promise<unknown> {
+  const namespaceId = requireString(args.namespace_id, "namespace_id");
+  const leftName = requireString(args.left_name, "left_name");
+  const rightName = requireString(args.right_name, "right_name");
+  const entityType = requireString(args.entity_type, "entity_type");
+  const leftEntityId = await resolveCorrectionEntityId({
+    namespaceId,
+    entityId: optionalString(args.left_entity_id),
+    entityName: leftName,
+    entityType,
+    fieldName: "left_name"
+  });
+  const rightEntityId = await resolveCorrectionEntityId({
+    namespaceId,
+    entityId: optionalString(args.right_entity_id),
+    entityName: rightName,
+    entityType,
+    fieldName: "right_name"
+  });
+  const note = optionalString(args.note) ?? `MCP keep separate: ${leftName} != ${rightName}`;
+  const result = await keepIdentityConflictSeparate({ leftEntityId, rightEntityId, note });
+
+  return {
+    namespaceId,
+    correctionType: "identity_keep_separate",
+    leftName,
+    rightName,
+    entityType,
+    result,
+    propagation: {
+      rawEvidenceDeleted: false,
+      durableDecisionWritten: result.decision === "keep_separate",
+      outboxProcessed: false,
+      correctionStatusTool: "memory.get_correction_status"
+    }
+  };
+}
+
+async function getCorrectionStatus(args: ToolCallArgs): Promise<unknown> {
+  const namespaceId = requireString(args.namespace_id, "namespace_id");
+  const canonicalName = requireString(args.canonical_name, "canonical_name");
+  const sourceName = optionalString(args.source_name);
+  const entityType = optionalString(args.entity_type);
+  const limit = optionalNumber(args.limit) ?? 10;
+  const names = [...new Set([canonicalName, sourceName].filter((value): value is string => Boolean(value?.trim())))];
+  const normalizedNames = names.map(normalizeCorrectionName);
+  const entities = await queryRows<{
+    readonly id: string;
+    readonly namespace_id: string;
+    readonly entity_type: string;
+    readonly canonical_name: string;
+    readonly normalized_name: string;
+    readonly merged_into_entity_id: string | null;
+    readonly metadata: Record<string, unknown>;
+  }>(
+    `
+      SELECT
+        id::text,
+        namespace_id,
+        entity_type,
+        canonical_name,
+        normalized_name,
+        merged_into_entity_id::text,
+        metadata
+      FROM entities
+      WHERE namespace_id = $1
+        AND ($2::text IS NULL OR entity_type = $2)
+        AND (
+          normalized_name = ANY($3::text[])
+          OR id IN (
+            SELECT entity_id
+            FROM entity_aliases
+            WHERE normalized_alias = ANY($3::text[])
+          )
+        )
+      ORDER BY merged_into_entity_id NULLS FIRST, canonical_name
+      LIMIT $4
+    `,
+    [namespaceId, entityType ?? null, normalizedNames, limit]
+  );
+  const aliases = await queryRows<{
+    readonly entity_id: string;
+    readonly canonical_name: string;
+    readonly alias: string;
+    readonly alias_type: string;
+    readonly is_user_verified: boolean;
+    readonly metadata: Record<string, unknown>;
+  }>(
+    `
+      SELECT
+        ea.entity_id::text,
+        e.canonical_name,
+        ea.alias,
+        ea.alias_type,
+        ea.is_user_verified,
+        ea.metadata
+      FROM entity_aliases ea
+      JOIN entities e ON e.id = ea.entity_id
+      WHERE e.namespace_id = $1
+        AND (
+          e.normalized_name = ANY($2::text[])
+          OR ea.normalized_alias = ANY($2::text[])
+        )
+      ORDER BY e.canonical_name, ea.alias
+      LIMIT $3
+    `,
+    [namespaceId, normalizedNames, limit * 4]
+  );
+  const outboxEvents = await queryRows<{
+    readonly id: string;
+    readonly event_type: string;
+    readonly status: string;
+    readonly payload: Record<string, unknown>;
+    readonly created_at: string;
+    readonly processed_at: string | null;
+  }>(
+    `
+      SELECT id::text, event_type, status, payload, created_at::text, processed_at::text
+      FROM brain_outbox_events
+      WHERE namespace_id = $1
+        AND (
+          payload->>'canonical_name' = $2
+          OR payload->>'source_name' = $3
+          OR payload::text ILIKE '%' || $2 || '%'
+          OR ($3::text IS NOT NULL AND payload::text ILIKE '%' || $3 || '%')
+        )
+      ORDER BY created_at DESC
+      LIMIT $4
+    `,
+    [namespaceId, canonicalName, sourceName ?? null, limit]
+  );
+  const identityDecisions = await queryRows<{
+    readonly decision: string;
+    readonly canonical_name: string | null;
+    readonly note: string | null;
+    readonly metadata: Record<string, unknown>;
+    readonly updated_at: string;
+    readonly entity_a_name: string | null;
+    readonly entity_b_name: string | null;
+  }>(
+    `
+      SELECT
+        icd.decision,
+        icd.canonical_name,
+        icd.note,
+        icd.metadata,
+        icd.updated_at::text,
+        ea.canonical_name AS entity_a_name,
+        eb.canonical_name AS entity_b_name
+      FROM identity_conflict_decisions icd
+      JOIN entities ea ON ea.id = icd.entity_a_id
+      JOIN entities eb ON eb.id = icd.entity_b_id
+      WHERE (
+          ea.namespace_id = $1
+          OR eb.namespace_id = $1
+        )
+        AND (
+          ea.normalized_name = ANY($2::text[])
+          OR eb.normalized_name = ANY($2::text[])
+          OR icd.canonical_name = $3
+          OR ($4::text IS NOT NULL AND icd.note ILIKE '%' || $4 || '%')
+        )
+      ORDER BY icd.updated_at DESC
+      LIMIT $5
+    `,
+    [namespaceId, normalizedNames, canonicalName, sourceName ?? null, limit]
+  );
+  const correctionSourceEnvelopes = await queryRows<{
+    readonly id: string;
+    readonly correction_kind: string;
+    readonly source_name: string;
+    readonly canonical_name: string | null;
+    readonly source_entity_type: string | null;
+    readonly canonical_entity_type: string | null;
+    readonly action: string;
+    readonly source_trail: readonly unknown[];
+    readonly payload: Record<string, unknown>;
+    readonly created_at: string;
+  }>(
+    `
+      SELECT
+        id::text,
+        correction_kind,
+        source_name,
+        canonical_name,
+        source_entity_type,
+        canonical_entity_type,
+        action,
+        source_trail,
+        payload,
+        created_at::text
+      FROM correction_source_envelopes
+      WHERE namespace_id = $1
+        AND (
+          lower(source_name) = ANY($2::text[])
+          OR lower(coalesce(canonical_name, '')) = ANY($2::text[])
+          OR payload::text ILIKE '%' || $3 || '%'
+          OR ($4::text IS NOT NULL AND payload::text ILIKE '%' || $4 || '%')
+        )
+      ORDER BY created_at DESC
+      LIMIT $5
+    `,
+    [namespaceId, normalizedNames, canonicalName, sourceName ?? null, limit]
+  );
+  const correctionEnvelopeIds = correctionSourceEnvelopes.map((row) => row.id);
+  const classConstraints = await queryRows<{
+    readonly id: string;
+    readonly surface_name: string;
+    readonly canonical_name: string;
+    readonly corrected_role: string;
+    readonly forbidden_roles: readonly string[];
+    readonly allowed_roles: readonly string[];
+    readonly decision_reason: string | null;
+    readonly updated_at: string;
+  }>(
+    `
+      SELECT
+        id::text,
+        surface_name,
+        canonical_name,
+        corrected_role,
+        forbidden_roles,
+        allowed_roles,
+        decision_reason,
+        updated_at::text
+      FROM correction_class_constraints
+      WHERE namespace_id = $1
+        AND (
+          normalized_name = ANY($2::text[])
+          OR lower(canonical_name) = ANY($2::text[])
+        )
+      ORDER BY updated_at DESC
+      LIMIT $3
+    `,
+    [namespaceId, normalizedNames, limit]
+  );
+  const referenceAudits = await queryRows<{
+    readonly id: string;
+    readonly audit_kind: string;
+    readonly source_reference_count: number;
+    readonly intentionally_retained_count: number;
+    readonly relationship_source_ref_count: number;
+    readonly self_binding_source_ref_count: number;
+    readonly relationship_prior_source_ref_count: number;
+    readonly passed: boolean;
+    readonly metadata: Record<string, unknown>;
+    readonly created_at: string;
+  }>(
+    `
+      SELECT
+        id::text,
+        audit_kind,
+        source_reference_count,
+        intentionally_retained_count,
+        relationship_source_ref_count,
+        self_binding_source_ref_count,
+        relationship_prior_source_ref_count,
+        passed,
+        metadata,
+        created_at::text
+      FROM correction_reference_audits
+      WHERE namespace_id = $1
+        AND (
+          correction_envelope_id = ANY($2::uuid[])
+          OR source_entity_id IN (SELECT id FROM entities WHERE namespace_id = $1 AND normalized_name = ANY($3::text[]))
+          OR target_entity_id IN (SELECT id FROM entities WHERE namespace_id = $1 AND normalized_name = ANY($3::text[]))
+        )
+      ORDER BY created_at DESC
+      LIMIT $4
+    `,
+    [namespaceId, correctionEnvelopeIds, normalizedNames, limit]
+  );
+  const writeLocks = await queryRows<{
+    readonly id: string;
+    readonly entity_name: string;
+    readonly entity_type: string | null;
+    readonly lock_reason: string;
+    readonly status: string;
+    readonly acquired_at: string;
+    readonly released_at: string | null;
+    readonly metadata: Record<string, unknown>;
+  }>(
+    `
+      SELECT
+        id::text,
+        entity_name,
+        entity_type,
+        lock_reason,
+        status,
+        acquired_at::text,
+        released_at::text,
+        metadata
+      FROM correction_write_locks
+      WHERE namespace_id = $1
+        AND normalized_name = ANY($2::text[])
+      ORDER BY acquired_at DESC
+      LIMIT $3
+    `,
+    [namespaceId, normalizedNames, limit]
+  );
+  const roleProjection = (await loadEntityRoleConflictProjection(namespaceId)).filter((row) =>
+    normalizedNames.includes(row.normalizedName)
+  );
+  const activeCanonicalEntities = entities.filter((entity) => entity.merged_into_entity_id === null && normalizeCorrectionName(entity.canonical_name) === normalizeCorrectionName(canonicalName));
+  const staleActiveSourceEntities = sourceName
+    ? entities.filter((entity) => entity.merged_into_entity_id === null && normalizeCorrectionName(entity.canonical_name) === normalizeCorrectionName(sourceName) && normalizeCorrectionName(sourceName) !== normalizeCorrectionName(canonicalName))
+    : [];
+
+  return {
+    namespaceId,
+    sourceName: sourceName ?? null,
+    canonicalName,
+    entityType: entityType ?? null,
+    propagated: activeCanonicalEntities.length > 0 && staleActiveSourceEntities.length === 0,
+    rawEvidenceDeleted: false,
+    activeCanonicalEntities,
+    staleActiveSourceEntities,
+    aliases,
+    outboxEvents,
+    identityDecisions,
+    correctionSourceEnvelopes,
+    classConstraints,
+    referenceAudits,
+    writeLocks,
+    roleProjection,
+    guidance: {
+      propagatedMeans: "A canonical active entity exists and the old source spelling/name is no longer an active separate entity for this type.",
+      rawEvidencePolicy: "Raw source text is immutable; corrections are represented as aliases, merged entity references, replayable correction envelopes, class constraints, reference audits, and outbox/reprojection records."
+    }
   };
 }
 
@@ -540,56 +1478,240 @@ async function getProtocols(args: ToolCallArgs): Promise<unknown> {
   });
 }
 
+function registryKey(namespaceId: string, sessionId: string): string {
+  return `${namespaceId}::${sessionId}`;
+}
+
+function isSessionSourceAuditFollowup(query: string): boolean {
+  return /\bwhere\s+did\s+(?:that|this|the)\s+(?:answer|claim|response|result)?\s*(?:come\s+from|source|sources|evidence)\b/iu.test(query) ||
+    /\b(?:show|give|list)\s+(?:me\s+)?(?:the\s+)?sources?\s+for\s+(?:that|this|the)\s+(?:answer|claim|response|result)\b/iu.test(query);
+}
+
+function isSupportedPayload(payload: Record<string, unknown>): boolean {
+  const evidenceCount = typeof payload.evidenceCount === "number" && Number.isFinite(payload.evidenceCount) ? payload.evidenceCount : 0;
+  const sourceTrail = Array.isArray(payload.sourceTrail) ? payload.sourceTrail : [];
+  return evidenceCount > 0 && sourceTrail.length > 0;
+}
+
+function recordSessionClaims(input: {
+  readonly namespaceId: string;
+  readonly sessionId?: string;
+  readonly query: string;
+  readonly payload: Record<string, unknown>;
+}): void {
+  if (!input.sessionId || !isSupportedPayload(input.payload) || input.payload.queryContract === "source_audit") {
+    return;
+  }
+  const claimAudit = Array.isArray(input.payload.claimAudit) ? input.payload.claimAudit : [];
+  const fallbackSourceTrail = Array.isArray(input.payload.sourceTrail)
+    ? input.payload.sourceTrail.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    : [];
+  const fallbackQuotes = Array.isArray(input.payload.sourceQuotes)
+    ? input.payload.sourceQuotes.filter((quote): quote is string => typeof quote === "string")
+    : [];
+  const entries = claimAudit
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    .map((entry, index) => {
+      const sourceTrail = Array.isArray(entry.sourceTrail)
+        ? entry.sourceTrail.filter((trail): trail is Record<string, unknown> => Boolean(trail) && typeof trail === "object")
+        : fallbackSourceTrail;
+      return {
+        id: typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : `claim:${index}`,
+        query: input.query,
+        claimText:
+          typeof entry.claimText === "string" && entry.claimText.trim()
+            ? entry.claimText.trim()
+            : typeof input.payload.answer === "string"
+              ? input.payload.answer.slice(0, 500)
+              : input.query,
+        claimFamily: typeof entry.claimFamily === "string" ? entry.claimFamily : "unknown",
+        finalClaimSource: typeof entry.finalClaimSource === "string" ? entry.finalClaimSource : typeof input.payload.finalClaimSource === "string" ? input.payload.finalClaimSource : null,
+        evidenceCount: typeof entry.evidenceCount === "number" && Number.isFinite(entry.evidenceCount) ? entry.evidenceCount : sourceTrail.length,
+        sourceTrail,
+        sourceQuotes: Array.isArray(entry.sourceQuotes)
+          ? entry.sourceQuotes.filter((quote): quote is string => typeof quote === "string")
+          : fallbackQuotes,
+        answerSectionId: typeof entry.answerSectionId === "string" ? entry.answerSectionId : null,
+        recordedAt: new Date().toISOString()
+      };
+    })
+    .filter((entry) => entry.sourceTrail.length > 0);
+
+  if (entries.length === 0 && fallbackSourceTrail.length > 0) {
+    entries.push({
+      id: "answer",
+      query: input.query,
+      claimText: typeof input.payload.answer === "string" && input.payload.answer.trim() ? input.payload.answer.trim().slice(0, 500) : input.query,
+      claimFamily: "unknown",
+      finalClaimSource: typeof input.payload.finalClaimSource === "string" ? input.payload.finalClaimSource : null,
+      evidenceCount: typeof input.payload.evidenceCount === "number" && Number.isFinite(input.payload.evidenceCount) ? input.payload.evidenceCount : fallbackSourceTrail.length,
+      sourceTrail: fallbackSourceTrail,
+      sourceQuotes: fallbackQuotes,
+      answerSectionId: null,
+      recordedAt: new Date().toISOString()
+    });
+  }
+
+  if (entries.length === 0) {
+    return;
+  }
+
+  const key = registryKey(input.namespaceId, input.sessionId);
+  const existing = sessionClaimRegistry.get(key) ?? [];
+  sessionClaimRegistry.set(key, [...entries, ...existing].slice(0, 40));
+}
+
+function buildSessionSourceAuditPayload(input: {
+  readonly namespaceId: string;
+  readonly sessionId: string;
+  readonly query: string;
+}): Record<string, unknown> | null {
+  const claims = sessionClaimRegistry.get(registryKey(input.namespaceId, input.sessionId)) ?? [];
+  const latestClaims = claims.slice(0, 8);
+  if (latestClaims.length === 0) {
+    return null;
+  }
+  const sourceTrail = latestClaims.flatMap((claim) => claim.sourceTrail).slice(0, 12);
+  const sourceQuotes = [...new Set(latestClaims.flatMap((claim) => claim.sourceQuotes))].slice(0, 8);
+  const evidenceCount = sourceTrail.length;
+  return {
+    answer: "This source audit is bound to the prior answer in the current MCP session.",
+    queryContract: "source_audit",
+    retrievalDomain: "source_audit",
+    finalClaimSource: "source_audit",
+    evidenceCount,
+    sourceTrail,
+    primarySource: sourceTrail[0] ?? null,
+    sourceQuotes,
+    claimAudit: latestClaims.map((claim) => ({
+      id: `session:${claim.id}`,
+      claimText: claim.claimText,
+      claimFamily: claim.claimFamily,
+      supportKind: "answer_section",
+      finalClaimSource: claim.finalClaimSource,
+      evidenceCount: claim.evidenceCount,
+      sourceTrail: claim.sourceTrail,
+      sourceQuotes: claim.sourceQuotes,
+      supportStatus: "supported",
+      faithfulnessStatus: "verified"
+    })),
+    selectionTrace: [
+      {
+        stage: "mcp_session_claim_registry",
+        decision: "selected",
+        reason: "The source-audit follow-up was bound to the prior answer claim registry for this MCP session."
+      }
+    ],
+    sessionClaimRegistry: {
+      sessionId: input.sessionId,
+      priorClaimCount: latestClaims.length,
+      boundQuery: latestClaims[0]?.query ?? null
+    },
+    meta: {
+      finalClaimSource: "source_audit",
+      queryTimeModelCalls: 0,
+      selectedReader: "mcp_session_claim_registry",
+      dominantStage: "mcp_session_claim_registry"
+    }
+  };
+}
+
 export async function executeMcpTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
-    case "memory.recap":
-      return wrapResult(
-        await recapMemory({
-          query: requireString(args.query, "query"),
-          namespaceId: requireString(args.namespace_id, "namespace_id"),
-          timeStart: optionalString(args.time_start),
-          timeEnd: optionalString(args.time_end),
-          referenceNow: optionalString(args.reference_now),
-          limit: optionalNumber(args.limit),
-          participants: optionalStringArray(args.participants),
-          topics: optionalStringArray(args.topics),
-          projects: optionalStringArray(args.projects),
-          provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
-          model: optionalString(args.model)
-        })
-      );
-    case "memory.extract_tasks":
-      return wrapResult(
-        await extractTaskMemory({
-          query: requireString(args.query, "query"),
-          namespaceId: requireString(args.namespace_id, "namespace_id"),
-          timeStart: optionalString(args.time_start),
-          timeEnd: optionalString(args.time_end),
-          referenceNow: optionalString(args.reference_now),
-          limit: optionalNumber(args.limit),
-          participants: optionalStringArray(args.participants),
-          topics: optionalStringArray(args.topics),
-          projects: optionalStringArray(args.projects),
-          provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
-          model: optionalString(args.model)
-        })
-      );
+    case "memory.recap": {
+      const query = requireString(args.query, "query");
+      const namespaceId = requireString(args.namespace_id, "namespace_id");
+      const detailMode = optionalDetailMode(args.detail_mode) ?? "full";
+      const focusMode = optionalFocusMode(args.focus_mode);
+      const rawPayload = await attachStableQueryContractEnvelope({
+          toolName: "memory.recap",
+          queryText: query,
+          namespaceId,
+          payload: await recapMemory({
+            query,
+            namespaceId,
+            timeStart: optionalString(args.time_start),
+            timeEnd: optionalString(args.time_end),
+            referenceNow: optionalString(args.reference_now),
+            limit: optionalNumber(args.limit),
+            participants: optionalStringArray(args.participants),
+            topics: optionalStringArray(args.topics),
+            projects: optionalStringArray(args.projects),
+            provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
+            model: optionalString(args.model)
+          })
+        });
+      const payload = await applySourcePrivacyGuard({ namespaceId, query, payload: rawPayload as Record<string, unknown> });
+      return wrapResult({
+        ...payload,
+        detailModeUsed: detailMode,
+        focusModeUsed: focusMode ?? null,
+        humanReadable: presentHumanReadableQueryResult({ query, payload, detailMode, focusMode })
+      });
+    }
+    case "memory.extract_tasks": {
+      const query = requireString(args.query, "query");
+      const namespaceId = requireString(args.namespace_id, "namespace_id");
+      const detailMode = optionalDetailMode(args.detail_mode) ?? "full";
+      const focusMode = optionalFocusMode(args.focus_mode);
+      const rawPayload = await attachStableQueryContractEnvelope({
+          toolName: "memory.extract_tasks",
+          queryText: query,
+          namespaceId,
+          payload: await extractTaskMemory({
+            query,
+            namespaceId,
+            timeStart: optionalString(args.time_start),
+            timeEnd: optionalString(args.time_end),
+            referenceNow: optionalString(args.reference_now),
+            limit: optionalNumber(args.limit),
+            participants: optionalStringArray(args.participants),
+            topics: optionalStringArray(args.topics),
+            projects: optionalStringArray(args.projects),
+            provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
+            model: optionalString(args.model)
+          })
+        });
+      const payload = await applySourcePrivacyGuard({ namespaceId, query, payload: rawPayload as Record<string, unknown> });
+      return wrapResult({
+        ...payload,
+        detailModeUsed: detailMode,
+        focusModeUsed: focusMode ?? null,
+        humanReadable: presentHumanReadableQueryResult({ query, payload, detailMode, focusMode })
+      });
+    }
     case "memory.extract_calendar":
-      return wrapResult(
-        await extractCalendarMemory({
-          query: requireString(args.query, "query"),
-          namespaceId: requireString(args.namespace_id, "namespace_id"),
-          timeStart: optionalString(args.time_start),
-          timeEnd: optionalString(args.time_end),
-          referenceNow: optionalString(args.reference_now),
-          limit: optionalNumber(args.limit),
-          participants: optionalStringArray(args.participants),
-          topics: optionalStringArray(args.topics),
-          projects: optionalStringArray(args.projects),
-          provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
-          model: optionalString(args.model)
-        })
-      );
+    {
+      const query = requireString(args.query, "query");
+      const namespaceId = requireString(args.namespace_id, "namespace_id");
+      const detailMode = optionalDetailMode(args.detail_mode) ?? "full";
+      const focusMode = optionalFocusMode(args.focus_mode);
+      const rawPayload = await attachStableQueryContractEnvelope({
+          toolName: "memory.extract_calendar",
+          queryText: query,
+          namespaceId,
+          payload: await extractCalendarMemory({
+            query,
+            namespaceId,
+            timeStart: optionalString(args.time_start),
+            timeEnd: optionalString(args.time_end),
+            referenceNow: optionalString(args.reference_now),
+            limit: optionalNumber(args.limit),
+            participants: optionalStringArray(args.participants),
+            topics: optionalStringArray(args.topics),
+            projects: optionalStringArray(args.projects),
+            provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
+            model: optionalString(args.model)
+          })
+        });
+      const payload = await applySourcePrivacyGuard({ namespaceId, query, payload: rawPayload as Record<string, unknown> });
+      return wrapResult({
+        ...payload,
+        detailModeUsed: detailMode,
+        focusModeUsed: focusMode ?? null,
+        humanReadable: presentHumanReadableQueryResult({ query, payload, detailMode, focusMode })
+      });
+    }
     case "memory.explain_recap":
       return wrapResult(
         await explainRecap({
@@ -604,17 +1726,38 @@ export async function executeMcpTool(name: string, args: Record<string, unknown>
           projects: optionalStringArray(args.projects)
         })
       );
-    case "memory.search":
-      return wrapResult(
-        await searchMemory({
-          query: requireString(args.query, "query"),
-          namespaceId: requireString(args.namespace_id, "namespace_id"),
-          timeStart: optionalString(args.time_start),
-          timeEnd: optionalString(args.time_end),
-          referenceNow: optionalString(args.reference_now),
-          limit: optionalNumber(args.limit)
-        })
-      );
+    case "memory.search": {
+      const query = requireString(args.query, "query");
+      const namespaceId = requireString(args.namespace_id, "namespace_id");
+      const detailMode = optionalDetailMode(args.detail_mode) ?? "full";
+      const focusMode = optionalFocusMode(args.focus_mode);
+      const sessionId = optionalSessionId(args);
+      const sessionAuditPayload = sessionId && isSessionSourceAuditFollowup(query)
+        ? buildSessionSourceAuditPayload({ namespaceId, sessionId, query })
+        : null;
+      const rawPayload = sessionAuditPayload ?? await attachStableQueryContractEnvelope({
+          toolName: "memory.search",
+          queryText: query,
+          namespaceId,
+          payload: await searchMemory({
+            query,
+            namespaceId,
+            timeStart: optionalString(args.time_start),
+            timeEnd: optionalString(args.time_end),
+            referenceNow: optionalString(args.reference_now),
+            limit: optionalNumber(args.limit)
+          })
+        });
+      const payload = await applySourcePrivacyGuard({ namespaceId, query, payload: rawPayload as Record<string, unknown> });
+      recordSessionClaims({ namespaceId, sessionId, query, payload: payload as Record<string, unknown> });
+      return wrapResult({
+        ...payload,
+        sessionIdUsed: sessionId ?? null,
+        detailModeUsed: detailMode,
+        focusModeUsed: focusMode ?? null,
+        humanReadable: presentHumanReadableQueryResult({ query, payload, detailMode, focusMode })
+      });
+    }
     case "memory.timeline":
       return wrapResult(
         await timelineMemory({
@@ -680,6 +1823,59 @@ export async function executeMcpTool(name: string, args: Record<string, unknown>
         }
       });
     }
+    case "memory.list_corrections":
+      return wrapResult(await listCorrections(args));
+    case "memory.apply_correction":
+      return wrapResult(await applyCorrection(args));
+    case "memory.keep_correction_separate":
+      return wrapResult(await keepCorrectionSeparate(args));
+    case "memory.get_correction_status":
+      return wrapResult(await getCorrectionStatus(args));
+    case "memory.apply_source_privacy": {
+      const namespaceId = requireString(args.namespace_id, "namespace_id");
+      const overlay = await applySourcePrivacyOverlay({
+        namespaceId,
+        actionType: requireSourcePrivacyActionType(args.action_type),
+        targetArtifactId: optionalString(args.target_artifact_id),
+        targetSourceUri: optionalString(args.target_source_uri),
+        targetChunkId: optionalString(args.target_chunk_id),
+        redactionText: optionalString(args.redaction_text),
+        accessLabel: optionalString(args.access_label),
+        retentionPolicy: optionalString(args.retention_policy),
+        reason: optionalString(args.reason),
+        actor: optionalString(args.actor),
+        payload: { mcpTool: "memory.apply_source_privacy" }
+      });
+      return wrapResult({
+        namespaceId,
+        overlay,
+        sourceTruthPolicy: "Raw source truth is retained; this operation adds an active privacy overlay and audit trail.",
+        statusTool: "memory.get_source_privacy_status",
+        revertTool: "memory.revert_source_privacy"
+      });
+    }
+    case "memory.revert_source_privacy": {
+      const namespaceId = requireString(args.namespace_id, "namespace_id");
+      const overlay = await revertSourcePrivacyOverlay({
+        namespaceId,
+        overlayId: requireString(args.overlay_id, "overlay_id"),
+        actor: optionalString(args.actor),
+        reason: optionalString(args.reason)
+      });
+      return wrapResult({
+        namespaceId,
+        overlay,
+        reverted: Boolean(overlay),
+        sourceTruthPolicy: "Raw source truth was never deleted; the privacy overlay status changed to reverted."
+      });
+    }
+    case "memory.get_source_privacy_status":
+      return wrapResult(await getSourcePrivacyStatus({
+        namespaceId: requireString(args.namespace_id, "namespace_id"),
+        targetArtifactId: optionalString(args.target_artifact_id),
+        targetSourceUri: optionalString(args.target_source_uri),
+        limit: optionalNumber(args.limit)
+      }));
     case "memory.get_stats":
       return getStats(args);
     case "memory.get_protocols":

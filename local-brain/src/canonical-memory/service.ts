@@ -22,6 +22,10 @@ import {
   temporalQueryObjectAlignmentCount,
   temporalQueryAlignmentCount
 } from "../retrieval/temporal-query-alignment.js";
+import {
+  isFirstTravelLocationQuery,
+  scoreFirstTravelLocationEvidence
+} from "../retrieval/temporal/first-travel-gating.js";
 import type { RecallResult } from "../types.js";
 import type {
   CanonicalAbstainReason,
@@ -985,6 +989,12 @@ export function inferTemporalEventKeyFromText(text: string): string | null {
     return "perform_festival";
   }
   if (
+    /\b(?:animal|pet)\s+shelter\b/.test(normalized) &&
+    /\b(?:fundrais(?:ing|er)|dinner|benefit|gala)\b/.test(normalized)
+  ) {
+    return "animal_shelter_fundraising_dinner";
+  }
+  if (
     /\bseattle\b.*\bgame\b/.test(normalized) ||
     /\bgame\b.*\bseattle\b/.test(normalized)
   ) {
@@ -1032,6 +1042,34 @@ export function inferTemporalEventKeyFromText(text: string): string | null {
   }
   if (/\b(?:mother|mom)\b/.test(normalized) && /\b(?:pass away|passed away|died|death)\b/.test(normalized)) {
     return "mother_pass_away";
+  }
+  if (/\b(?:daughter|son|child)\b/.test(normalized) && /\bbirthday\b/.test(normalized)) {
+    return "child_birthday";
+  }
+  if ((/\bsign(?:ed)? up\b/.test(normalized) || /\benroll(?:ed|ing)?\b/.test(normalized) || /\bregister(?:ed|ing)?\b/.test(normalized)) && /\bpottery class\b/.test(normalized)) {
+    return "signup_pottery_class";
+  }
+  if (/\bplate\b/.test(normalized) && /\bpottery class\b/.test(normalized)) {
+    return "make_plate_pottery_class";
+  }
+  if (/\b(?:got hurt|hurt myself|hurt|injur(?:ed|y)|accident)\b/.test(normalized)) {
+    return "get_hurt";
+  }
+  if (/\bpride\b/.test(normalized) && /\b(?:festival|parade)\b/.test(normalized)) {
+    return "pride_festival";
+  }
+  if (
+    /\b(?:school event|school speech|speech at school)\b/.test(normalized) ||
+    /\btalked about my transgender journey\b/.test(normalized) ||
+    (/\b(?:speech|talk(?:ed|ing)?)\b/.test(normalized) && /\bschool\b/.test(normalized))
+  ) {
+    return "school_speech";
+  }
+  if (
+    /\b(?:(?:met|meet(?:ing)?) up|got together|caught up|spent time)\b/.test(normalized) &&
+    /\b(?:friends?|family|mentors?)\b/.test(normalized)
+  ) {
+    return "support_network_meetup";
   }
   const campingMonth = normalized.match(/\bcamp(?:ing|ed)?(?:\s+in)?\s+(january|february|march|april|may|june|july|august|september|october|november|december)\b/u)?.[1];
   if (campingMonth) {
@@ -2518,7 +2556,7 @@ function requestedTemporalGranularityBonus(queryText: string, row: CanonicalTemp
 }
 
 function shouldPreferEarliestTemporalQueryEvent(queryText: string, queryEventKey: string | null): boolean {
-  if (!queryEventKey) {
+  if (!queryEventKey && !isFirstTravelLocationQuery(queryText)) {
     return false;
   }
   const normalizedQuery = normalizeWhitespace(queryText).toLowerCase();
@@ -2602,6 +2640,7 @@ function scoreCanonicalTemporalLookupRow(params: {
   ) {
     score -= 4;
   }
+  score += scoreFirstTravelLocationEvidence(params.queryText, searchText);
   return score;
 }
 
@@ -2709,6 +2748,9 @@ export function isCanonicalTemporalLookupRowEligibleForQuery(
   const queryObjectTokens = extractTemporalQueryObjectTokens(queryText);
   const requiresObjectAlignment = queryObjectTokens.length > 0;
   const bindingConfidence = canonicalTemporalBindingConfidence(queryText, queryEventKey, row);
+  if (isFirstTravelLocationQuery(queryText) && scoreFirstTravelLocationEvidence(queryText, searchText) <= 0) {
+    return false;
+  }
   const persistedExactEventFact =
     Boolean(queryEventKey) &&
     areTemporalEventKeysCompatible(row.event_key, queryEventKey) &&
@@ -3058,12 +3100,17 @@ export async function lookupStoredCanonicalForQuery(params: {
         queryEventKey && eligibleRows.some((row) => areTemporalEventKeysCompatible(row.event_key, queryEventKey))
           ? eligibleRows.filter((row) => areTemporalEventKeysCompatible(row.event_key, queryEventKey))
           : eligibleRows;
+      const firstTravelScopedRows =
+        isFirstTravelLocationQuery(params.queryText)
+          ? candidateRows.filter((row) => scoreFirstTravelLocationEvidence(params.queryText, buildTemporalCandidateSearchText(row)) > 0)
+          : [];
+      const scopedCandidateRows = firstTravelScopedRows.length > 0 ? firstTravelScopedRows : candidateRows;
       const temporalNeighborhoods = buildCanonicalTemporalNeighborhoodSummaries(
         params.queryText,
         queryEventKey,
-        candidateRows
+        scopedCandidateRows
       );
-      const scoredRows = candidateRows
+      const scoredRows = scopedCandidateRows
         .map((row) => ({
           row,
           score: scoreCanonicalTemporalLookupRow({
@@ -3081,7 +3128,7 @@ export async function lookupStoredCanonicalForQuery(params: {
       }
       const scoreByRow = new Map(scoredRows.map(({ row, score }) => [row, score]));
       const preferEarliest = shouldPreferEarliestTemporalQueryEvent(params.queryText, queryEventKey);
-      const selected = [...candidateRows].sort((left, right) => {
+      const selected = [...scopedCandidateRows].sort((left, right) => {
         const scoreDelta = (scoreByRow.get(right) ?? 0) - (scoreByRow.get(left) ?? 0);
         if (scoreDelta !== 0) {
           if (
@@ -3588,41 +3635,53 @@ async function rebuildCanonicalSubjectsAndAliases(
   let aliasCount = 0;
   let ambiguityCount = 0;
   const aliasIndex = new Map<string, { aliasText: string; subjectIds: Set<string>; subjectNames: Set<string> }>();
+  const winningSubjectRows = new Map<string, CanonicalRegistryRow>();
 
   for (const row of registry.rows) {
-    await client.query(
-      `
-        INSERT INTO canonical_subjects (
-          namespace_id,
-          entity_id,
-          canonical_name,
-          normalized_canonical_name,
-          confidence,
-          metadata
-        )
-        VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb)
-        ON CONFLICT (namespace_id, entity_id)
-        DO UPDATE SET
-          canonical_name = EXCLUDED.canonical_name,
-          normalized_canonical_name = EXCLUDED.normalized_canonical_name,
-          confidence = GREATEST(canonical_subjects.confidence, EXCLUDED.confidence),
-          metadata = canonical_subjects.metadata || EXCLUDED.metadata,
-          updated_at = now()
-      `,
-      [
-        namespaceId,
-        row.id,
-        row.canonical_name,
-        row.normalized_name,
-        entityConfidence(row.entity_type),
-        JSON.stringify({
-          source: "canonical_rebuild",
-          entity_type: row.entity_type,
-          entity_metadata: row.metadata ?? {}
-        })
-      ]
-    );
-    subjectCount += 1;
+    const existing = winningSubjectRows.get(row.normalized_name);
+    if (!existing || entityConfidence(row.entity_type) > entityConfidence(existing.entity_type)) {
+      winningSubjectRows.set(row.normalized_name, row);
+    }
+  }
+
+  for (const row of registry.rows) {
+    if (winningSubjectRows.get(row.normalized_name)?.id === row.id) {
+      await client.query(
+        `
+          INSERT INTO canonical_subjects (
+            namespace_id,
+            entity_id,
+            canonical_name,
+            normalized_canonical_name,
+            confidence,
+            metadata
+          )
+          VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb)
+          ON CONFLICT (namespace_id, entity_id)
+          DO UPDATE SET
+            canonical_name = EXCLUDED.canonical_name,
+            normalized_canonical_name = EXCLUDED.normalized_canonical_name,
+            confidence = GREATEST(canonical_subjects.confidence, EXCLUDED.confidence),
+            metadata = canonical_subjects.metadata || EXCLUDED.metadata,
+            updated_at = now()
+        `,
+        [
+          namespaceId,
+          row.id,
+          row.canonical_name,
+          row.normalized_name,
+          entityConfidence(row.entity_type),
+          JSON.stringify({
+            source: "canonical_rebuild",
+            entity_type: row.entity_type,
+            entity_metadata: row.metadata ?? {}
+          })
+        ]
+      );
+      subjectCount += 1;
+    } else {
+      ambiguityCount += 1;
+    }
 
     const aliasEntries: Array<{ aliasText: string; aliasType: string | null; userVerified: boolean; provenance: JsonRecord }> = [
       {

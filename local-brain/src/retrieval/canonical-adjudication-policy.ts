@@ -1,4 +1,5 @@
 import type {
+  AnswerRetrievalPlan,
   CanonicalAdjudicationResult,
   CanonicalPredicateFamily,
   CanonicalTieBreakReason,
@@ -7,9 +8,22 @@ import type {
 } from "./types.js";
 import type { StoredCanonicalLookup } from "../canonical-memory/service.js";
 import type { RenderedSupportClaim } from "./support-objects.js";
+import { isBroadDirectFactPressureQuery, isProfileInferenceQuery } from "./query-signals.js";
+import { inferTemporalEventKeyFromText } from "../canonical-memory/service.js";
+import { inferPlannerIntentBudgetFamily } from "./planner-intent-budgets.js";
 
 function normalize(value: string | null | undefined): string {
   return String(value ?? "").trim();
+}
+
+function isSparseProfileInferenceBudgetQuery(normalizedQuery: string): boolean {
+  return (
+    /\bwould\b|\blikely\b|\bmight\b|\bseem(?:s)?\b/u.test(normalizedQuery) ||
+    /\bcareer options?\b|\bwhat\s+fields?\b|\bwhat\s+(?:kind|kinds)\s+of\s+jobs?\b/u.test(normalizedQuery) ||
+    /\bwhat\s+kind\s+of\s+role\b|\bwhat\s+role\s+does\b/u.test(normalizedQuery) ||
+    /\blooking\s+into\s+(?:counseling|mental health|career|education)\b/u.test(normalizedQuery) ||
+    (/\b(?:education|educaton|study|career|major|degree)\b/u.test(normalizedQuery) && /\blikely\b/u.test(normalizedQuery))
+  );
 }
 
 export const DEFAULT_RETRIEVAL_LATENCY_BUDGET: RetrievalLatencyBudget = {
@@ -22,11 +36,27 @@ export const DEFAULT_RETRIEVAL_LATENCY_BUDGET: RetrievalLatencyBudget = {
 };
 
 const RETRIEVAL_LATENCY_BUDGETS: Record<RetrievalLatencyBudget["family"], RetrievalLatencyBudget> = {
+  exact_detail_scalar: {
+    family: "exact_detail_scalar",
+    maxBranchDepth: 1,
+    maxNeighborhoodExpansions: 1,
+    maxLeafCandidates: 5,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
   bounded_event_detail: {
     family: "bounded_event_detail",
     maxBranchDepth: 2,
     maxNeighborhoodExpansions: 4,
     maxLeafCandidates: 12,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
+  camping_location_history: {
+    family: "camping_location_history",
+    maxBranchDepth: 1,
+    maxNeighborhoodExpansions: 1,
+    maxLeafCandidates: 6,
     stopOnFirstSufficient: true,
     disableArtifactDerivationAfterSufficient: true
   },
@@ -36,21 +66,110 @@ const RETRIEVAL_LATENCY_BUDGETS: Record<RetrievalLatencyBudget["family"], Retrie
     maxNeighborhoodExpansions: 3,
     maxLeafCandidates: 8,
     stopOnFirstSufficient: true,
-    disableArtifactDerivationAfterSufficient: false
+    disableArtifactDerivationAfterSufficient: true
   },
   commonality_aggregation: {
     family: "commonality_aggregation",
     maxBranchDepth: 2,
     maxNeighborhoodExpansions: 3,
     maxLeafCandidates: 10,
-    stopOnFirstSufficient: false,
-    disableArtifactDerivationAfterSufficient: false
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
+  sparse_profile_inference: {
+    family: "sparse_profile_inference",
+    maxBranchDepth: 1,
+    maxNeighborhoodExpansions: 2,
+    maxLeafCandidates: 6,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
+  broad_direct_fact: {
+    family: "broad_direct_fact",
+    maxBranchDepth: 2,
+    maxNeighborhoodExpansions: 3,
+    maxLeafCandidates: 10,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
+  relationship_profile: {
+    family: "relationship_profile",
+    maxBranchDepth: 1,
+    maxNeighborhoodExpansions: 2,
+    maxLeafCandidates: 6,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
+  broad_preference_profile: {
+    family: "broad_preference_profile",
+    maxBranchDepth: 1,
+    maxNeighborhoodExpansions: 2,
+    maxLeafCandidates: 6,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
+  support_network_reasoned: {
+    family: "support_network_reasoned",
+    maxBranchDepth: 2,
+    maxNeighborhoodExpansions: 2,
+    maxLeafCandidates: 8,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
+  made_item_inventory: {
+    family: "made_item_inventory",
+    maxBranchDepth: 2,
+    maxNeighborhoodExpansions: 2,
+    maxLeafCandidates: 8,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
+  list_history: {
+    family: "list_history",
+    maxBranchDepth: 2,
+    maxNeighborhoodExpansions: 3,
+    maxLeafCandidates: 10,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
+  location_history: {
+    family: "location_history",
+    maxBranchDepth: 2,
+    maxNeighborhoodExpansions: 3,
+    maxLeafCandidates: 8,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
+  event_inventory: {
+    family: "event_inventory",
+    maxBranchDepth: 2,
+    maxNeighborhoodExpansions: 3,
+    maxLeafCandidates: 10,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
+  },
+  temporal_event: {
+    family: "temporal_event",
+    maxBranchDepth: 1,
+    maxNeighborhoodExpansions: 2,
+    maxLeafCandidates: 6,
+    stopOnFirstSufficient: true,
+    disableArtifactDerivationAfterSufficient: true
   },
   default: DEFAULT_RETRIEVAL_LATENCY_BUDGET
 };
 
-export function inferRetrievalLatencyBudgetFamily(queryText: string, exactDetailFamily: string): RetrievalLatencyBudget["family"] {
+export function inferRetrievalLatencyBudgetFamily(
+  queryText: string,
+  exactDetailFamily: string,
+  retrievalPlan?: Pick<AnswerRetrievalPlan, "family" | "lane" | "answerKind"> | null
+): RetrievalLatencyBudget["family"] {
   const normalized = normalize(queryText).toLowerCase();
+  const temporalEventKey = inferTemporalEventKeyFromText(queryText);
+  const plannerBudget = inferPlannerIntentBudgetFamily(queryText, exactDetailFamily, retrievalPlan);
+  if (plannerBudget) {
+    return plannerBudget;
+  }
   if (
     ["meat_preference", "favorite_painting_style", "research_topic"].includes(exactDetailFamily) ||
     /\bwhich meat\b/u.test(normalized) ||
@@ -71,11 +190,21 @@ export function inferRetrievalLatencyBudgetFamily(queryText: string, exactDetail
   ) {
     return "commonality_aggregation";
   }
+  if (isProfileInferenceQuery(queryText) && isSparseProfileInferenceBudgetQuery(normalized)) {
+    return "sparse_profile_inference";
+  }
+  if (isBroadDirectFactPressureQuery(queryText)) {
+    return "broad_direct_fact";
+  }
   return "default";
 }
 
-export function retrievalLatencyBudgetForQuery(queryText: string, exactDetailFamily: string): RetrievalLatencyBudget {
-  return RETRIEVAL_LATENCY_BUDGETS[inferRetrievalLatencyBudgetFamily(queryText, exactDetailFamily)];
+export function retrievalLatencyBudgetForQuery(
+  queryText: string,
+  exactDetailFamily: string,
+  retrievalPlan?: Pick<AnswerRetrievalPlan, "family" | "lane" | "answerKind"> | null
+): RetrievalLatencyBudget {
+  return RETRIEVAL_LATENCY_BUDGETS[inferRetrievalLatencyBudgetFamily(queryText, exactDetailFamily, retrievalPlan)];
 }
 
 export function renderStoredCanonicalSetValues(

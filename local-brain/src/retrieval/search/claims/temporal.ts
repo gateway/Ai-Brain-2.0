@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { extractEntityNameHints } from "../../query-entity-focus.js";
 import { isTemporalDetailQuery } from "../../query-signals.js";
+import { scoreFirstTravelLocationEvidence } from "../../temporal/first-travel-gating.js";
+import { isSawLivePerformanceQuery, scoreSawLivePerformanceEvidence } from "../../temporal/live-performance-gating.js";
 import {
   formatUtcDayLabel,
   formatUtcDayLabelMonthFirst,
@@ -213,6 +215,16 @@ function temporalTokenSet(content: string): Set<string> {
 
 function temporalTokenMatch(term: string, token: string): boolean {
   return term === token || term.startsWith(token) || token.startsWith(term);
+}
+
+function extractFirstTravelTargetLocation(queryText: string): string | null {
+  const rawMatch = queryText.toLowerCase().match(/\btravel\s+to\s+([a-z][a-z\s'-]+?)(?:\?|$|\bin\b|\bat\b|\bwith\b|\bfor\b)/u)?.[1]
+    ?? queryText.toLowerCase().match(/\bto\s+([a-z][a-z\s'-]+?)(?:\?|$|\bin\b|\bat\b|\bwith\b|\bfor\b)/u)?.[1]
+    ?? null;
+  const normalized = typeof rawMatch === "string"
+    ? rawMatch.replace(/[^a-z\s'-]/giu, " ").replace(/\s+/gu, " ").trim()
+    : "";
+  return normalized || null;
 }
 
 function temporalOverlapScore(queryTerms: readonly string[], content: string): { readonly overlap: number; readonly eventOverlap: number } {
@@ -621,6 +633,16 @@ export function deriveTemporalClaimText(
         ? `The best supported month is ${sourceFocusedLabel}.`
         : `The best supported date is ${sourceFocusedLabel}.`;
   }
+  const focusedContent = extractFocusedTemporalSnippet(queryText, result.content, helpers) ?? result.content;
+  const explicit = inferRelativeTemporalAnswerLabel(focusedContent, result.occurredAt, sourceReferenceInstant);
+  if (explicit) {
+    const isYearOnly = /^\d{4}$/.test(explicit);
+    return isYearOnly
+      ? `The best supported year is ${explicit}.`
+      : isMonthOnlyTemporalLabel(explicit, helpers)
+        ? `The best supported month is ${explicit}.`
+        : `The best supported date is ${explicit}.`;
+  }
   if (windowStart) {
     const start = new Date(windowStart);
     const end = windowEnd ? new Date(windowEnd) : null;
@@ -650,18 +672,7 @@ export function deriveTemporalClaimText(
     }
   }
 
-  const focusedContent = extractFocusedTemporalSnippet(queryText, result.content, helpers) ?? result.content;
-  const explicit = inferRelativeTemporalAnswerLabel(focusedContent, result.occurredAt, sourceReferenceInstant);
-  if (!explicit) {
-    return null;
-  }
-
-  const isYearOnly = /^\d{4}$/.test(explicit);
-  return isYearOnly
-    ? `The best supported year is ${explicit}.`
-    : isMonthOnlyTemporalLabel(explicit, helpers)
-      ? `The best supported month is ${explicit}.`
-      : `The best supported date is ${explicit}.`;
+  return null;
 }
 
 function deriveSourceGroundedTemporalClaimText(
@@ -692,7 +703,7 @@ function deriveSourceGroundedTemporalClaimText(
   const isFirstWatchQuery = /\bfirst\b/i.test(queryText) && /\bwatch\b/i.test(queryText);
   const isFirstTournamentQuery = /\bfirst\b/i.test(queryText) && /\btournament\b/i.test(queryText);
   const isFirstTravelQuery = /\bfirst\b/i.test(queryText) && /\btravel\b/i.test(queryText);
-  const isSawLiveQuery = /\bsee\b/i.test(queryText) && /\bperform\s+live\b/i.test(queryText);
+  const isSawLiveQuery = isSawLivePerformanceQuery(queryText);
   const isCreationQuery = /\b(?:paint|painted|drew|drawn|made|wrote)\b/i.test(queryText);
   const isCareerHighMonthQuery = /\bcareer-?high\b/i.test(queryText) && /\bpoints?\b/i.test(queryText);
   const isSeattleGameQuery = /\bseattle\b/i.test(queryText) && /\bgame\b/i.test(queryText);
@@ -710,6 +721,7 @@ function deriveSourceGroundedTemporalClaimText(
   const isCharityRaceQuery = /\bcharity race\b/i.test(queryText);
   const isSchoolSpeechQuery = /\bspeech\b/i.test(queryText) && /\bschool\b/i.test(queryText);
   const isSupportNetworkMeetupQuery = /\bmeet up\b/i.test(queryText) && /\b(?:friends?|family|mentors?)\b/i.test(queryText);
+  const firstTravelTargetLocation = isFirstTravelQuery ? extractFirstTravelTargetLocation(queryText) : null;
   const resultLevelCandidates: { claimText: string; score: number }[] = [];
   for (const result of results) {
     const metadata =
@@ -781,6 +793,7 @@ function deriveSourceGroundedTemporalClaimText(
     return null;
   }
 
+  const queryTermsForRelativeLeaves = temporalQueryTerms(queryText, helpers);
   const mediaTitleMatch = helpers.normalizeWhitespace((queryText.match(/"([^"]+)/u)?.[1] ?? "").replace(/[?!.,"”]+$/u, "")) || null;
   const isReadBookTitleQuery = /\bwhen did\b/i.test(queryText) && /\bread\b/i.test(queryText) && Boolean(mediaTitleMatch);
   const temporalCandidates: { label: string; score: number; relativeClaimText: string | null }[] = [];
@@ -827,6 +840,46 @@ function deriveSourceGroundedTemporalClaimText(
     const sourceText = readFileSync(sourceUri, "utf8").replace(/^---\s*\n[\s\S]*?\n---\s*/u, "");
     const sourceReferenceInstant = readSourceReferenceInstant(sourceUri);
     if (!sourceReferenceInstant) {
+      continue;
+    }
+    for (const sentence of helpers.extractSentenceCandidates(sourceText)) {
+      const relativeCue = extractRelativeTemporalCue(sentence, helpers);
+      if (!relativeCue) {
+        continue;
+      }
+      const { eventOverlap } = temporalOverlapScore(queryTermsForRelativeLeaves, sentence);
+      if (eventOverlap < 2) {
+        continue;
+      }
+      if (/\bstart(?:ed|ing)?\b/iu.test(queryText) && /\blast week\b/iu.test(sentence)) {
+        temporalCandidates.push({
+          label: formatUtcMonthLabel(sourceReferenceInstant),
+          score:
+            60 +
+            eventOverlap * 3 +
+            (/^[A-Z][A-Za-z0-9'’&.-]{1,40}:\s*/u.test(sentence) ? 1.2 : 0),
+          relativeClaimText: null
+        });
+        continue;
+      }
+      const label = inferRelativeTemporalAnswerLabel(sentence, sourceReferenceInstant, sourceReferenceInstant);
+      if (!label) {
+        continue;
+      }
+      temporalCandidates.push({
+        label,
+        score:
+          40 +
+          eventOverlap * 3 +
+          (/^[A-Z][A-Za-z0-9'’&.-]{1,40}:\s*/u.test(sentence) ? 1.2 : 0) +
+          (/\byesterday\b|\blast year\b/iu.test(sentence) ? 1.4 : 0),
+        relativeClaimText: null
+      });
+    }
+    if (isFirstTravelQuery && scoreFirstTravelLocationEvidence(queryText, sourceText) <= 0) {
+      continue;
+    }
+    if (isSawLiveQuery && scoreSawLivePerformanceEvidence(queryText, sourceText) <= 0) {
       continue;
     }
 
@@ -1154,16 +1207,21 @@ function deriveSourceGroundedTemporalClaimText(
           relevant = true;
           score += 3.4;
         }
+        const supportNetworkContext = `${sentence} ${sourceText}`;
+        const hasSupportNetworkTermsInContext = /\b(?:friends?|family|mentors?)\b/i.test(supportNetworkContext);
+        const hasMeetupCueInContext = /\b(?:met up|hung out|spent time|got together|caught up|meeting up)\b/i.test(supportNetworkContext);
+        const hasRelativeCueInContext = /\b(?:last week|last weekend|week before|weeks?\s+ago)\b/i.test(supportNetworkContext);
+        const hasMeetupCueInSentence = /\b(?:met up|hung out|spent time|got together|caught up|meeting up)\b/i.test(sentence);
+        const hasRelativeCueInSentence = /\b(?:last week|last weekend|week before|weeks?\s+ago)\b/i.test(sentence);
         if (
           isSupportNetworkMeetupQuery &&
-          /\b(?:friends?|family|mentors?)\b/i.test(sentence) &&
-          (
-            /\b(?:met up|hung out|spent time|got together|caught up|meeting up)\b/i.test(sentence) ||
-            /\b(?:last week|last weekend|week before|weeks?\s+ago)\b/i.test(sentence)
-          )
+          hasSupportNetworkTermsInContext &&
+          hasMeetupCueInContext &&
+          hasRelativeCueInContext &&
+          (hasMeetupCueInSentence || hasRelativeCueInSentence)
         ) {
           relevant = true;
-          score += 3.4;
+          score += 4.2;
         }
         if (!relevant) {
           continue;
@@ -1208,14 +1266,15 @@ function deriveSourceGroundedTemporalClaimText(
         if (primaryEntityHint && sentenceSpeaker && !sentenceSpeaker.includes(primaryEntityHint)) {
           continue;
         }
-        const locationTermMatch = queryLower.match(/\bto\s+([a-z][a-z\s]+)\b/u)?.[1]?.trim() ?? "";
+        const locationTermMatch = firstTravelTargetLocation ?? "";
         const sentenceMentionsTargetLocation =
           locationTermMatch.length > 0 &&
           sentence.toLowerCase().includes(locationTermMatch.replace(/[^a-z\s]/giu, "").trim());
+        const explicitTravelCue = /\b(?:just went|went to|trip to|visited|travel(?:ed|led)? to|flew to)\b/i.test(sentence);
         if (
           !(
             (/\bfirst\b/i.test(sentence) && /\btravel(?:ed)?\b/i.test(sentence)) ||
-            (sentenceMentionsTargetLocation && /\b(?:just went|went to|trip to|festival in|visited)\b/i.test(sentence))
+            (sentenceMentionsTargetLocation && explicitTravelCue)
           )
         ) {
           continue;
@@ -1228,7 +1287,7 @@ function deriveSourceGroundedTemporalClaimText(
         if (!label && !fallbackRangeText) {
           continue;
         }
-        const actualTravelCue = /\b(?:just went|went to|trip to|festival in|visited)\b/i.test(sentence);
+        const actualTravelCue = explicitTravelCue;
         temporalCandidates.push({
           label: label ?? formatUtcDayLabel(sourceReferenceInstant),
           score:
@@ -1300,7 +1359,8 @@ function deriveSourceGroundedTemporalClaimText(
           score:
             8 +
             (/\bweekend before\b/i.test(sentence) ? 3.2 : 0) +
-            (/\bAerosmith\b/i.test(sentence) ? 1.6 : 0),
+            (/\bAerosmith\b/i.test(sentence) ? 1.6 : 0) +
+            scoreSawLivePerformanceEvidence(queryText, sentence),
           relativeClaimText: deriveAnchoredRelativeTemporalClaimText(
             extractRelativeTemporalCue(sentence, helpers),
             label,
@@ -1334,6 +1394,19 @@ function deriveSourceGroundedTemporalClaimText(
     ) {
       if (Boolean(left.relativeClaimText) !== Boolean(right.relativeClaimText)) {
         return left.relativeClaimText ? -1 : 1;
+      }
+      if (isFirstTravelQuery) {
+        const leftRank = labelRank(left.label);
+        const rightRank = labelRank(right.label);
+        if (leftRank !== null && rightRank !== null && leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+        if (leftRank !== null && rightRank === null) {
+          return -1;
+        }
+        if (leftRank === null && rightRank !== null) {
+          return 1;
+        }
       }
       if (right.score !== left.score) {
         return right.score - left.score;
