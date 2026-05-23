@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -17,8 +18,18 @@ DEFAULT_ENTITY_LABELS = [
     "location",
     "city",
     "country",
+    "venue",
+    "team",
+    "institution",
     "project",
+    "product",
+    "tool",
+    "app",
+    "initiative",
     "media",
+    "book",
+    "show",
+    "song",
     "other",
 ]
 
@@ -34,9 +45,24 @@ DEFAULT_RELATION_LABELS = [
     "met through",
     "sibling of",
     "romantic partner of",
+    "prefers",
+    "favorite of",
+    "owns",
+    "bought",
+    "supports",
+    "advises",
+    "inspired by",
+    "caused by",
+    "because of",
+    "occurred on",
+    "participated in",
+    "family activity with",
+    "about",
+    "identity support of",
 ]
 
 _GLINER_MODELS: Dict[Tuple[str, str], Any] = {}
+_GLINER2_MODELS: Dict[Tuple[str, str], Any] = {}
 _SPACY_MODELS: Dict[str, Any] = {}
 _SPAN_MARKER_MODELS: Dict[str, Any] = {}
 
@@ -51,6 +77,16 @@ def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
 
 
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed:  # NaN
+        return None
+    return parsed
+
+
 def _normalize_entity_label(label: str) -> str:
     normalized = _normalize_text(re.split(r"\s*[:]{1,2}\s*", label, maxsplit=1)[0]).lower()
     mapping = {
@@ -62,6 +98,9 @@ def _normalize_entity_label(label: str) -> str:
         "organisation": "org",
         "org": "org",
         "company": "org",
+        "team": "org",
+        "institution": "org",
+        "employer": "org",
         "location": "place",
         "place": "place",
         "gpe": "place",
@@ -70,11 +109,25 @@ def _normalize_entity_label(label: str) -> str:
         "country": "place",
         "state": "place",
         "facility": "place",
+        "venue": "place",
+        "region": "place",
         "project": "project",
+        "product": "project",
+        "tool": "project",
+        "app": "project",
+        "initiative": "project",
+        "service": "project",
         "work_of_art": "media",
         "media": "media",
         "movie": "media",
         "film": "media",
+        "book": "media",
+        "show": "media",
+        "song": "media",
+        "album": "media",
+        "series": "media",
+        "podcast": "media",
+        "band": "media",
         "other": "other",
     }
     return mapping.get(normalized, normalized)
@@ -108,6 +161,43 @@ def _normalize_relation_label(label: str) -> Optional[Tuple[str, Dict[str, Any]]
         metadata["relationship_kind"] = "romantic"
         return "was_with", metadata
     return None
+
+
+def _collect_confidences(value: Any) -> List[float]:
+    confidences: List[float] = []
+    if isinstance(value, dict):
+        for key, entry in value.items():
+            if str(key).lower() in {"confidence", "score"}:
+                parsed = _safe_float(entry)
+                if parsed is not None:
+                    confidences.append(parsed)
+                continue
+            confidences.extend(_collect_confidences(entry))
+    elif isinstance(value, list):
+        for entry in value:
+            confidences.extend(_collect_confidences(entry))
+    return confidences
+
+
+def _attach_meta(value: Any, meta_key: str) -> Any:
+    if not isinstance(value, dict):
+        return value
+
+    meta: Dict[str, Any] = {}
+    for key, entry in value.items():
+        if str(key).startswith("__"):
+            continue
+        confidences = _collect_confidences(entry)
+        if confidences:
+            meta[str(key)] = round(sum(confidences) / len(confidences), 4)
+
+    if not meta:
+        return value
+
+    payload = dict(value)
+    existing_meta = payload.get("__meta") if isinstance(payload.get("__meta"), dict) else {}
+    payload["__meta"] = {**existing_meta, meta_key: meta}
+    return payload
 
 
 def _unique_entities(entities: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -206,6 +296,19 @@ def _load_gliner_model(model_id: str, device: str) -> Any:
     return _GLINER_MODELS[cache_key]
 
 
+def _load_gliner2_model(model_id: str, device: str) -> Any:
+    cache_key = (model_id, device)
+    if cache_key not in _GLINER2_MODELS:
+        from gliner2 import GLiNER2
+
+        with redirect_stdout(sys.stderr):
+            extractor = GLiNER2.from_pretrained(model_id)
+        if device == "mps":
+            extractor = extractor.to("mps")
+        _GLINER2_MODELS[cache_key] = extractor
+    return _GLINER2_MODELS[cache_key]
+
+
 def _described_labels(labels: List[str], descriptions: Dict[str, str]) -> List[str]:
     described: List[str] = []
     for label in labels:
@@ -263,7 +366,7 @@ def _run_gliner_relex(
             for relation in scene_relations
         ]),
         "warnings": [],
-        "schema_version": "gliner_relex_dynamic_v1",
+        "schema_version": "gliner_relex_v1",
         "thresholds": {
             "entity": entity_threshold,
             "adjacency": float(thresholds.get("adjacency", entity_threshold)),
@@ -272,7 +375,105 @@ def _run_gliner_relex(
     }
 
 
-def _run_gliner2(scene: SceneInput, model_id: str, device: str, entity_labels: List[str], thresholds: Dict[str, float]) -> Dict[str, Any]:
+def _normalize_gliner2_entities(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    raw_entities = result.get("entities") if isinstance(result, dict) else {}
+    normalized: List[Dict[str, Any]] = []
+    if not isinstance(raw_entities, dict):
+        return normalized
+
+    for label, values in raw_entities.items():
+        canonical_label = _normalize_entity_label(str(label))
+        if isinstance(values, list):
+            for value in values:
+                if isinstance(value, dict):
+                    normalized.append(
+                        {
+                            "text": value.get("text") or value.get("label") or value.get("value"),
+                            "label": canonical_label,
+                            "score": float(value.get("confidence", value.get("score", 0.0)) or 0.0),
+                            "start": value.get("start"),
+                            "end": value.get("end"),
+                        }
+                    )
+                else:
+                    normalized.append({"text": value, "label": canonical_label, "score": None, "start": None, "end": None})
+        elif values:
+            normalized.append({"text": values, "label": canonical_label, "score": None, "start": None, "end": None})
+
+    return _unique_entities(normalized)
+
+
+def _normalize_gliner2_relations(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    relation_payload = result.get("relation_extraction") if isinstance(result, dict) else {}
+    normalized: List[Dict[str, Any]] = []
+    if not isinstance(relation_payload, dict):
+        return normalized
+
+    for relation_label, items in relation_payload.items():
+        mapped = _normalize_relation_label(str(relation_label))
+        if mapped is None:
+            continue
+        relation, metadata = mapped
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict):
+                head = item.get("head") if isinstance(item.get("head"), dict) else {}
+                tail = item.get("tail") if isinstance(item.get("tail"), dict) else {}
+                normalized.append(
+                    {
+                        "source": head.get("text"),
+                        "target": tail.get("text"),
+                        "relation": relation,
+                        "score": float(head.get("confidence", item.get("confidence", 0.0)) or 0.0),
+                        "start": head.get("start"),
+                        "end": tail.get("end"),
+                        **metadata,
+                    }
+                )
+            elif isinstance(item, (tuple, list)) and len(item) >= 2:
+                normalized.append(
+                    {
+                        "source": item[0],
+                        "target": item[1],
+                        "relation": relation,
+                        "score": None,
+                        **metadata,
+                    }
+                )
+
+    return _unique_relations(_filter_invalid_relations(normalized))
+
+
+def _filter_invalid_relations(relations: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    filtered: List[Dict[str, Any]] = []
+    for relation in relations:
+        source = _normalize_text(str(relation.get("source", "")))
+        target = _normalize_text(str(relation.get("target", "")))
+        predicate = _normalize_text(str(relation.get("relation", "")))
+        if not source or not target or not predicate:
+            continue
+        if source.lower() == target.lower():
+            continue
+        if predicate not in {
+            "friend_of",
+            "works_with",
+            "works_at",
+            "worked_at",
+            "works_on",
+            "lives_in",
+            "lived_in",
+            "member_of",
+            "met_through",
+            "sibling_of",
+            "was_with",
+        }:
+            continue
+        filtered.append(relation)
+    return filtered
+
+
+def _run_gliner2_legacy(scene: SceneInput, model_id: str, device: str, entity_labels: List[str], thresholds: Dict[str, float]) -> Dict[str, Any]:
     model = _load_gliner_model(model_id, device)
     entity_threshold = float(thresholds.get("entity", 0.45))
     entities = model.predict_entities(scene.text, entity_labels, threshold=entity_threshold)
@@ -288,7 +489,7 @@ def _run_gliner2(scene: SceneInput, model_id: str, device: str, entity_labels: L
     ])
     return {
         "entities": normalized_entities,
-        "relations": _heuristic_relations(scene.text, normalized_entities),
+        "relations": _filter_invalid_relations(_heuristic_relations(scene.text, normalized_entities)),
         "warnings": [],
         "schema_version": "gliner2_dynamic_v1",
         "thresholds": {
@@ -297,6 +498,72 @@ def _run_gliner2(scene: SceneInput, model_id: str, device: str, entity_labels: L
             "relation": float(thresholds.get("relation", entity_threshold)),
         },
     }
+
+
+def _run_gliner2(
+    scene: SceneInput,
+    model_id: str,
+    device: str,
+    entity_labels: List[str],
+    relation_labels: List[str],
+    thresholds: Dict[str, float],
+    classification_tasks: Optional[Dict[str, Any]] = None,
+    structure_schemas: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    entity_threshold = float(thresholds.get("entity", 0.45))
+    relation_threshold = float(thresholds.get("relation", entity_threshold))
+    classification_threshold = float(thresholds.get("classification", max(entity_threshold, 0.6)))
+    structure_threshold = float(thresholds.get("structure", max(entity_threshold, 0.65)))
+
+    try:
+        extractor = _load_gliner2_model(model_id, device)
+        entity_result = extractor.extract_entities(scene.text, entity_labels, threshold=entity_threshold)
+        relation_result = extractor.extract_relations(scene.text, relation_labels, threshold=relation_threshold)
+        classifications = (
+            extractor.classify_text(scene.text, classification_tasks, threshold=classification_threshold)
+            if classification_tasks
+            else None
+        )
+        structures = extractor.extract_json(scene.text, structure_schemas, threshold=structure_threshold) if structure_schemas else None
+        return {
+            "entities": _normalize_gliner2_entities(entity_result),
+            "relations": _normalize_gliner2_relations(relation_result),
+            "classifications": _attach_meta(classifications, "task_confidence"),
+            "structures": _attach_meta(structures, "structure_confidence"),
+            "warnings": [],
+            "schema_version": "gliner2_native_v2",
+            "thresholds": {
+                "entity": entity_threshold,
+                "adjacency": float(thresholds.get("adjacency", entity_threshold)),
+                "relation": relation_threshold,
+                "classification": classification_threshold,
+                "structure": structure_threshold,
+            },
+        }
+    except Exception as exc:
+        try:
+            fallback = _run_gliner2_legacy(scene, model_id, device, entity_labels, thresholds)
+        except Exception as legacy_exc:
+            return {
+                "entities": [],
+                "relations": [],
+                "classifications": None,
+                "structures": None,
+                "warnings": [f"gliner2 native failed: {exc}", f"gliner2 legacy fallback failed: {legacy_exc}"],
+                "schema_version": "gliner2_unavailable_v2",
+                "thresholds": {
+                    "entity": entity_threshold,
+                    "adjacency": float(thresholds.get("adjacency", entity_threshold)),
+                    "relation": relation_threshold,
+                    "classification": classification_threshold,
+                    "structure": structure_threshold,
+                },
+            }
+        return {
+            **fallback,
+            "warnings": [*fallback.get("warnings", []), f"gliner2 native fallback: {exc}"],
+            "schema_version": "gliner2_legacy_fallback_v2",
+        }
 
 
 def _run_spacy(scene: SceneInput, model_id: str) -> Dict[str, Any]:
@@ -318,7 +585,7 @@ def _run_spacy(scene: SceneInput, model_id: str) -> Dict[str, Any]:
     ])
     return {
         "entities": entities,
-        "relations": _heuristic_relations(scene.text, entities),
+        "relations": _filter_invalid_relations(_heuristic_relations(scene.text, entities)),
         "warnings": [],
         "schema_version": "spacy_fallback_v1",
         "thresholds": {
@@ -348,7 +615,7 @@ def _run_span_marker(scene: SceneInput, model_id: str) -> Dict[str, Any]:
     ])
     return {
         "entities": normalized_entities,
-        "relations": _heuristic_relations(scene.text, normalized_entities),
+        "relations": _filter_invalid_relations(_heuristic_relations(scene.text, normalized_entities)),
         "warnings": [],
         "schema_version": "span_marker_fallback_v1",
         "thresholds": {
@@ -378,12 +645,14 @@ def _run_extractor(
     entity_descriptions: Dict[str, str],
     relation_descriptions: Dict[str, str],
     thresholds: Dict[str, float],
+    classification_tasks: Optional[Dict[str, Any]] = None,
+    structure_schemas: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     try:
-        if extractor == "gliner_relex":
+        if extractor in {"gliner_relex", "gliner_relex_v1"}:
             return _run_gliner_relex(
                 scene,
-                models["gliner_relex"],
+                models.get(extractor, models["gliner_relex"]),
                 device,
                 entity_labels,
                 relation_labels,
@@ -392,7 +661,16 @@ def _run_extractor(
                 thresholds,
             )
         if extractor == "gliner2":
-            return _run_gliner2(scene, models["gliner2"], device, entity_labels, thresholds)
+            return _run_gliner2(
+                scene,
+                models["gliner2"],
+                device,
+                entity_labels,
+                relation_labels,
+                thresholds,
+                classification_tasks,
+                structure_schemas,
+            )
         if extractor == "spacy":
             return _run_spacy(scene, models["spacy"])
         if extractor == "span_marker":
@@ -404,19 +682,21 @@ def _run_extractor(
         return _unavailable(extractor, f"{extractor} failed: {exc}")
 
 
-def main() -> int:
-    payload = json.load(sys.stdin)
+def _build_response(payload: Dict[str, Any]) -> Dict[str, Any]:
     device = payload.get("device", "cpu")
-    extractors = payload.get("extractors") or ["gliner_relex", "gliner2", "spacy", "span_marker"]
+    extractors = payload.get("extractors") or ["gliner_relex_v1", "gliner2", "spacy", "span_marker"]
     entity_labels = payload.get("entity_labels") or DEFAULT_ENTITY_LABELS
     relation_labels = payload.get("relation_labels") or DEFAULT_RELATION_LABELS
     entity_descriptions = payload.get("entity_descriptions") or {}
     relation_descriptions = payload.get("relation_descriptions") or {}
     thresholds = payload.get("thresholds") or {}
+    classification_tasks = payload.get("classification_tasks") if isinstance(payload.get("classification_tasks"), dict) else None
+    structure_schemas = payload.get("structure_schemas") if isinstance(payload.get("structure_schemas"), dict) else None
     model_config = payload.get("models") or {}
 
     models = {
-        "gliner_relex": model_config.get("gliner_relex", "knowledgator/gliner-relex-large-v0.5"),
+        "gliner_relex": model_config.get("gliner_relex", model_config.get("gliner_relex_v1", "knowledgator/gliner-relex-large-v1.0")),
+        "gliner_relex_v1": model_config.get("gliner_relex_v1", model_config.get("gliner_relex", "knowledgator/gliner-relex-large-v1.0")),
         "gliner2": model_config.get("gliner2", "fastino/gliner2-base-v1"),
         "spacy": model_config.get("spacy", "en_core_web_sm"),
         "span_marker": model_config.get("span_marker", "tomaarsen/span-marker-roberta-large-ontonotes5"),
@@ -438,6 +718,8 @@ def main() -> int:
                 entity_descriptions,
                 relation_descriptions,
                 thresholds,
+                classification_tasks,
+                structure_schemas,
             )
             scene_result["extractors"].append(
                 {
@@ -447,11 +729,53 @@ def main() -> int:
                     "thresholds": result.get("thresholds"),
                     "entities": result["entities"],
                     "relations": result["relations"],
+                    "classifications": result.get("classifications"),
+                    "structures": result.get("structures"),
                     "warnings": result["warnings"],
                 }
             )
         response["scenes"].append(scene_result)
 
+    return response
+
+
+def _daemon_main() -> int:
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        request_id = None
+        try:
+            message = json.loads(line)
+            if not isinstance(message, dict):
+                raise ValueError("daemon message must be a JSON object")
+            request_id = message.get("request_id")
+            command = str(message.get("command") or "infer")
+            if command == "shutdown":
+                json.dump({"request_id": request_id, "response": {"ok": True, "shutdown": True}}, sys.stdout)
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                return 0
+            payload = message.get("payload")
+            if not isinstance(payload, dict):
+                raise ValueError("daemon infer message missing object payload")
+            response = _build_response(payload)
+            json.dump({"request_id": request_id, "response": response}, sys.stdout)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        except Exception as exc:  # pragma: no cover - surfaced to Node runtime
+            json.dump({"request_id": request_id, "error": str(exc)}, sys.stdout)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+    return 0
+
+
+def main() -> int:
+    if "--daemon" in sys.argv[1:]:
+        return _daemon_main()
+
+    payload = json.load(sys.stdin)
+    response = _build_response(payload)
     json.dump(response, sys.stdout)
     return 0
 

@@ -1,6 +1,8 @@
 import { inferTemporalEventKeyFromText } from "../../canonical-memory/service.js";
 import { inferExactDetailQuestionFamily } from "../exact-detail-question-family.js";
 import { extractEntityNameHints } from "../query-entity-focus.js";
+import { extractFirstTravelTargetLocation, isFirstTravelLocationQuery } from "../temporal/first-travel-gating.js";
+import { extractLivePerformanceTarget, isSawLivePerformanceQuery } from "../temporal/live-performance-gating.js";
 import type { AnswerRetrievalPlan } from "../types.js";
 
 function normalizePlannerRuntimeText(value: string | null | undefined): string {
@@ -65,14 +67,28 @@ function extractConversationParticipants(queryText: string): readonly string[] {
     }
   }
 
-  if (/\b(i|my|we|our)\b/i.test(queryText)) {
-    names.add("Steve");
-  }
-
   return [...names];
 }
 
+function isFirstPersonQueryText(queryText: string): boolean {
+  return /\b(?:my|mine|me|i|i'm|i’ve|i've|i’d|i'd|i’ll|i'll)\b/iu.test(queryText);
+}
+
 export function buildEarlyTemporalLaneQueryText(queryText: string): string {
+  if (isFirstTravelLocationQuery(queryText)) {
+    const targetLocation = extractFirstTravelTargetLocation(queryText);
+    const targetTerms = targetLocation
+      ? `${targetLocation} went to ${targetLocation} visited ${targetLocation} trip to ${targetLocation} first time in ${targetLocation} arrived in ${targetLocation}`
+      : "went to visited trip to first time in arrived in";
+    return `${queryText} first travel ${targetTerms}`;
+  }
+  if (isSawLivePerformanceQuery(queryText)) {
+    const target = extractLivePerformanceTarget(queryText);
+    const targetTerms = target
+      ? `${target} perform live saw ${target} live favorite ${target} performance music festival concert`
+      : "perform live saw live favorite performance music festival concert";
+    return `${queryText} live performance ${targetTerms}`;
+  }
   const queryEventKey = inferTemporalEventKeyFromText(queryText);
   switch (queryEventKey) {
     case "career_high_points":
@@ -94,6 +110,33 @@ export function buildEarlyTemporalLaneQueryText(queryText: string): string {
 }
 
 export function buildEarlyTemporalLaneTerms(queryText: string, plannerTerms: readonly string[]): readonly string[] {
+  if (isFirstTravelLocationQuery(queryText)) {
+    const targetLocation = extractFirstTravelTargetLocation(queryText);
+    const extraTerms = [
+      "first",
+      "travel",
+      "went to",
+      "visited",
+      "trip to",
+      "first time in",
+      "arrived in",
+      ...(targetLocation ? [targetLocation, targetLocation.toLowerCase()] : [])
+    ];
+    return [...new Set([...(plannerTerms ?? []), ...extraTerms])];
+  }
+  if (isSawLivePerformanceQuery(queryText)) {
+    const target = extractLivePerformanceTarget(queryText);
+    const extraTerms = [
+      "perform live",
+      "saw live",
+      "favorite",
+      "performance",
+      "music festival",
+      "concert",
+      ...(target ? [target, target.toLowerCase()] : [])
+    ];
+    return [...new Set([...(plannerTerms ?? []), ...extraTerms])];
+  }
   const extraTerms = (() => {
     const queryEventKey = inferTemporalEventKeyFromText(queryText);
     switch (queryEventKey) {
@@ -118,6 +161,30 @@ export function buildEarlyTemporalLaneTerms(queryText: string, plannerTerms: rea
 }
 
 export function extractEarlyTemporalSupportKeywords(queryText: string): readonly string[] {
+  if (isFirstTravelLocationQuery(queryText)) {
+    const targetLocation = extractFirstTravelTargetLocation(queryText);
+    return [
+      "first travel",
+      "went to",
+      "visited",
+      "trip to",
+      "first time in",
+      "arrived in",
+      ...(targetLocation ? [targetLocation] : [])
+    ];
+  }
+  if (isSawLivePerformanceQuery(queryText)) {
+    const target = extractLivePerformanceTarget(queryText);
+    return [
+      "perform live",
+      "saw live",
+      "favorite",
+      "performance",
+      "music festival",
+      "concert",
+      ...(target ? [target] : [])
+    ];
+  }
   const queryEventKey = inferTemporalEventKeyFromText(queryText);
   switch (queryEventKey) {
     case "career_high_points":
@@ -227,12 +294,18 @@ export function extractTravelReportSupportKeywords(queryText: string): readonly 
     "family roadtrip",
     "travel",
     "trip",
+    "planning",
+    "planned",
+    "upcoming",
+    "going",
+    "conference",
     "festival",
     "music festival",
     "concert",
     "visited",
     "went",
     "places",
+    "destination",
     "Rockies",
     "Jasper",
     "Tokyo",
@@ -245,6 +318,10 @@ export function extractTravelReportSupportKeywords(queryText: string): readonly 
     }
   }
   return [...keywords];
+}
+
+export function isTravelPlanningReportQuery(queryText: string): boolean {
+  return /\bwhat\s+trip\b|\btravel\s+plans?\b|\bplanning\b/iu.test(queryText);
 }
 
 export function extractComparativeFitSupportKeywords(queryText: string): readonly string[] {
@@ -553,6 +630,7 @@ export function buildPreferenceEvidenceQueryText(queryText: string, plannerTerms
 
 export function buildPreciseFactEvidenceQueryText(queryText: string, plannerTerms: readonly string[]): string {
   const lowered = queryText.toLowerCase();
+  const exactFamily = inferExactDetailQuestionFamily(queryText);
   const candidateTerms = (plannerTerms.length > 0 ? plannerTerms : queryText.match(/[A-Za-z0-9][A-Za-z0-9._:-]*/g) ?? [])
     .map((term) => term.trim().toLowerCase())
     .filter(Boolean)
@@ -674,6 +752,117 @@ export function buildPreciseFactEvidenceQueryText(queryText: string, plannerTerm
     expanded.add("show");
     expanded.add("watched");
   }
+  if (isFirstPersonQueryText(queryText)) {
+    expanded.add("my");
+    expanded.add("mine");
+  }
+
+  switch (exactFamily) {
+    case "pet_name":
+      expanded.add("pet");
+      expanded.add("named");
+      expanded.add("name");
+      expanded.add("called");
+      break;
+    case "breed":
+      expanded.add("breed");
+      expanded.add("dog");
+      expanded.add("pet");
+      break;
+    case "service_name":
+      expanded.add("streaming");
+      expanded.add("service");
+      expanded.add("subscription");
+      expanded.add("platform");
+      expanded.add("app");
+      expanded.add("using");
+      expanded.add("lately");
+      expanded.add("listening");
+      expanded.add("music");
+      break;
+    case "venue":
+      expanded.add("school");
+      expanded.add("university");
+      expanded.add("college");
+      expanded.add("campus");
+      expanded.add("program");
+      expanded.add("studio");
+      expanded.add("classes");
+      expanded.add("study");
+      expanded.add("abroad");
+      expanded.add("attended");
+      expanded.add("completed");
+      expanded.add("bachelor");
+      break;
+    case "certification":
+      expanded.add("certification");
+      expanded.add("certificate");
+      expanded.add("completed");
+      expanded.add("course");
+      expanded.add("program");
+      break;
+    case "capacity":
+      expanded.add("ram");
+      expanded.add("memory");
+      expanded.add("storage");
+      expanded.add("upgraded");
+      expanded.add("gb");
+      expanded.add("tb");
+      break;
+    case "speed":
+      expanded.add("internet");
+      expanded.add("wifi");
+      expanded.add("broadband");
+      expanded.add("mbps");
+      expanded.add("gbps");
+      expanded.add("speed");
+      expanded.add("plan");
+      expanded.add("upgrade");
+      expanded.add("upgraded");
+      break;
+    case "time_of_day":
+      expanded.add("time");
+      expanded.add("checking");
+      expanded.add("emails");
+      expanded.add("messages");
+      expanded.add("am");
+      expanded.add("pm");
+      break;
+    case "color":
+      expanded.add("color");
+      expanded.add("hair");
+      expanded.add("dyed");
+      expanded.add("dye");
+      expanded.add("chose");
+      expanded.add("picked");
+      break;
+    case "duration":
+      expanded.add("duration");
+      expanded.add("stayed");
+      expanded.add("trip");
+      expanded.add("visit");
+      expanded.add("days");
+      expanded.add("weeks");
+      expanded.add("months");
+      expanded.add("years");
+      break;
+    case "role":
+      expanded.add("role");
+      expanded.add("job");
+      expanded.add("occupation");
+      expanded.add("worked");
+      expanded.add("position");
+      break;
+    case "shop":
+      expanded.add("store");
+      expanded.add("shop");
+      expanded.add("retailer");
+      expanded.add("bought");
+      expanded.add("purchased");
+      break;
+    default:
+      break;
+  }
 
   return [...expanded].join(" ").trim() || queryText;
 }
@@ -698,6 +887,7 @@ export function buildProfileInferenceEvidenceQueryText(queryText: string, planne
   const communityMembershipLike = /\bmember of the lgbtq community\b|\bally\b|\blgbtq\+?\b|\btransgender\b|\bpride\b/i.test(lowered);
   const preferenceLike = /\binterested in\b|\benjoy\b/i.test(lowered);
   const counselingCareerLike = /\bcareer|job|field|work\b/.test(lowered) || /\bwriting\b/i.test(lowered) || /\beduc/i.test(lowered);
+  const relationshipStatusLike = /\brelationship status\b|\b(?:single|dating|married|engaged|partner)\b/i.test(lowered);
 
   if (/\beduc/i.test(lowered)) {
     expanded.add("education");
@@ -733,6 +923,15 @@ export function buildProfileInferenceEvidenceQueryText(queryText: string, planne
   if (/\bwriting\b/i.test(lowered)) {
     expanded.add("writing");
     expanded.add("reading");
+  }
+  if (relationshipStatusLike) {
+    expanded.add("relationship");
+    expanded.add("single");
+    expanded.add("dating");
+    expanded.add("married");
+    expanded.add("partner");
+    expanded.add("single parent");
+    expanded.add("breakup");
   }
   if (counselingCareerLike && !bookshelfLike && !genericCollectionLike && !communityMembershipLike && !preferenceLike) {
     expanded.add("mental");

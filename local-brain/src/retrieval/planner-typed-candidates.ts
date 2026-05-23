@@ -13,6 +13,7 @@ import {
 import { rankCollectionPoolResults, rankProfilePoolResults, rankTemporalPoolResults } from "./planner-pool-ranker.js";
 import { collectRecallResultTextCandidates, extractRecallResultSubjectSignals } from "./recall-content.js";
 import { readTemporalRecallShape } from "./temporal-pool-utils.js";
+import { isFirstTravelLocationQuery, scoreFirstTravelLocationEvidence } from "./temporal/first-travel-gating.js";
 import {
   buildCollectionInferenceSupport,
   buildCounterfactualCareerSupport,
@@ -30,6 +31,8 @@ import {
   renderTemporalEventSupport,
   type RenderedSupportClaim
 } from "./support-objects.js";
+import { hasActivitySeedEvidence } from "./typed-support-extractors.js";
+import { hasCampingLocationSeedEvidence, isCampingLocationQuery } from "./location-history/camping.js";
 import type {
   AnswerOwnerFamily,
   AnswerRetrievalPlan,
@@ -677,11 +680,14 @@ function renderPlannerProfileSupportAttempt(params: {
   readonly rendered: RenderedSupportClaim;
   readonly support: ReturnType<typeof buildProfileInferenceSupport>;
 } {
-  const plannerAnswerPayload = selectPlannerReportAnswerPayload({
-    queryText: params.queryText,
-    reportKind: params.reportKind,
-    results: params.results
-  });
+  const plannerAnswerPayload =
+    params.reportKind === "relationship_report"
+      ? null
+      : selectPlannerReportAnswerPayload({
+          queryText: params.queryText,
+          reportKind: params.reportKind,
+          results: params.results
+        });
   const support = buildProfileInferenceSupport({
     reportKind: params.reportKind,
     queryText: params.queryText,
@@ -795,7 +801,127 @@ function resultHasQueryBoundListSetEvidence(queryText: string, result: RecallRes
   return collectRecallResultTextCandidates(result).some((text) => inferListSetTypedEntries({
     queryText,
     texts: [text]
-  }).entries.length > 0);
+  }).entries.length > 0 || (
+    hasActivitySeedEvidence(queryText, text) ||
+    (isCampingLocationQuery(queryText) && hasCampingLocationSeedEvidence(text))
+  ));
+}
+
+function isCompanionScopedActivityListSetQuery(queryText: string, retrievalPlan: AnswerRetrievalPlan): boolean {
+  return (
+    retrievalPlan.lane === "event_list" ||
+    retrievalPlan.answerKind === "event_inventory"
+  ) && /\bwith\b[^?!.]{0,40}\b(?:girlfriend|boyfriend|wife|husband|partner|fianc[eé]|fiancée|gf|bf)\b/iu.test(queryText);
+}
+
+function resultHasCompanionScopedActivityEvidence(queryText: string, result: RecallResult): boolean {
+  return collectRecallResultTextCandidates(result).some((text) => {
+    const entries = inferListSetTypedEntries({
+      queryText,
+      texts: [text]
+    }).entries;
+    return (
+      entries.length > 0 &&
+      /\b(?:girlfriend|boyfriend|wife|husband|partner|fianc[eé]|fiancée|gf|bf)\b/iu.test(text)
+    );
+  });
+}
+
+function resultHasIndoorActivityEvidence(queryText: string, result: RecallResult): boolean {
+  return /\bindoor activities?\b/iu.test(queryText) && collectRecallResultTextCandidates(result).some((text) => {
+    const inferred = inferListSetTypedEntries({
+      queryText,
+      texts: [text]
+    });
+    return inferred.entryType === "activity_name" && inferred.entries.length > 0;
+  });
+}
+
+function uniquePlannerListSetResults(results: readonly RecallResult[]): readonly RecallResult[] {
+  const deduped: RecallResult[] = [];
+  const seen = new Set<string>();
+  for (const result of results) {
+    const key = [result.memoryId, result.artifactId ?? "", readResultSourceTable(result) ?? "", normalize(result.content)].join("::");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(result);
+  }
+  return deduped;
+}
+
+function plannerListSetPoolKey(results: readonly RecallResult[]): string {
+  return results.map((result) => result.memoryId).join("|");
+}
+
+function scorePlannerListSetAttempt(params: {
+  readonly rendered: RenderedSupportClaim;
+  readonly selectedResults: readonly RecallResult[];
+  readonly retrievalPlan: AnswerRetrievalPlan;
+}): number {
+  const typedCount = params.rendered.typedSetEntryCount ?? 0;
+  const companionBoost =
+    params.retrievalPlan.lane === "event_list" && /\bactivity_list_render\b/iu.test(params.rendered.renderContractSelected ?? "")
+      ? Math.min(typedCount, 6) * 4
+      : 0;
+  return (
+    (params.rendered.claimText ? 100 : 0) +
+    typedCount * 10 +
+    Math.min(params.selectedResults.length, 8) +
+    (params.rendered.typedValueUsed ? 6 : 0) +
+    companionBoost
+  );
+}
+
+function selectPlannerListSetCandidateResults(params: {
+  readonly queryText: string;
+  readonly retrievalPlan: AnswerRetrievalPlan;
+  readonly results: readonly RecallResult[];
+}): readonly (readonly RecallResult[])[] {
+  const subjectSeededResults = selectSubjectBoundListSetResults(params);
+  const rankedResults = rankCollectionPoolResults({
+    queryText: params.queryText,
+    retrievalPlan: params.retrievalPlan,
+    results: subjectSeededResults,
+    limit: params.retrievalPlan.lane === "event_list" ? 8 : 6
+  });
+  const groundedResults = subjectSeededResults.filter((result) => resultHasQueryBoundListSetEvidence(params.queryText, result));
+  const companionScoped = isCompanionScopedActivityListSetQuery(params.queryText, params.retrievalPlan);
+  const companionGroundedResults =
+    companionScoped
+      ? groundedResults.filter((result) => resultHasCompanionScopedActivityEvidence(params.queryText, result))
+      : [];
+  const supplementalIndoorResults =
+    companionScoped
+      ? groundedResults.filter((result) =>
+          !companionGroundedResults.includes(result) && resultHasIndoorActivityEvidence(params.queryText, result)
+        )
+      : [];
+  const attemptPools: RecallResult[][] = [];
+  const pushAttemptPool = (results: readonly RecallResult[]): void => {
+    if (results.length === 0) {
+      return;
+    }
+    const pool = [...uniquePlannerListSetResults(results)];
+    const key = plannerListSetPoolKey(pool);
+    if (attemptPools.some((existing) => plannerListSetPoolKey(existing) === key)) {
+      return;
+    }
+    attemptPools.push(pool);
+  };
+  if (companionGroundedResults.length > 0) {
+    pushAttemptPool([...companionGroundedResults, ...supplementalIndoorResults, ...rankedResults]);
+    pushAttemptPool([...companionGroundedResults, ...rankedResults]);
+    pushAttemptPool(companionGroundedResults);
+  }
+  if (groundedResults.length > 0) {
+    pushAttemptPool([...groundedResults, ...rankedResults]);
+    pushAttemptPool(groundedResults);
+  }
+  pushAttemptPool(rankedResults);
+  pushAttemptPool(subjectSeededResults);
+  return attemptPools;
 }
 
 function selectSubjectBoundProfileResults(params: {
@@ -869,7 +995,23 @@ function selectSubjectBoundTemporalResults(params: {
     }
     return readTemporalRecallShape(params.queryText, result).eventEvidenceKind !== "none";
   });
-  return temporalBoundResults.length > 0 ? temporalBoundResults : boundResults;
+  if (temporalBoundResults.length === 0) {
+    return boundResults;
+  }
+  if (!isFirstTravelLocationQuery(params.queryText)) {
+    return temporalBoundResults;
+  }
+  const scopedFirstTravelResults = temporalBoundResults.filter((result) =>
+    collectRecallResultTextCandidates(result).some((text) => scoreFirstTravelLocationEvidence(params.queryText, text) > 0)
+  );
+  if (scopedFirstTravelResults.length === 0) {
+    return temporalBoundResults;
+  }
+  return [...scopedFirstTravelResults].sort((left, right) => {
+    const leftTime = left.occurredAt ? Date.parse(left.occurredAt) : Number.POSITIVE_INFINITY;
+    const rightTime = right.occurredAt ? Date.parse(right.occurredAt) : Number.POSITIVE_INFINITY;
+    return leftTime - rightTime;
+  });
 }
 
 function selectSubjectBoundListSetResults(params: {
@@ -1429,10 +1571,10 @@ function buildPlannerTemporalCandidate(params: PlannerTypedCandidateParams): Can
       canonicalConfidence: storedTemporal?.canonicalConfidence ?? null
     },
     formatted: {
-      claimText: rendered.claimText,
+      claimText: rendered.claimText!,
       finalClaimSource: "canonical_temporal",
       answerBundle: {
-        topClaim: rendered.claimText,
+        topClaim: rendered.claimText!,
         claimKind: "temporal",
         subjectPlan: subjectContext.subjectPlan,
         predicatePlan: "temporal_event_fact",
@@ -1443,7 +1585,7 @@ function buildPlannerTemporalCandidate(params: PlannerTypedCandidateParams): Can
           queryText: params.queryText,
           predicateFamily: "temporal_event_fact",
           timeScopeKind: timePlan.timeScopeKind,
-          topClaim: rendered.claimText,
+          topClaim: rendered.claimText!,
           subjectNames:
             subjectContext.subjectPlan.kind === "pair_subject"
               ? [subjectContext.subjectPlan.canonicalSubjectName ?? "", subjectContext.subjectPlan.pairSubjectName ?? ""]
@@ -1487,37 +1629,72 @@ function buildPlannerListSetCandidate(params: PlannerTypedCandidateParams): Cano
   if (params.retrievalPlan.family !== "list_set") {
     return null;
   }
-  const rankedResults = selectSubjectBoundListSetResults({
+  const storedSet = params.storedCanonical?.kind === "set" ? params.storedCanonical : null;
+  const attemptPools = selectPlannerListSetCandidateResults({
     queryText: params.queryText,
     retrievalPlan: params.retrievalPlan,
     results: params.results
   });
-  const storedSet = params.storedCanonical?.kind === "set" ? params.storedCanonical : null;
-  if (!storedSet && rankedResults.length === 0) {
+  if (!storedSet && attemptPools.length === 0) {
     return null;
   }
-  const subjectContext = buildPlannerSubjectContext({
-    queryText: params.queryText,
-    retrievalPlan: params.retrievalPlan,
-    results: rankedResults,
-    assessment: params.assessment
-  });
   const predicateFamily = inferAnswerRetrievalPredicateFamily(
     params.queryText,
     storedSet?.predicateFamily ?? "list_set"
   ) as CanonicalPredicateFamily;
-  const support = buildListSetSupport({
-    queryText: params.queryText,
-    predicateFamily,
-    results: rankedResults,
-    storedCanonical: storedSet,
-    finalClaimText: storedSet ? joinCanonicalItems(storedSet.objectValues ?? []) : null,
-    subjectPlan: subjectContext.subjectPlan
-  });
-  const rendered = renderListSetSupport(support, rankedResults.length);
-  if (!rendered.claimText) {
+
+  let bestAttempt:
+    | {
+        readonly rendered: RenderedSupportClaim;
+        readonly selectedResults: readonly RecallResult[];
+        readonly support: ReturnType<typeof buildListSetSupport>;
+        readonly subjectContext: ReturnType<typeof buildPlannerSubjectContext>;
+        readonly score: number;
+      }
+    | null = null;
+
+  for (const selectedResults of attemptPools) {
+    const subjectContext = buildPlannerSubjectContext({
+      queryText: params.queryText,
+      retrievalPlan: params.retrievalPlan,
+      results: selectedResults,
+      assessment: params.assessment
+    });
+    const support = buildListSetSupport({
+      queryText: params.queryText,
+      predicateFamily,
+      results: selectedResults,
+      storedCanonical: storedSet,
+      finalClaimText: storedSet ? joinCanonicalItems(storedSet.objectValues ?? []) : null,
+      subjectPlan: subjectContext.subjectPlan
+    });
+    const rendered = renderListSetSupport(support, selectedResults.length);
+    if (!rendered.claimText) {
+      continue;
+    }
+    const score = scorePlannerListSetAttempt({
+      rendered,
+      selectedResults,
+      retrievalPlan: params.retrievalPlan
+    });
+    if (!bestAttempt || score > bestAttempt.score) {
+      bestAttempt = {
+        rendered,
+        selectedResults,
+        support,
+        subjectContext,
+        score
+      };
+    }
+  }
+
+  if (!bestAttempt) {
     return null;
   }
+  const rankedResults = bestAttempt.selectedResults;
+  const subjectContext = bestAttempt.subjectContext;
+  const support = bestAttempt.support;
+  const rendered = bestAttempt.rendered;
   const timePlan = {
     mentionedAt: rankedResults[0]?.occurredAt ?? null,
     validFrom: storedSet?.validFrom ?? null,
@@ -1569,10 +1746,10 @@ function buildPlannerListSetCandidate(params: PlannerTypedCandidateParams): Cano
       validUntil: timePlan.validUntil
     },
     formatted: {
-      claimText: rendered.claimText,
+      claimText: rendered.claimText!,
       finalClaimSource: "canonical_list_set",
       answerBundle: {
-        topClaim: rendered.claimText,
+        topClaim: rendered.claimText!,
         claimKind: "set",
         subjectPlan: subjectContext.subjectPlan,
         predicatePlan: predicateFamily,
@@ -1583,7 +1760,7 @@ function buildPlannerListSetCandidate(params: PlannerTypedCandidateParams): Cano
           queryText: params.queryText,
           predicateFamily,
           timeScopeKind: timePlan.timeScopeKind,
-          topClaim: rendered.claimText,
+          topClaim: rendered.claimText!,
           subjectNames:
             subjectContext.subjectPlan.kind === "pair_subject"
               ? [subjectContext.subjectPlan.canonicalSubjectName ?? "", subjectContext.subjectPlan.pairSubjectName ?? ""]

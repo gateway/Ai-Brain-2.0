@@ -146,6 +146,7 @@ type AnswerableUnitCueFamily =
   | "allergy_safe_pets"
   | "favorite_movie"
   | "social_exclusion"
+  | "support_network"
   | "goals"
   | "owned_pets"
   | "purchased_items"
@@ -175,6 +176,9 @@ function inferAnswerableUnitCueFamily(queryText: string): AnswerableUnitCueFamil
   }
   if (/\bbesides\b/.test(lowered) && /\bfriends?\b/.test(lowered)) {
     return "social_exclusion";
+  }
+  if (/^\s*who\s+supports?\b/.test(lowered) || /\bsupport network\b/.test(lowered)) {
+    return "support_network";
   }
   if (/\bgoals?\b/.test(lowered) && /\b(?:career|basketball|endorsements?|brand|charity)\b/.test(lowered)) {
     return "goals";
@@ -250,6 +254,8 @@ function slotCueScoreForUnit(queryText: string, unit: AnswerableUnit): number {
       return /\b(?:movie|film)\b/i.test(text) ? 0.8 : 0;
     case "social_exclusion":
       return /\b(?:old friends?|other friends?|some friends?|teammates?|team|tournament friends?|outside of my circle)\b/i.test(text) ? 2.3 : 0;
+    case "support_network":
+      return /\b(?:friends?|family|mentors?|support(?:ive|ing|ed)?|my rocks?|there for me|push on|strength)\b/i.test(text) ? 2.25 : 0;
     case "goals":
       return /\b(?:goals?|want(?:s)? to|hope(?:s)? to|plan(?:s)? to|championship|endorsements?|brand|charity)\b/i.test(text) ? 2.15 : 0;
     case "owned_pets":
@@ -259,7 +265,7 @@ function slotCueScoreForUnit(queryText: string, unit: AnswerableUnit): number {
     case "purchased_items":
       return /\b(?:bought|purchased)\b/i.test(text) ? 2.15 : 0;
     case "bands":
-      return /\b(?:bands?|listening to|listen to)\b/i.test(text) ? 2.1 : 0;
+      return /\b(?:bands?|listening to|listen to|favorite|headlined)\b/i.test(text) ? 2.1 : 0;
     case "broken_items":
       return /\b(?:broken|broke|prius)\b/i.test(text) ? 2.05 : 0;
     case "generic":
@@ -560,6 +566,8 @@ function ownerFamilyRegex(cueFamily: AnswerableUnitCueFamily): string | null {
       return "(allerg|animals with fur|hairless cats?|pigs?|reptiles?|dogs?|cats?|turtles?|cockroaches?)";
     case "social_exclusion":
       return "(old friends?|other friends?|some friends?|teammates?|team|tournament friends?|outside of my circle|my team)";
+    case "support_network":
+      return "(friends?|family|mentors?|support(?:ive|ing|ed)?|my rocks?|there for me|push on|strength)";
     case "goals":
       return "(goals?|want|wants|hope|hopes|plan|plans|championship|endorsements?|brand|charity)";
     case "owned_pets":
@@ -741,7 +749,7 @@ export async function queryAnswerableUnits(options: {
   const neighborhoodLimit =
     temporalNeighborhoodQuery
       ? 12
-      : cueFamily === "hobbies" || cueFamily === "martial_arts" || cueFamily === "allergy_safe_pets" || cueFamily === "social_exclusion" || cueFamily === "plural_names"
+      : cueFamily === "hobbies" || cueFamily === "martial_arts" || cueFamily === "allergy_safe_pets" || cueFamily === "social_exclusion" || cueFamily === "support_network" || cueFamily === "plural_names"
         ? 48
         : 24;
   const neighborhoodUnits =
@@ -757,10 +765,10 @@ export async function queryAnswerableUnits(options: {
     cueFamily !== "generic"
       ? await queryOwnerFamilyUnits({
           namespaceId: options.namespaceId,
-          targetHints,
-          cueFamily,
-          excludeIds: [...queryRowsResult.map((row) => row.id), ...neighborhoodUnits.map((unit) => unit.id)],
-          limit: cueFamily === "hobbies" || cueFamily === "martial_arts" || cueFamily === "plural_names" ? 48 : 24,
+        targetHints,
+        cueFamily,
+        excludeIds: [...queryRowsResult.map((row) => row.id), ...neighborhoodUnits.map((unit) => unit.id)],
+          limit: cueFamily === "hobbies" || cueFamily === "martial_arts" || cueFamily === "support_network" || cueFamily === "plural_names" ? 48 : 24,
           timeStart: options.timeStart,
           timeEnd: options.timeEnd
         })
@@ -777,7 +785,7 @@ export async function queryAnswerableUnits(options: {
   ).slice(
     0,
     cueFamily !== "generic"
-      ? Math.max(options.limit * 10, cueFamily === "martial_arts" || cueFamily === "hobbies" || cueFamily === "allergy_safe_pets" || cueFamily === "social_exclusion" || cueFamily === "plural_names" ? 120 : 80)
+      ? Math.max(options.limit * 10, cueFamily === "martial_arts" || cueFamily === "hobbies" || cueFamily === "allergy_safe_pets" || cueFamily === "social_exclusion" || cueFamily === "support_network" || cueFamily === "plural_names" ? 120 : 80)
       : Math.max(options.limit, 8)
   );
 

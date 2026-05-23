@@ -1,6 +1,10 @@
 import { runPersonalOmiReviewCli } from "../benchmark/personal-omi-review.js";
 
-runPersonalOmiReviewCli().catch((error) => {
+runPersonalOmiReviewCli()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch((error) => {
   console.error(error);
-  process.exitCode = 1;
-});
+    process.exit(1);
+  });

@@ -188,6 +188,21 @@ export function parseQueryEntityFocus(queryText: string): QueryEntityFocus {
     };
   }
 
+  const pairMatch = queryText.match(/\b([A-Z][a-z]+)\s+and\s+([A-Z][a-z]+)\b/u);
+  if (pairMatch) {
+    const left = extractNamedCapture(pairMatch, 1);
+    const right = extractNamedCapture(pairMatch, 2);
+    const pairHints = [left, right].filter((value): value is string => Boolean(value));
+    if (pairHints.length === 2) {
+      return {
+        mode: "shared_group",
+        allHints,
+        primaryHints: pairHints,
+        companionHints: []
+      };
+    }
+  }
+
   return { mode: "multi_subject", allHints, primaryHints: [], companionHints: [] };
 }
 

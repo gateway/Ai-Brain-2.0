@@ -36,8 +36,10 @@ import {
   extractAtomicMemoryUnits,
   inferAnswerRetrievalPredicateFamily
 } from "../dist/retrieval/answer-retrieval-plan.js";
+import { isProfileInferenceQuery } from "../dist/retrieval/query-signals.js";
 import {
   buildDualityObject,
+  buildPlannerRuntimeStoredReportResult,
   buildProfileInferenceEvidenceQueryText,
   buildProfileInferenceRetrievalSpec,
   deriveTemporalClaimText,
@@ -254,6 +256,249 @@ test("collection support objects prefer subject-bound collection evidence over b
   assert.deepEqual(support.collectionEntries, ["vintage records", "sports memorabilia"]);
   assert.equal(rendered.renderContractSelected, "collection_set_render");
   assert.equal(rendered.claimText, "vintage records and sports memorabilia");
+});
+
+test("exact detail derivation extracts pet names from owner-bound evidence", () => {
+  const derived = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "What is the name of my cat?",
+    [
+      recallResult("My cat is named Luna and she sleeps on the couch.", {
+        subject_name: "Speaker",
+        speaker_name: "Speaker"
+      })
+    ],
+    true
+  );
+
+  assert.equal(derived.candidate?.text, "Luna");
+});
+
+test("exact detail derivation extracts venue values for class-location questions", () => {
+  const derived = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "Where do I take yoga classes?",
+    [
+      recallResult("I take yoga classes at Serenity Yoga every Tuesday.", {
+        subject_name: "Speaker",
+        speaker_name: "Speaker"
+      })
+    ],
+    true
+  );
+
+  assert.equal(derived.candidate?.text, "Serenity Yoga");
+});
+
+test("exact detail derivation extracts generic degree venues without benchmark literals", () => {
+  const derived = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "Where did I complete my Bachelor's degree in Computer Science?",
+    [
+      recallResult("I completed my Bachelor's degree in Computer Science at Western Lakes University.", {
+        subject_name: "Speaker",
+        speaker_name: "Speaker"
+      })
+    ],
+    true
+  );
+
+  assert.equal(derived.candidate?.text, "Western Lakes University");
+});
+
+test("exact detail derivation extracts generic certification values without hardcoded names", () => {
+  const derived = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "What certification did I complete last month?",
+    [
+      recallResult("I completed a Cloud Architecture certification last month for work.", {
+        subject_name: "Speaker",
+        speaker_name: "Speaker"
+      })
+    ],
+    true
+  );
+
+  assert.equal(derived.candidate?.text, "Cloud Architecture");
+});
+
+test("exact detail derivation extracts generic service names from usage context", () => {
+  const derived = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "What is the name of the music streaming service have I been using lately?",
+    [
+      recallResult("Lately I've been using SoundFlow for most of my music listening.", {
+        subject_name: "Speaker",
+        speaker_name: "Speaker"
+      })
+    ],
+    true
+  );
+
+  assert.equal(derived.candidate?.text, "SoundFlow");
+});
+
+test("exact detail derivation extracts network speeds from current-state evidence", () => {
+  const derived = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "What speed is my new internet plan?",
+    [
+      recallResult("I upgraded my internet plan to 500 Mbps last week.", {
+        subject_name: "Speaker",
+        speaker_name: "Speaker"
+      })
+    ],
+    true
+  );
+
+  assert.equal(derived.candidate?.text, "500 Mbps");
+});
+
+test("exact detail derivation extracts previous occupations from first-person role evidence", () => {
+  const derived = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "What was my previous occupation?",
+    [
+      recallResult("Before this, I worked as a graphic designer for a small studio.", {
+        subject_name: "Speaker",
+        speaker_name: "Speaker"
+      })
+    ],
+    true
+  );
+
+  assert.equal(derived.candidate?.text, "graphic designer");
+});
+
+test("exact detail derivation extracts dog breeds from owner-bound evidence", () => {
+  const derived = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "What breed is my dog?",
+    [
+      recallResult("My dog is a Border Collie who loves long hikes.", {
+        subject_name: "Speaker",
+        speaker_name: "Speaker"
+      })
+    ],
+    true
+  );
+
+  assert.equal(derived.candidate?.text, "Border Collie");
+});
+
+test("list-set support renders child-scoped preferences from typed entries", () => {
+  const support = buildListSetSupport({
+    queryText: "What do Melanie's kids like?",
+    predicateFamily: "list_set",
+    results: [
+      recallResult("Melanie said the kids are obsessed with dinosaurs and really into nature.", {
+        subject_name: "Melanie",
+        speaker_name: "Melanie"
+      })
+    ],
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Melanie",
+      candidateEntityIds: [],
+      candidateNames: ["Melanie"],
+      reason: "test"
+    }
+  });
+  const rendered = renderListSetSupport(support, 1);
+
+  assert.equal(support.typedEntryType, "preference_item");
+  assert.deepEqual([...support.typedEntries].sort(), ["dinosaurs", "nature"]);
+  assert.equal(rendered.claimText, "dinosaurs and nature");
+});
+
+test("list-set support keeps LGBTQ community event facets query-bound", () => {
+  const support = buildListSetSupport({
+    queryText: "What LGBTQ+ events has Caroline participated in?",
+    predicateFamily: "list_set",
+    results: [
+      recallResult("Caroline went to a pride parade, an LGBTQ support group, and gave a school speech about her transgender journey.", {
+        subject_name: "Caroline",
+        speaker_name: "Caroline"
+      }),
+      recallResult("Caroline joined an activist group and took part in an LGBTQ art show.", {
+        subject_name: "Caroline",
+        speaker_name: "Caroline"
+      })
+    ],
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Caroline",
+      candidateEntityIds: [],
+      candidateNames: ["Caroline"],
+      reason: "test"
+    }
+  });
+
+  assert.deepEqual(support.typedEntries, ["pride parade", "support group", "school speech"]);
+});
+
+test("list-set support recovers child-scoped preferences across split museum and excitement rows", () => {
+  const support = buildListSetSupport({
+    queryText: "What do Melanie's kids like?",
+    predicateFamily: "list_set",
+    results: [
+      recallResult("Melanie took the kids to the museum and they were so excited the whole time.", {
+        subject_name: "Melanie",
+        speaker_name: "Melanie"
+      }),
+      recallResult("They were stoked for the dinosaur exhibit!", {
+        subject_name: "Melanie",
+        speaker_name: "Melanie"
+      }),
+      recallResult("The younger kids love nature when the family goes hiking.", {
+        subject_name: "Melanie",
+        speaker_name: "Melanie"
+      })
+    ],
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Melanie",
+      candidateEntityIds: [],
+      candidateNames: ["Melanie"],
+      reason: "test"
+    }
+  });
+
+  assert.deepEqual([...support.typedEntries].sort(), ["dinosaurs", "nature"]);
+});
+
+test("list-set support expands LGBTQ community participation beyond event-only rows", () => {
+  const support = buildListSetSupport({
+    queryText: "In what ways is Caroline participating in the LGBTQ community?",
+    predicateFamily: "list_set",
+    results: [
+      recallResult("Caroline joined a new LGBTQ activist group last Tuesday.", {
+        subject_name: "Caroline",
+        speaker_name: "Caroline"
+      }),
+      recallResult("Caroline is having an LGBTQ art show with her paintings next month.", {
+        subject_name: "Caroline",
+        speaker_name: "Caroline"
+      }),
+      recallResult("Caroline had a great time at the pride event last month.", {
+        subject_name: "Caroline",
+        speaker_name: "Caroline"
+      }),
+      recallResult("Caroline mentors a transgender teen and helps build confidence.", {
+        subject_name: "Caroline",
+        speaker_name: "Caroline"
+      })
+    ],
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Caroline",
+      candidateEntityIds: [],
+      candidateNames: ["Caroline"],
+      reason: "test"
+    }
+  });
+
+  assert.deepEqual(support.typedEntries, ["activist group", "art show", "pride parade", "mentoring program"]);
 });
 
 test("collection support objects prefer normalized explicit collection facts over weaker payload values", () => {
@@ -598,6 +843,192 @@ test("profile inference support extracts direct 'what helped' clauses from sourc
   assert.ok(support.reasonCueTypes.includes("helped_clause"));
   assert.match(rendered.claimText ?? "", /yoga/i);
   assert.match(rendered.claimText ?? "", /nature/i);
+});
+
+test("profile inference support infers relationship status from partner cues", () => {
+  const support = buildProfileInferenceSupport({
+    reportKind: "relationship_report",
+    queryText: "What is Caroline's relationship status?",
+    fallbackSummary: null,
+    results: [
+      recallResult("Caroline said her girlfriend surprised her with flowers after a hard week.", {
+        subject_name: "Caroline",
+        speaker_name: "Caroline"
+      })
+    ]
+  });
+  const rendered = renderProfileInferenceSupport("What is Caroline's relationship status?", support);
+
+  assert.equal(support.answerValue, "girlfriend");
+  assert.equal(rendered.renderContractSelected, "report_scalar_value");
+  assert.equal(rendered.claimText, "girlfriend");
+});
+
+test("profile inference support infers single status from breakup and single-parent cues", () => {
+  const support = buildProfileInferenceSupport({
+    reportKind: "relationship_report",
+    queryText: "What is Caroline's relationship status?",
+    fallbackSummary: null,
+    results: [
+      recallResult("Caroline said it would be tough as a single parent after that tough breakup.", {
+        subject_name: "Caroline",
+        speaker_name: "Caroline"
+      })
+    ]
+  });
+  const rendered = renderProfileInferenceSupport("What is Caroline's relationship status?", support);
+
+  assert.equal(support.answerValue, "single");
+  assert.equal(rendered.renderContractSelected, "report_scalar_value");
+  assert.equal(rendered.claimText, "single");
+});
+
+test("profile inference support keeps relationship-status inference bound to the queried subject in mixed speaker evidence", () => {
+  const support = buildProfileInferenceSupport({
+    reportKind: "relationship_report",
+    queryText: "What is Caroline's relationship status?",
+    fallbackSummary: null,
+    results: [
+      recallResult(
+        "Melanie: I'm lucky to have my husband and kids; they keep me motivated. Caroline: It'll be tough as a single parent after that tough breakup, but I'm up for the challenge!",
+        {
+          subject_name: "Caroline",
+          speaker_name: "Caroline"
+        }
+      )
+    ]
+  });
+  const rendered = renderProfileInferenceSupport("What is Caroline's relationship status?", support);
+
+  assert.equal(support.answerValue, "single");
+  assert.equal(rendered.renderContractSelected, "report_scalar_value");
+  assert.equal(rendered.claimText, "single");
+});
+
+test("profile inference support lets subject-bound relationship evidence override a conflicting typed payload", () => {
+  const support = buildProfileInferenceSupport({
+    reportKind: "relationship_report",
+    queryText: "What is Caroline's relationship status?",
+    fallbackSummary: null,
+    answerPayload: {
+      answer_value: "husband"
+    },
+    results: [
+      recallResult("Caroline said it'll be tough as a single parent after that tough breakup.", {
+        subject_name: "Caroline",
+        speaker_name: "Caroline"
+      })
+    ]
+  });
+  const rendered = renderProfileInferenceSupport("What is Caroline's relationship status?", support);
+
+  assert.equal(support.answerValue, "single");
+  assert.equal(rendered.renderContractSelected, "report_scalar_value");
+  assert.equal(rendered.claimText, "single");
+});
+
+test("runtime report support prefers primary-subject rows over mixed participant rows for relationship status", () => {
+  const support = collectRuntimeReportSupport("What is Caroline's relationship status?", [
+    recallResult(
+      "Participant-bound turn for Melanie. Caroline: Their love and help have been so important especially after that tough breakup. Melanie: I'm lucky to have my husband and kids; they keep me motivated.",
+      {
+        metadata: {
+          participant_names: ["Caroline", "Melanie"],
+          primary_speaker_name: "Melanie",
+          source_sentence_text: "I'm lucky to have my husband and kids; they keep me motivated."
+        }
+      },
+      "2023-06-09T19:55:00.000Z",
+      "artifact_derivation"
+    ),
+    recallResult(
+      "Participant-bound turn for Caroline. Melanie: Wow, that photo is great! Caroline: Their love and help have been so important especially after that tough breakup.",
+      {
+        metadata: {
+          participant_names: ["Melanie", "Caroline"],
+          primary_speaker_name: "Caroline",
+          source_sentence_text: "Their love and help have been so important especially after that tough breakup."
+        }
+      },
+      "2023-06-09T19:55:00.000Z",
+      "artifact_derivation"
+    ),
+    recallResult("Anything you're excited for in the adoption process? Caroline: It'll be tough as a single parent, but I'm up for the challenge!", {
+      subject_name: "Caroline",
+      speaker_name: "Caroline"
+    })
+  ]);
+  const runtime = deriveRuntimeReportClaim("relationship_report", "What is Caroline's relationship status?", [
+    recallResult(
+      "Participant-bound turn for Melanie. Caroline: Their love and help have been so important especially after that tough breakup. Melanie: I'm lucky to have my husband and kids; they keep me motivated.",
+      {
+        metadata: {
+          participant_names: ["Caroline", "Melanie"],
+          primary_speaker_name: "Melanie",
+          source_sentence_text: "I'm lucky to have my husband and kids; they keep me motivated."
+        }
+      },
+      "2023-06-09T19:55:00.000Z",
+      "artifact_derivation"
+    ),
+    recallResult(
+      "Participant-bound turn for Caroline. Melanie: Wow, that photo is great! Caroline: Their love and help have been so important especially after that tough breakup.",
+      {
+        metadata: {
+          participant_names: ["Melanie", "Caroline"],
+          primary_speaker_name: "Caroline",
+          source_sentence_text: "Their love and help have been so important especially after that tough breakup."
+        }
+      },
+      "2023-06-09T19:55:00.000Z",
+      "artifact_derivation"
+    ),
+    recallResult("Anything you're excited for in the adoption process? Caroline: It'll be tough as a single parent, but I'm up for the challenge!", {
+      subject_name: "Caroline",
+      speaker_name: "Caroline"
+    })
+  ]);
+
+  assert.equal(support.trace.supportSelectionMode, "explicit_subject_filtered");
+  assert.ok(support.trace.selectedResultCount >= 2);
+  assert.ok(support.texts.every((text) => !/husband/i.test(text)));
+  assert.notEqual(runtime.claimText, "husband");
+});
+
+test("planner runtime skips stored relationship report seed rows", () => {
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText: "What is Caroline's relationship status?",
+    predicateFamily: "direct_fact"
+  });
+
+  const seeded = buildPlannerRuntimeStoredReportResult({
+    namespaceId: "test",
+    queryText: "What is Caroline's relationship status?",
+    retrievalPlan,
+    storedNarrative: {
+      kind: "report",
+      subjectEntityId: "person:caroline",
+      canonicalSubjectName: "Caroline",
+      predicateFamily: "profile_state",
+      reportKind: "relationship_report",
+      objectValue: "husband",
+      answerPayload: {
+        answer_type: "relationship_status",
+        answer_value: "husband"
+      },
+      mentionedAt: "2023-06-09T19:55:00.000Z",
+      validFrom: null,
+      validUntil: null,
+      timeScopeKind: "active",
+      confidence: "confident",
+      supportStrength: "strong",
+      sourceTable: "canonical_reports",
+      sourceArtifactId: null,
+      sourceChunkId: null
+    }
+  });
+
+  assert.equal(seeded, null);
 });
 
 test("runtime report support keeps subject-bound source pooling from importing unrelated same-conversation sessions", () => {
@@ -1416,6 +1847,64 @@ test("travel report support uses typed artifact payloads when source-grounded sn
   assert.match(rendered.claimText ?? "", /Jasper/i);
 });
 
+test("runtime travel reports recover planned trip destinations and conference purpose from source-backed text", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "brain-travel-plan-"));
+  const sourcePath = join(tempDir, "steve-trip.md");
+  writeFileSync(
+    sourcePath,
+    "Steve is going to Istanbul, Turkey at the end of April for a Pilots Association conference.\n"
+  );
+  try {
+    const result = deriveRuntimeReportClaim(
+      "travel_report",
+      "What trip is Steve planning for the end of April?",
+      [
+        recallResult("Community summary for Steve: they discuss travel across grounded conversation segments.", {
+          subject_name: "Steve",
+          source_uri: sourcePath
+        })
+      ]
+    );
+
+    assert.equal(result.claimText, "a trip to Istanbul, Turkey for Pilots Association conference");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("travel plan profile support prefers query-bound travel summaries over stale generic report values", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "brain-travel-plan-support-"));
+  const sourcePath = join(tempDir, "steve-trip.md");
+  writeFileSync(
+    sourcePath,
+    "Steve is going to Istanbul, Turkey at the end of April for a Pilots Association conference.\n"
+  );
+  try {
+    const support = buildProfileInferenceSupport({
+      reportKind: "travel_report",
+      queryText: "What trip is Steve planning for the end of April?",
+      fallbackSummary: "Steve Tietze likes food [00:15.0.",
+      answerPayload: {
+        answer_value: "Steve Tietze likes food [00:15.0."
+      },
+      results: [
+        recallResult("Community summary for Steve: they discuss travel across grounded conversation segments.", {
+          subject_name: "Steve",
+          source_uri: sourcePath
+        })
+      ]
+    });
+    const rendered = renderProfileInferenceSupport(
+      "What trip is Steve planning for the end of April?",
+      support
+    );
+
+    assert.equal(rendered.claimText, "a trip to Istanbul, Turkey for Pilots Association conference");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("profile inference support synthesizes pair advice from aligned support text", () => {
   const support = buildProfileInferenceSupport({
     reportKind: "profile_report",
@@ -1788,6 +2277,82 @@ test("profile inference support splits ally judgments from generic scalar render
   assert.match(rendered.claimText ?? "", /Melanie is supportive/i);
 });
 
+test("profile inference support renders patriotic judgments through the trait contract", () => {
+  const support = buildProfileInferenceSupport({
+    reportKind: "profile_report",
+    queryText: "Would John be considered a patriotic person?",
+    fallbackSummary: null,
+    answerPayload: null,
+    results: [
+      recallResult("John says he is proud to be American and loves celebrating the Fourth of July.", {
+        subject_name: "John",
+        speaker_name: "John"
+      })
+    ]
+  });
+  const rendered = renderProfileInferenceSupport(
+    "Would John be considered a patriotic person?",
+    support
+  );
+
+  assert.equal(support.answerValue, "Likely yes");
+  assert.equal(rendered.renderContractSelected, "profile_trait_judgment");
+  assert.match(rendered.claimText ?? "", /^Likely yes/i);
+});
+
+test("report retrieval plan targets patriotic support instead of generic preference terms", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "Would John be considered a patriotic person?",
+    predicateFamily: "narrative_profile",
+    reportKind: "profile_report"
+  });
+
+  assert.ok(plan.queryExpansionTerms.includes("patriotic"));
+  assert.ok(plan.queryExpansionTerms.includes("Fourth of July"));
+  assert.ok(plan.queryExpansionTerms.includes("national anthem"));
+  assert.ok(plan.requiredFields.includes("judgment_reason"));
+});
+
+test("education report support renders local-politics main focus from education and infrastructure cues", () => {
+  const support = buildProfileInferenceSupport({
+    reportKind: "education_report",
+    queryText: "What is John's main focus in local politics?",
+    fallbackSummary: null,
+    answerPayload: null,
+    results: [
+      recallResult("John got involved in local politics after seeing how lack of education and crumbling infrastructure affected his neighborhood.", {
+        subject_name: "John",
+        speaker_name: "John"
+      }),
+      recallResult("At community meetings, John kept bringing up public schools and infrastructure repairs.", {
+        subject_name: "John",
+        speaker_name: "John"
+      })
+    ]
+  });
+  const rendered = renderProfileInferenceSupport(
+    "What is John's main focus in local politics?",
+    support
+  );
+
+  assert.equal(support.answerValue, "Improving education and infrastructure");
+  assert.equal(rendered.renderContractSelected, "local_politics_main_focus_render");
+  assert.equal(rendered.claimText, "Improving education and infrastructure");
+});
+
+test("report retrieval plan routes local-politics main focus to bounded education support", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What is John's main focus in local politics?",
+    predicateFamily: "narrative_profile",
+    reportKind: "profile_report"
+  });
+
+  assert.ok(plan.candidatePools.includes("education_support"));
+  assert.ok(plan.queryExpansionTerms.includes("infrastructure"));
+  assert.ok(plan.queryExpansionTerms.includes("education"));
+  assert.ok(plan.requiredFields.includes("main_focus"));
+});
+
 test("profile inference support promotes why-queries into a causal reason render", () => {
   const support = buildProfileInferenceSupport({
     reportKind: "profile_report",
@@ -2003,6 +2568,17 @@ test("profile inference evidence expansion keeps counseling terms for career-opt
   assert.match(expanded, /\bmental\b/i);
 });
 
+test("profile inference query detection includes counterfactual career-judgment prompts", () => {
+  assert.equal(
+    isProfileInferenceQuery("Would Caroline still want to pursue counseling as a career if she hadn't received support growing up?"),
+    true
+  );
+  assert.equal(
+    isProfileInferenceQuery("Would Caroline pursue writing as a career option?"),
+    true
+  );
+});
+
 test("answer retrieval planner routes bookshelf inference into collection pools and career suppression", () => {
   const plan = buildAnswerRetrievalPlan({
     queryText: "Would Caroline likely have Dr. Seuss books on her bookshelf?",
@@ -2152,7 +2728,7 @@ test("answer retrieval planner keeps endorsement-company queries in the exact-de
   assert.equal(plan.rescuePolicy, "single_targeted_rescue_before_fallback");
 });
 
-test("answer retrieval planner keeps purchased-item questions out of collection inference", () => {
+test("answer retrieval planner routes purchased-item questions into set-fact list-set pools", () => {
   const plan = buildAnswerRetrievalPlan({
     queryText: "What items did Calvin buy in March 2023?",
     predicateFamily: inferAnswerRetrievalPredicateFamily("What items did Calvin buy in March 2023?", "generic_fact"),
@@ -2160,8 +2736,8 @@ test("answer retrieval planner keeps purchased-item questions out of collection 
     subjectEntityHints: ["person:calvin"]
   });
 
-  assert.equal(plan.family, "exact_detail");
-  assert.equal(plan.lane, "exact_detail");
+  assert.equal(plan.family, "list_set");
+  assert.equal(plan.lane, "set_fact");
 });
 
 test("answer retrieval planner keeps favorite-memory questions out of preference profile lanes", () => {
@@ -2296,6 +2872,41 @@ test("answer retrieval planner routes lgbtq community inference into community p
   assert.ok(plan.bannedExpansionTerms.includes("counseling"));
 });
 
+test("answer retrieval planner routes identity questions into profile support instead of generic fallback", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What is Caroline's identity?",
+    predicateFamily: inferAnswerRetrievalPredicateFamily("What is Caroline's identity?", "generic_fact")
+  });
+
+  assert.equal(plan.family, "report");
+  assert.equal(plan.lane, "report");
+  assert.ok(plan.queryExpansionTerms.includes("identity"));
+  assert.ok(plan.queryExpansionTerms.includes("transgender"));
+});
+
+test("answer retrieval planner routes camping history into location-history list-set pools", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "Where has Melanie camped?",
+    predicateFamily: inferAnswerRetrievalPredicateFamily("Where has Melanie camped?", "generic_fact")
+  });
+
+  assert.equal(plan.family, "list_set");
+  assert.equal(plan.lane, "location_history");
+  assert.ok(plan.queryExpansionTerms.includes("camped"));
+});
+
+test("answer retrieval planner routes lgbtq participation questions into event-list pools", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "In what ways is Caroline participating in the LGBTQ community?",
+    predicateFamily: inferAnswerRetrievalPredicateFamily("In what ways is Caroline participating in the LGBTQ community?", "generic_fact")
+  });
+
+  assert.equal(plan.family, "list_set");
+  assert.equal(plan.lane, "event_list");
+  assert.ok(plan.queryExpansionTerms.includes("participating"));
+  assert.ok(plan.queryExpansionTerms.includes("lgbtq"));
+});
+
 test("strict bookshelf inference can synthesize an aggregate candidate from fallback support text", () => {
   const candidate = buildQueryBoundRecallAggregateCandidate({
     queryText: "Would Caroline likely have Dr. Seuss books on her bookshelf?",
@@ -2405,7 +3016,7 @@ test("career support objects infer counselor preference from mixed evidence", ()
   );
 
   assert.equal(rendered.renderContractSelected, "career_likelihood_judgment");
-  assert.equal(rendered.claimText, "Likely no.");
+  assert.equal(rendered.claimText, "Likely no. Though she likes reading and writing, she wants to be a counselor.");
 });
 
 test("direct career-path reports keep the concrete career phrase instead of collapsing into a judgment label", () => {
@@ -2589,6 +3200,62 @@ test("temporal support prefers earliest inception year across matched event cand
   assert.equal(rendered.renderContractSelected, "temporal_year");
 });
 
+test("generic when queries lock to stored canonical year-only temporal facts over finer snippet merges", () => {
+  const support = buildTemporalEventSupport({
+    queryText: "When did Melanie paint a sunrise?",
+    storedCanonical: {
+      kind: "temporal_fact",
+      subjectEntityId: "person:melanie",
+      canonicalSubjectName: "Melanie",
+      subjectBindingStatus: "resolved",
+      predicateFamily: "temporal_event_fact",
+      supportStrength: "strong",
+      timeScopeKind: "historical",
+      confidence: "confident",
+      objectValue: "2022",
+      validFrom: "2023-05-07T00:00:00.000Z",
+      sourceTable: "canonical_temporal_facts",
+      eventKey: "paint_that_lake_sunrise",
+      eventType: "event",
+      timeGranularity: "year",
+      answerYear: 2022,
+      supportKind: "explicit_event_fact",
+      temporalSourceQuality: "canonical_event"
+    },
+    fallbackClaimText: null,
+    results: [
+      recallResult("8 May 2023", {
+        subject_entity_id: "person:melanie",
+        subject_name: "Melanie",
+        source_table: "temporal_results",
+        metadata: {
+          source_table: "temporal_results",
+          subject_entity_id: "person:melanie",
+          subject_name: "Melanie",
+          event_key: "paint_that_lake_sunrise",
+          time_granularity: "day",
+          answer_year: 2023,
+          answer_month: 5,
+          answer_day: 8,
+          source_turn_text: "Melanie talked about painting a sunrise on 8 May 2023."
+        }
+      })
+    ],
+    subjectBindingStatus: "resolved",
+    subjectBindingReason: "resolved for test"
+  });
+  const rendered = renderTemporalEventSupport("When did Melanie paint a sunrise?", support, 1);
+
+  assert.equal(support.answerYear, 2022);
+  assert.equal(support.answerMonth, null);
+  assert.equal(support.answerDay, null);
+  assert.equal(support.timeGranularity, "year");
+  assert.equal(support.temporalGranularityStatus, "resolved");
+  assert.equal(rendered.claimText, "2022");
+  assert.equal(rendered.renderContractSelected, "temporal_year");
+  assert.equal(rendered.selectedTimeGranularity, "year");
+});
+
 test("temporal recall shaping infers canonical-event provenance from thin structured rows", () => {
   const shape = readTemporalRecallShape(
     "What year did John start surfing?",
@@ -2702,6 +3369,116 @@ test("temporal support prefers source-grounded absolute backfill over reference-
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("temporal support prefers relative-year backfill over source-date leakage for generic when queries", () => {
+  const dir = mkdtempSync(join(tmpdir(), "brain-temporal-support-relative-year-"));
+  const sourcePath = join(dir, "conv-26-session_1.md");
+  writeFileSync(
+    sourcePath,
+    [
+      "Captured: 2023-05-08T13:56:00.000Z",
+      "",
+      "Caroline: Thanks, Melanie! That's really sweet. Is this your own painting?",
+      "Melanie: Yeah, I painted that lake sunrise last year! It's special to me."
+    ].join("\n"),
+    "utf8"
+  );
+
+  try {
+    const rendered = renderTemporalEventSupport(
+      "When did Melanie paint a sunrise?",
+      buildTemporalEventSupport({
+        queryText: "When did Melanie paint a sunrise?",
+        storedCanonical: {
+          kind: "temporal_fact",
+          subjectEntityId: "person:melanie",
+          canonicalSubjectName: "Melanie",
+          subjectBindingStatus: "resolved",
+          predicateFamily: "temporal_event_fact",
+          supportStrength: "strong",
+          timeScopeKind: "historical",
+          confidence: "confident",
+          answerYear: 2023,
+          answerMonth: 5,
+          answerDay: 8,
+          timeGranularity: "day",
+          eventKey: "paint_that_lake_sunrise",
+          eventType: "event",
+          supportKind: "explicit_event_fact",
+          temporalSourceQuality: "canonical_event"
+        },
+        fallbackClaimText: null,
+        results: [
+          recallResult("8 May 2023", {
+            subject_entity_id: "person:melanie",
+            subject_name: "Melanie",
+            source_uri: sourcePath,
+            source_table: "canonical_temporal_facts",
+            metadata: {
+              source_table: "canonical_temporal_facts",
+              subject_entity_id: "person:melanie",
+              subject_name: "Melanie",
+              source_uri: sourcePath,
+              support_kind: "explicit_event_fact",
+              temporal_source_quality: "canonical_event",
+              event_key: "paint_that_lake_sunrise",
+              event_type: "event",
+              time_granularity: "day",
+              answer_year: 2023,
+              answer_month: 5,
+              answer_day: 8,
+              source_sentence_text: "Melanie: Yeah, I painted that lake sunrise last year! It's special to me."
+            }
+          }, "2023-05-08T13:56:00.000Z")
+        ],
+        subjectBindingStatus: "resolved",
+        subjectBindingReason: "resolved for test"
+      }),
+      1
+    );
+
+    assert.equal(rendered.claimText, "2022");
+    assert.equal(rendered.renderContractSelected, "temporal_year");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("temporal renderer lets a resolved year-only relative cue outrank a lingering day fact", () => {
+  const rendered = renderTemporalEventSupport(
+    "When did Melanie paint a sunrise?",
+    {
+      supportObjectType: "TemporalEventSupport",
+      eventKey: "paint_that_lake_sunrise",
+      eventType: "event",
+      timeGranularity: "day",
+      answerYear: 2023,
+      answerMonth: 5,
+      answerDay: 8,
+      relativeClaimText: "2022",
+      relativeAnchorOnlyResolution: false,
+      fallbackClaimText: null,
+      subjectBindingStatus: "resolved",
+      subjectBindingReason: "resolved for test",
+      targetedRetrievalAttempted: false,
+      targetedRetrievalReason: null,
+      targetedFieldsRequested: [],
+      targetedRetrievalSatisfied: true,
+      temporalEventIdentityStatus: "resolved_from_event_neighborhood",
+      temporalGranularityStatus: "resolved",
+      relativeAnchorStatus: "resolved",
+      selectedSupportKind: "reference_derived_relative",
+      selectedTemporalSourceQuality: "derived_relative",
+      selectedDerivedFromReference: true,
+      explicitTemporalFactSatisfied: false,
+      supportNormalizationFailures: []
+    },
+    1
+  );
+
+  assert.equal(rendered.claimText, "2022");
+  assert.equal(rendered.renderContractSelected, "temporal_year");
 });
 
 test("temporal recall shaping strips event dates from unanchored media mentions", () => {
@@ -2905,6 +3682,43 @@ test("temporal support refuses query-only event identity when only generic dated
   assert.equal(rendered.renderContractSelected, "temporal_missing_event_identity");
   assert.equal(rendered.targetedRetrievalSatisfied, false);
   assert.equal(rendered.selectedEventKey, null);
+});
+
+test("temporal support keeps exact-day renders when relative rescue also resolves a concrete date", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "brain-temporal-relative-rescue-"));
+  const sourcePath = join(tempDir, "caroline-school-session_1.md");
+  writeFileSync(
+    sourcePath,
+    ["---", "started_at: 2023-08-25T12:00:00.000Z", "---", "Caroline gave a speech at a school the Friday before."].join("\n"),
+    "utf8"
+  );
+  const structuredResult = recallResult(
+    JSON.stringify({
+      text: "24 August 2023",
+      sourceUri: sourcePath
+    })
+  );
+  structuredResult.occurredAt = "2023-08-25T12:00:00.000Z";
+
+  try {
+    const rendered = renderTemporalEventSupport(
+      "When did Caroline give a speech at a school?",
+      buildTemporalEventSupport({
+        queryText: "When did Caroline give a speech at a school?",
+        storedCanonical: null,
+        fallbackClaimText: null,
+        results: [structuredResult],
+        subjectBindingStatus: "resolved",
+        subjectBindingReason: "resolved for test"
+      }),
+      1
+    );
+
+    assert.equal(rendered.renderContractSelected, "temporal_day");
+    assert.equal(rendered.claimText, "24 August 2023");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("temporal support accepts aligned anchor evidence when the query has no explicit event key", () => {
@@ -4565,6 +5379,45 @@ test("temporal support renders month-year for generic when queries when day supp
   assert.equal(rendered.renderContractSelected, "temporal_month_year");
 });
 
+test("temporal support renders animal shelter dinner day from event-local source text", () => {
+  const support = buildTemporalEventSupport({
+    queryText: "When was the animal shelter fundraising dinner?",
+    fallbackClaimText: JSON.stringify({ memoryId: "bad", text: "None." }),
+    storedCanonical: {
+      eventKey: null,
+      eventType: null,
+      answerYear: null,
+      answerMonth: null,
+      answerDay: null,
+      timeGranularity: null,
+      exactness: "inferred",
+      truthStatus: "active",
+      validFrom: null,
+      validUntil: null,
+      mentionedAt: null,
+      supportKind: "generic_time_fragment",
+      temporalSourceQuality: "generic",
+      sourceTable: "canonical_temporal_facts",
+      derivedFromReference: false
+    },
+    results: [
+      recallResult(
+        "The animal shelter fundraising dinner was on February 14th.",
+        {
+          source_sentence_text: "The animal shelter fundraising dinner was on February 14th."
+        },
+        "2023-02-01T09:00:00.000Z"
+      )
+    ],
+    subjectBindingStatus: "resolved"
+  });
+  const rendered = renderTemporalEventSupport("When was the animal shelter fundraising dinner?", support, 1);
+
+  assert.equal(rendered.renderContractSelected, "temporal_day");
+  assert.equal(rendered.claimText, "February 14th");
+  assert.doesNotMatch(rendered.claimText ?? "", /memoryId|None/i);
+});
+
 test("temporal support prefers the earliest aligned event-neighborhood date for generic when queries", () => {
   const dir = mkdtempSync(join(tmpdir(), "brain-temporal-neighborhood-"));
   const sourcePath = join(dir, "conv-30-session_1.md");
@@ -5398,6 +6251,68 @@ test("temporal support does not treat provenance timestamps as answer dates when
   assert.equal(rendered.renderContractSelected, "temporal_month_year");
 });
 
+test("temporal support renders year-only answers for generic first-watch queries", () => {
+  const rendered = renderTemporalEventSupport(
+    'When did Joanna first watch "Eternal Sunshine of the Spotless Mind?"',
+    buildTemporalEventSupport({
+      queryText: 'When did Joanna first watch "Eternal Sunshine of the Spotless Mind?"',
+      storedCanonical: null,
+      fallbackClaimText: null,
+      results: [
+        recallResult(
+          "Joanna watched Eternal Sunshine of the Spotless Mind. Time hint: around 3 years ago. Normalized year: 2019. Context: I first watched it around 3 years ago.",
+          {
+            typed_fact_kind: "temporal_media_anchor",
+            subject_name: "Joanna",
+            media_title: "Eternal Sunshine of the Spotless Mind",
+            mention_kind: "watched",
+            time_hint_text: "around 3 years ago",
+            normalized_year: "2019",
+            event_anchor_start: "2022-01-21T19:31:00.000Z",
+            event_anchor_end: "2022-01-21T19:31:00.000Z"
+          },
+          "2022-01-21T19:31:00.000Z"
+        )
+      ],
+      subjectBindingStatus: "resolved",
+      subjectBindingReason: "Primary name anchor Joanna kept the subject plan single-subject."
+    }),
+    1
+  );
+
+  assert.equal(rendered.claimText, "2019");
+  assert.equal(rendered.renderContractSelected, "temporal_year");
+});
+
+test("temporal support keeps relative week phrasing for generic first-tournament queries", () => {
+  const rendered = renderTemporalEventSupport(
+    "When did Nate win his first video game tournament?",
+    buildTemporalEventSupport({
+      queryText: "When did Nate win his first video game tournament?",
+      storedCanonical: null,
+      fallbackClaimText: null,
+      results: [
+        recallResult(
+          "Nate: I won my first video game tournament last week - so exciting!",
+          {
+            subject_name: "Nate",
+            metadata: {
+              source_sentence_text: "Nate: I won my first video game tournament last week - so exciting!"
+            }
+          },
+          "2022-01-21T19:31:00.000Z"
+        )
+      ],
+      subjectBindingStatus: "resolved",
+      subjectBindingReason: "Primary name anchor Nate kept the subject plan single-subject."
+    }),
+    1
+  );
+
+  assert.equal(rendered.claimText, "the week before January 21, 2022.");
+  assert.equal(rendered.renderContractSelected, "temporal_relative_day");
+});
+
 test("list/set answers expose typed-entry shaping traces", () => {
   const adjudicated = adjudicateCanonicalClaim({
     queryText: "Which country did Calvin and Dave plan to meet in?",
@@ -5559,6 +6474,40 @@ test("book-list support can recover typed titles from source-backed artifacts", 
   }
 });
 
+test("book-list support ignores recommendation-only titles in expanded source text", () => {
+  const dir = mkdtempSync(join(tmpdir(), "brain-book-recommendation-"));
+  const sourcePath = join(dir, "conv-26-session_3.md");
+  writeFileSync(
+    sourcePath,
+    'Captured: 2023-07-05T00:00:00.000Z\nMelanie said she read "Nothing is Impossible" and later mentioned "Charlotte\'s Web".\nThe recommendation was Becoming Nicole.\n'
+  );
+  try {
+    const support = buildListSetSupport({
+      queryText: "What books has Melanie read?",
+      predicateFamily: "list_set",
+      finalClaimText: null,
+      subjectPlan: {
+        kind: "single_subject",
+        subjectEntityId: null,
+        canonicalSubjectName: "Melanie",
+        candidateEntityIds: [],
+        candidateNames: ["Melanie"],
+        reason: "test"
+      },
+      results: [
+        recallResult("No authoritative book list found.", {
+          subject_name: "Melanie",
+          source_uri: sourcePath
+        })
+      ]
+    });
+
+    assert.deepEqual(support.typedEntries, ["Nothing is Impossible", "Charlotte's Web"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("book-list support can recover typed titles from metadata-only cues", () => {
   const support = buildListSetSupport({
     queryText: "What books has Melanie read?",
@@ -5584,6 +6533,227 @@ test("book-list support can recover typed titles from metadata-only cues", () =>
 
   assert.deepEqual(support.typedEntries, ["The Great Gatsby", "To Kill a Mockingbird"]);
   assert.equal(support.typedEntryType, "book_title");
+});
+
+test("camping location support ignores unrelated session venues in expanded source text", () => {
+  const dir = mkdtempSync(join(tmpdir(), "brain-camp-source-"));
+  const sourcePath = join(dir, "conv-26-session_4.md");
+  writeFileSync(
+    sourcePath,
+    "Captured: 2023-07-05T00:00:00.000Z\nCaroline went to the LGBTQ support group yesterday.\nMelanie camped at the beach, in the mountains, and in the forest with her family.\nCaroline went to a pride parade last Friday.\n"
+  );
+  try {
+    const support = buildListSetSupport({
+      queryText: "Where has Melanie camped?",
+      predicateFamily: "list_set",
+      finalClaimText: null,
+      subjectPlan: {
+        kind: "single_subject",
+        subjectEntityId: null,
+        canonicalSubjectName: "Melanie",
+        candidateEntityIds: [],
+        candidateNames: ["Melanie"],
+        reason: "test"
+      },
+      results: [
+        recallResult("No authoritative camping list found.", {
+          subject_name: "Melanie",
+          source_uri: sourcePath
+        })
+      ]
+    });
+    const rendered = renderListSetSupport(support, 1);
+
+    assert.deepEqual(support.typedEntries, ["beach", "mountains", "forest"]);
+    assert.equal(rendered.claimText, "beach, mountains, and forest");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("family activity support recovers hiking and camping activities from subject-bound text", () => {
+  const support = buildListSetSupport({
+    queryText: "What does Melanie do with her family on hikes?",
+    predicateFamily: "list_set",
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Melanie",
+      candidateEntityIds: [],
+      candidateNames: ["Melanie"],
+      reason: "test"
+    },
+    results: [
+      recallResult("Melanie and her family go hiking, camp overnight, and watch meteor showers together.", {
+        subject_name: "Melanie"
+      })
+    ]
+  });
+
+  assert.deepEqual(support.typedEntries, ["camping", "hiking", "watching a meteor shower"]);
+  assert.equal(support.typedEntryType, "activity_name");
+});
+
+test("pair made-item support keeps co-created pottery items inside the typed list contract", () => {
+  const support = buildListSetSupport({
+    queryText: "What did Mel and her kids make during the pottery workshop?",
+    predicateFamily: "list_set",
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "pair_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Mel",
+      pairSubjectEntityId: null,
+      pairSubjectName: "kids",
+      candidateEntityIds: [],
+      candidateNames: ["Mel", "kids"],
+      reason: "test_pair"
+    },
+    results: [
+      recallResult("Mel and her kids made bowls and mugs during the pottery workshop.", {
+        subject_name: "Mel"
+      })
+    ]
+  });
+
+  assert.deepEqual(support.typedEntries, ["bowls", "mugs"]);
+  assert.equal(support.typedEntryType, "inventory_item");
+});
+
+test("pair made-item support rejects noisy pottery prose fragments", () => {
+  const support = buildListSetSupport({
+    queryText: "What types of pottery have Melanie and her kids made?",
+    predicateFamily: "list_set",
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "pair_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Melanie",
+      pairSubjectEntityId: null,
+      pairSubjectName: "kids",
+      candidateEntityIds: [],
+      candidateNames: ["Melanie", "kids"],
+      reason: "test_pair"
+    },
+    results: [
+      recallResult("Melanie and her kids made bowls, mugs, and their own pots. It was fun and therapeutic.", {
+        subject_name: "Melanie"
+      })
+    ]
+  });
+
+  assert.deepEqual(support.typedEntries, ["bowls", "mugs", "pots"]);
+});
+
+test("list-set support expands support networks beyond gaming-only cues", () => {
+  const support = buildListSetSupport({
+    queryText: "Who supports Caroline when she has a negative experience?",
+    predicateFamily: "list_set",
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Caroline",
+      candidateEntityIds: [],
+      candidateNames: ["Caroline"],
+      reason: "test"
+    },
+    results: [
+      recallResult("Caroline leans on friends, family, and mentors when she has a negative experience.", {
+        subject_name: "Caroline"
+      })
+    ]
+  });
+
+  assert.equal(support.typedEntryType, "support_contact");
+  assert.deepEqual([...support.typedEntries].sort(), ["family", "friends", "mentors"]);
+});
+
+test("pet inventory support extracts owned pet types instead of pet names", () => {
+  const support = buildListSetSupport({
+    queryText: "What pets does Melanie have?",
+    predicateFamily: "list_set",
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Melanie",
+      candidateEntityIds: [],
+      candidateNames: ["Melanie"],
+      reason: "test"
+    },
+    results: [
+      recallResult("Melanie has two dogs and a turtle.", {
+        subject_name: "Melanie"
+      })
+    ]
+  });
+
+  assert.deepEqual(support.typedEntries, ["dog", "turtle"]);
+  assert.equal(support.typedEntryType, "inventory_item");
+});
+
+test("shared-city list-set support recovers typed city entries for pair commonality travel queries", () => {
+  const support = buildListSetSupport({
+    queryText: "Which city have both Jean and John visited?",
+    predicateFamily: "commonality",
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "pair_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Jean",
+      pairSubjectEntityId: null,
+      pairSubjectName: "John",
+      candidateEntityIds: [],
+      candidateNames: ["Jean", "John"],
+      reason: "test"
+    },
+    results: [
+      recallResult("Jean visited Rome and loved it.", {
+        subject_name: "Jean",
+        sourceSentenceText: "Jean visited Rome and loved it."
+      }),
+      recallResult("John visited Rome during his trip.", {
+        subject_name: "John",
+        sourceSentenceText: "John visited Rome during his trip."
+      })
+    ]
+  });
+  const rendered = renderListSetSupport(support, 2);
+
+  assert.deepEqual(support.typedEntries, ["Rome"]);
+  assert.equal(rendered.claimText, "They Rome.");
+});
+
+test("shared-interest list-set support recovers multiple typed interests for pair commonality queries", () => {
+  const support = buildListSetSupport({
+    queryText: "What kind of interests do Joanna and Nate share?",
+    predicateFamily: "commonality",
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "pair_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Joanna",
+      pairSubjectEntityId: null,
+      pairSubjectName: "Nate",
+      candidateEntityIds: [],
+      candidateNames: ["Joanna", "Nate"],
+      reason: "test"
+    },
+    results: [
+      recallResult("Joanna enjoys watching movies and making desserts.", {
+        subject_name: "Joanna",
+        sourceSentenceText: "Joanna enjoys watching movies and making desserts."
+      }),
+      recallResult("Nate also likes watching movies and making desserts.", {
+        subject_name: "Nate",
+        sourceSentenceText: "Nate also likes watching movies and making desserts."
+      })
+    ]
+  });
+
+  assert.deepEqual(support.typedEntries, ["watching movies", "making desserts"]);
 });
 
 test("child-support event lists infer typed event entries from support text", () => {
@@ -5619,6 +6789,48 @@ test("child-support event lists infer typed event entries from support text", ()
   assert.doesNotMatch(adjudicated.formatted.claimText ?? "", /support group/i);
 });
 
+test("activity list support ignores image-caption noise and keeps multiword companion activities", () => {
+  const support = buildListSetSupport({
+    queryText: "What kind of indoor activities has Andrew pursued with his girlfriend?",
+    predicateFamily: "list_set",
+    results: [
+      recallResult("Andrew: My girlfriend and I went to this awesome wine tasting last weekend.", {
+        subject_name: "Andrew",
+        sourceSentenceText: "Andrew: My girlfriend and I went to this awesome wine tasting last weekend."
+      }),
+      recallResult("Andrew: My girlfriend and I volunteered at a pet shelter on Monday.", {
+        subject_name: "Andrew",
+        sourceSentenceText: "Andrew: My girlfriend and I volunteered at a pet shelter on Monday."
+      }),
+      recallResult(
+        "Speaker: Andrew Turn text: Sending prayers and wishes. Here's a pic I took at a national park I went a while ago. Image caption: a photography of a man hiking up a mountain with a backpack Image query: hiking mountains",
+        {
+          subject_name: "Andrew",
+          sourceSentenceText:
+            "Andrew: Sending prayers and wishes. Here's a pic I took at a national park I went a while ago."
+        }
+      )
+    ],
+    storedCanonical: null,
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectNames: ["Andrew"],
+      objectNames: [],
+      pairNames: []
+    },
+    targetedRetrievalAttempted: false,
+    targetedRetrievalReason: null,
+    targetedFieldsRequested: [],
+    targetedRetrievalSatisfied: false
+  });
+
+  assert.equal(support.typedEntryType, "activity_name");
+  assert.ok(support.typedEntries.includes("wine tasting"));
+  assert.ok(support.typedEntries.includes("volunteering at pet shelter"));
+  assert.ok(!support.typedEntries.includes("hiking"));
+});
+
 test("support-network list answers infer typed contacts for friends-besides queries", () => {
   const support = buildListSetSupport({
     queryText: "Is it likely that Nate has friends besides Joanna?",
@@ -5652,6 +6864,191 @@ test("support-network list answers infer typed contacts for friends-besides quer
   assert.match(rendered.claimText ?? "", /^Yes, /);
   assert.match(rendered.claimText ?? "", /teammates on his video game team/i);
   assert.doesNotMatch(rendered.claimText ?? "", /old friends from other tournaments/i);
+});
+
+test("support-network list answers preserve mentors alongside family and friends", () => {
+  const support = buildListSetSupport({
+    queryText: "Who supports Caroline when she has a negative experience?",
+    predicateFamily: "list_set",
+    results: [
+      recallResult("Caroline: My friends, family and mentors are my rocks.", {
+        subject_name: "Caroline",
+        sourceSentenceText: "Caroline: My friends, family and mentors are my rocks."
+      })
+    ],
+    storedCanonical: null,
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Caroline",
+      candidateEntityIds: [],
+      candidateNames: ["Caroline"],
+      reason: "explicit_subject"
+    }
+  });
+  const rendered = renderListSetSupport(support, 1);
+
+  assert.deepEqual(support.typedEntries, ["mentors", "family", "friends"]);
+  assert.equal(support.targetedRetrievalSatisfied, true);
+  assert.equal(rendered.claimText, "mentors, family, and friends");
+});
+
+test("support-network list answers stay incomplete when only one contact is recovered", () => {
+  const support = buildListSetSupport({
+    queryText: "Who supports Caroline when she has a negative experience?",
+    predicateFamily: "list_set",
+    results: [
+      recallResult("Caroline says her family is always there for her.", {
+        subject_name: "Caroline",
+        sourceSentenceText: "Caroline says her family is always there for her."
+      })
+    ],
+    storedCanonical: null,
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Caroline",
+      candidateEntityIds: [],
+      candidateNames: ["Caroline"],
+      reason: "explicit_subject"
+    }
+  });
+
+  assert.deepEqual(support.typedEntries, ["family"]);
+  assert.equal(support.targetedRetrievalAttempted, true);
+  assert.equal(support.targetedRetrievalSatisfied, false);
+});
+
+test("activity list support rejects vague modifier fragments from creative follow-up answers", () => {
+  const support = buildListSetSupport({
+    queryText: "What activities does Melanie partake in?",
+    predicateFamily: "list_set",
+    results: [
+      recallResult("Melanie: We love painting together lately, especially nature-inspired ones.", {
+        subject_name: "Melanie",
+        sourceSentenceText: "Melanie: We love painting together lately, especially nature-inspired ones."
+      }),
+      recallResult("Melanie: Yep, Caroline. Taking care of ourselves is vital. I'm off to go swimming with the kids.", {
+        subject_name: "Melanie",
+        sourceSentenceText: "Melanie: Yep, Caroline. Taking care of ourselves is vital. I'm off to go swimming with the kids."
+      }),
+      recallResult("Melanie: I love camping trips with my fam, because nature brings such peace and serenity.", {
+        subject_name: "Melanie",
+        sourceSentenceText: "Melanie: I love camping trips with my fam, because nature brings such peace and serenity."
+      }),
+      recallResult("Melanie: Pottery is so relaxing and creative.", {
+        subject_name: "Melanie",
+        sourceSentenceText: "Melanie: Pottery is so relaxing and creative."
+      })
+    ],
+    storedCanonical: null,
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Melanie",
+      candidateEntityIds: [],
+      candidateNames: ["Melanie"],
+      reason: "explicit_subject"
+    }
+  });
+
+  assert.equal(support.typedEntryType, "activity_name");
+  assert.ok(support.typedEntries.includes("painting"));
+  assert.ok(support.typedEntries.includes("swimming"));
+  assert.ok(support.typedEntries.includes("camping"));
+  assert.ok(support.typedEntries.includes("pottery"));
+  assert.ok(!support.typedEntries.includes("especially nature-inspired ones"));
+  assert.ok(!support.typedEntries.includes("you are doing"));
+});
+
+test("broad activity lists keep stress-relief running out of generic inventories and stay incomplete", () => {
+  const support = buildListSetSupport({
+    queryText: "What activities does Melanie partake in?",
+    predicateFamily: "list_set",
+    results: [
+      recallResult("Melanie: Seven years now, and I've finally found my real muses: painting and pottery.", {
+        subject_name: "Melanie",
+        sourceSentenceText: "Melanie: Seven years now, and I've finally found my real muses: painting and pottery."
+      }),
+      recallResult("Melanie: It's tough. So I'm carving out some me-time each day - running, reading, or playing my violin - which refreshes me and helps me stay present for my fam!", {
+        subject_name: "Melanie",
+        sourceSentenceText:
+          "Melanie: It's tough. So I'm carving out some me-time each day - running, reading, or playing my violin - which refreshes me and helps me stay present for my fam!"
+      })
+    ],
+    storedCanonical: null,
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectEntityId: null,
+      canonicalSubjectName: "Melanie",
+      candidateEntityIds: [],
+      candidateNames: ["Melanie"],
+      reason: "explicit_subject"
+    }
+  });
+
+  assert.deepEqual(support.typedEntries, ["pottery", "painting"]);
+  assert.equal(support.targetedRetrievalAttempted, true);
+  assert.equal(support.targetedRetrievalSatisfied, false);
+});
+
+test("favorite-band list support excludes headliner-only evidence from the typed entries", () => {
+  const support = buildListSetSupport({
+    queryText: "Which band was Dave's favorite at the music festival in April 2023?",
+    predicateFamily: "list_set",
+    results: [
+      recallResult("Dave: If I had to pick a favorite, it would definitely be Aerosmith.", {
+        subject_name: "Dave",
+        sourceSentenceText: "Dave: If I had to pick a favorite, it would definitely be Aerosmith."
+      }),
+      recallResult("Dave: The Fireworks headlined the festival.", {
+        subject_name: "Dave",
+        sourceSentenceText: "Dave: The Fireworks headlined the festival."
+      })
+    ],
+    storedCanonical: null,
+    finalClaimText: null,
+    subjectPlan: {
+      kind: "single_subject",
+      subjectNames: ["Dave"],
+      objectNames: [],
+      pairNames: []
+    }
+  });
+  const rendered = renderListSetSupport(support, 2);
+
+  assert.equal(support.typedEntryType, "inventory_item");
+  assert.deepEqual(support.typedEntries, ["Aerosmith"]);
+  assert.equal(rendered.claimText, "Aerosmith");
+});
+
+test("saw-live temporal support ignores unrelated aligned temporal rows", () => {
+  const rendered = renderTemporalEventSupport(
+    "When did Dave see Aerosmith perform live?",
+    buildTemporalEventSupport({
+      queryText: "When did Dave see Aerosmith perform live?",
+      storedCanonical: null,
+      fallbackClaimText: null,
+      results: [
+        recallResult("Last year I went to a different festival in Austin.", {
+          subject_name: "Dave"
+        }, "2023-05-01T00:00:00.000Z"),
+        recallResult("Last weekend, I saw Aerosmith perform live and they were incredible.", {
+          subject_name: "Dave"
+        }, "2023-03-26T16:45:00.000Z")
+      ],
+      subjectBindingStatus: "resolved",
+      subjectBindingReason: "explicit_subject"
+    }),
+    2
+  );
+
+  assert.match(rendered.claimText ?? "", /weekend before|19 March 2023|March 25th to 26th, 2023/i);
+  assert.doesNotMatch(rendered.claimText ?? "", /August|last year/i);
 });
 
 test("exact-detail answers expose direct-detail support-object shaping traces", () => {
@@ -5918,6 +7315,116 @@ test("generic report families can use the career likelihood contract", () => {
   assert.equal(decision.candidate.formatted.shapingTrace?.supportObjectType, "CounterfactualCareerSupport");
   assert.equal(decision.candidate.formatted.shapingTrace?.renderContractSelected, "career_likelihood_judgment");
   assert.equal(decision.candidate.formatted.shapingTrace?.bypassReason, null);
+});
+
+test("identity profile renderer preserves scalar identity payloads", () => {
+  const support = buildProfileInferenceSupport({
+    reportKind: "profile_report",
+    queryText: "What is Caroline's identity?",
+    fallbackSummary: null,
+    answerPayload: {
+      answer_value: "Transgender woman"
+    },
+    results: [
+      recallResult("Caroline: I made it to show my own journey as a transgender woman.", {
+        subject_name: "Caroline",
+        speaker_name: "Caroline",
+        source_sentence_text: "Caroline: I made it to show my own journey as a transgender woman."
+      })
+    ]
+  });
+  const rendered = renderProfileInferenceSupport("What is Caroline's identity?", support);
+
+  assert.equal(support.answerValue, "Transgender woman");
+  assert.equal(rendered.claimText, "Transgender woman");
+  assert.equal(rendered.renderContractSelected, "report_scalar_value");
+  assert.equal(rendered.supportObjectType, "ProfileInferenceSupport");
+});
+
+test("identity profile support prefers a more specific inferred identity over a shorter payload", () => {
+  const support = buildProfileInferenceSupport({
+    reportKind: "profile_report",
+    queryText: "What is Caroline's identity?",
+    fallbackSummary: "Transgender",
+    answerPayload: {
+      answer_value: "Transgender"
+    },
+    results: [
+      recallResult("Caroline: I made it to show my own journey as a transgender woman.", {
+        subject_name: "Caroline",
+        speaker_name: "Caroline",
+        source_sentence_text: "Caroline: I made it to show my own journey as a transgender woman."
+      })
+    ]
+  });
+  const rendered = renderProfileInferenceSupport("What is Caroline's identity?", support);
+
+  assert.equal(support.answerValue, "Transgender woman");
+  assert.equal(rendered.claimText, "Transgender woman");
+});
+
+test("aspiration support prefers query-bound studio summaries over vague scalar payloads", () => {
+  const support = buildProfileInferenceSupport({
+    reportKind: "aspiration_report",
+    queryText: "What Jon thinks the ideal dance studio should look like?",
+    fallbackSummary: "all dances",
+    answerPayload: {
+      answer_value: "all dances"
+    },
+    results: [
+      recallResult("Jon: My ideal dance studio would be by the water.", {
+        subject_name: "Jon",
+        source_sentence_text: "Jon: My ideal dance studio would be by the water."
+      }),
+      recallResult("Jon: I want natural light pouring in everywhere.", {
+        subject_name: "Jon",
+        source_sentence_text: "Jon: I want natural light pouring in everywhere."
+      }),
+      recallResult("Jon: Marley flooring is non-negotiable.", {
+        subject_name: "Jon",
+        source_sentence_text: "Jon: Marley flooring is non-negotiable."
+      })
+    ]
+  });
+  const rendered = renderProfileInferenceSupport("What Jon thinks the ideal dance studio should look like?", support);
+
+  assert.equal(support.answerValue, "by the water, natural light, and Marley flooring");
+  assert.equal(rendered.claimText, "by the water, natural light, and Marley flooring");
+});
+
+test("aspiration support prefers the stronger causal startup summary over a vague scalar payload", () => {
+  const support = buildProfileInferenceSupport({
+    reportKind: "aspiration_report",
+    queryText: "Why did Jon decide to start his dance studio?",
+    fallbackSummary: "a setback, they decided to turn a personal passion into a business",
+    answerPayload: {
+      answer_value: "a setback, they decided to turn a personal passion into a business"
+    },
+    results: [
+      recallResult("Jon lost his job as a banker.", {
+        subject_name: "Jon",
+        source_sentence_text: "Jon lost his job as a banker."
+      }),
+      recallResult("That gave him the push to start his own dance studio.", {
+        subject_name: "Jon",
+        source_sentence_text: "That gave him the push to start his own dance studio."
+      }),
+      recallResult("He wanted to turn his passion for dance into something he could share with others.", {
+        subject_name: "Jon",
+        source_sentence_text: "He wanted to turn his passion for dance into something he could share with others."
+      })
+    ]
+  });
+  const rendered = renderProfileInferenceSupport("Why did Jon decide to start his dance studio?", support);
+
+  assert.equal(
+    support.answerValue,
+    "He lost his job and decided to turn his passion for dance into a business he could share with others."
+  );
+  assert.equal(
+    rendered.claimText,
+    "He lost his job and decided to turn his passion for dance into a business he could share with others."
+  );
 });
 
 test("generic profile reports enter support normalization instead of falling back to stored report summary", () => {

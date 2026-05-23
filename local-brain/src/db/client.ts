@@ -10,6 +10,14 @@ let localMaintenanceDepth = 0;
 
 type QueryableClient = Pick<PoolClient, "query">;
 
+function normalizeSessionSettingValue(value: string | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 export function getPool(): Pool {
   if (!sharedPool) {
     const config = readConfig();
@@ -24,10 +32,22 @@ export function getPool(): Pool {
   return sharedPool;
 }
 
+async function applySessionSettings(client: QueryableClient): Promise<void> {
+  const timescaleTupleLimit = normalizeSessionSettingValue(
+    process.env.BRAIN_TIMESCALE_MAX_TUPLES_DECOMPRESSED_PER_DML_TRANSACTION
+  );
+  if (timescaleTupleLimit !== null && /^(?:0|[1-9]\d*)$/.test(timescaleTupleLimit)) {
+    await client.query(
+      `SET timescaledb.max_tuples_decompressed_per_dml_transaction = ${timescaleTupleLimit}`
+    );
+  }
+}
+
 export async function withClient<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await getPool().connect();
 
   try {
+    await applySessionSettings(client);
     return await fn(client);
   } finally {
     client.release();

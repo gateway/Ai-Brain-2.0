@@ -113,12 +113,40 @@ export interface NamespaceSelfProfile {
   readonly metadata: Record<string, unknown>;
 }
 
+export type NamespaceSelfBindingSource =
+  | "narrative_identity_claim"
+  | "typed_scalar_truth"
+  | "event_truth"
+  | "structured_truth_binding"
+  | "ops_profile";
+
+export interface NamespaceSelfBindingMetadataInput {
+  readonly note?: string;
+  readonly source?: NamespaceSelfBindingSource;
+  readonly confidence?: number;
+  readonly evidenceCount?: number;
+  readonly provenanceSummary?: string;
+}
+
 export interface ResolvedEntityReference {
   readonly entityId: string;
   readonly canonicalName: string;
   readonly entityType: string;
   readonly matchedVia: "canonical" | "alias" | "canonicalized";
   readonly matchedText: string;
+}
+
+function aliasTypePriority(aliasType: string | null): number {
+  switch ((aliasType ?? "").toLowerCase()) {
+    case "manual":
+      return 0;
+    case "derived":
+      return 1;
+    case "observed":
+      return 2;
+    default:
+      return 3;
+  }
 }
 
 async function resolveLiveEntityReferenceById(
@@ -194,9 +222,11 @@ export async function resolveCanonicalEntityReference(
     readonly entity_id: string;
     readonly canonical_name: string;
     readonly entity_type: string;
+    readonly normalized_name: string;
     readonly matched_alias: string | null;
-    readonly match_rank: string;
+    readonly match_rank: number;
     readonly alias_verified: boolean | null;
+    readonly alias_type: string | null;
   }>(
     `
       WITH candidate_names AS (
@@ -206,15 +236,18 @@ export async function resolveCanonicalEntityReference(
         resolved.id::text AS entity_id,
         resolved.canonical_name,
         resolved.entity_type,
+        resolved.normalized_name,
         matched.matched_alias,
-        matched.match_rank::text,
-        matched.alias_verified
+        matched.match_rank,
+        matched.alias_verified,
+        matched.alias_type
       FROM (
         SELECT
           e.id AS entity_id,
           NULL::text AS matched_alias,
           0 AS match_rank,
-          NULL::boolean AS alias_verified
+          NULL::boolean AS alias_verified,
+          NULL::text AS alias_type
         FROM entities e
         JOIN candidate_names c ON c.normalized_value = e.normalized_name
         WHERE e.namespace_id = $1
@@ -227,6 +260,8 @@ export async function resolveCanonicalEntityReference(
           ea.alias AS matched_alias,
           CASE WHEN ea.normalized_alias = $4 THEN 1 ELSE 2 END AS match_rank,
           ea.is_user_verified AS alias_verified
+          ,
+          ea.alias_type AS alias_type
         FROM entity_aliases ea
         JOIN entities e ON e.id = ea.entity_id
         JOIN candidate_names c ON c.normalized_value = ea.normalized_alias
@@ -237,16 +272,40 @@ export async function resolveCanonicalEntityReference(
       ORDER BY
         matched.match_rank ASC,
         CASE WHEN matched.alias_verified IS TRUE THEN 0 ELSE 1 END ASC,
+        CASE
+          WHEN matched.alias_type = 'manual' THEN 0
+          WHEN matched.alias_type = 'derived' THEN 1
+          WHEN matched.alias_type = 'observed' THEN 2
+          ELSE 3
+        END ASC,
         CASE WHEN resolved.normalized_name = $4 THEN 0 ELSE 1 END ASC,
         resolved.last_seen_at DESC,
         resolved.created_at ASC
-      LIMIT 1
+      LIMIT 8
     `,
     [namespaceId, candidates, entityTypes, normalizedRawName]
   );
 
-  const row = rows[0];
+  const rankedRows = rows.filter((row, index, all) => all.findIndex((candidate) => candidate.entity_id === row.entity_id) === index);
+  const row = rankedRows[0];
   if (!row) {
+    return null;
+  }
+
+  const topAliasPriority = aliasTypePriority(row.alias_type);
+  const topCanonicalExact = row.normalized_name === normalizedRawName ? 0 : 1;
+  const ambiguousTopMatch = rankedRows.slice(1).some((candidate) => {
+    if (candidate.entity_id === row.entity_id) {
+      return false;
+    }
+    return (
+      candidate.match_rank === row.match_rank &&
+      (candidate.alias_verified === true) === (row.alias_verified === true) &&
+      aliasTypePriority(candidate.alias_type) === topAliasPriority &&
+      (candidate.normalized_name === normalizedRawName ? 0 : 1) === topCanonicalExact
+    );
+  });
+  if (ambiguousTopMatch) {
     return null;
   }
 
@@ -256,7 +315,7 @@ export async function resolveCanonicalEntityReference(
   }
 
   const matchedVia: ResolvedEntityReference["matchedVia"] =
-    row.matched_alias === null ? (row.match_rank === "0" ? "canonical" : "canonicalized") : "alias";
+    row.matched_alias === null ? (row.match_rank === 0 ? "canonical" : "canonicalized") : "alias";
 
   return {
     entityId: live.entityId,
@@ -391,6 +450,106 @@ export async function getNamespaceSelfProfile(namespaceId: string): Promise<Name
   return withTransaction(async (client) => loadNamespaceSelfProfileForClient(client, namespaceId));
 }
 
+function buildNamespaceSelfBindingMetadata(input: NamespaceSelfBindingMetadataInput): Record<string, unknown> {
+  return {
+    source: input.source ?? "structured_truth_binding",
+    note: input.note ?? null,
+    confidence: typeof input.confidence === "number" ? input.confidence : null,
+    evidence_count: Number.isFinite(input.evidenceCount) ? Math.max(0, Math.trunc(input.evidenceCount ?? 0)) : null,
+    provenance_summary: input.provenanceSummary ?? null
+  };
+}
+
+export async function ensureNamespaceSelfBindingForEntityId(
+  namespaceId: string,
+  entityId: string,
+  metadata: NamespaceSelfBindingMetadataInput = {}
+): Promise<NamespaceSelfProfile | null> {
+  return withTransaction(async (client) => {
+    const live = await resolveLiveEntityReferenceById(entityId);
+    if (!live) {
+      return null;
+    }
+
+    const identityProfileRows = await client.query<{ identity_profile_id: string | null }>(
+      `
+        SELECT identity_profile_id::text
+        FROM entities
+        WHERE id = $1::uuid
+        LIMIT 1
+      `,
+      [live.entityId]
+    );
+
+    let identityProfileId = identityProfileRows.rows[0]?.identity_profile_id ?? null;
+    if (!identityProfileId) {
+      const profileResult = await client.query<{ id: string }>(
+        `
+          INSERT INTO identity_profiles (
+            profile_type,
+            canonical_name,
+            normalized_name,
+            metadata
+          )
+          VALUES ('self', $1, $2, $3::jsonb)
+          ON CONFLICT (profile_type, normalized_name)
+          DO UPDATE SET
+            canonical_name = EXCLUDED.canonical_name,
+            metadata = identity_profiles.metadata || EXCLUDED.metadata,
+            updated_at = now()
+          RETURNING id
+        `,
+        [
+          live.canonicalName,
+          normalizeName(live.canonicalName),
+          JSON.stringify(buildNamespaceSelfBindingMetadata(metadata))
+        ]
+      );
+      identityProfileId = profileResult.rows[0]?.id ?? null;
+      if (identityProfileId) {
+        await client.query(
+          `
+            UPDATE entities
+            SET identity_profile_id = $2::uuid
+            WHERE id = $1::uuid
+          `,
+          [live.entityId, identityProfileId]
+        );
+      }
+    }
+
+    await client.query(
+      `
+        INSERT INTO namespace_self_bindings (
+          namespace_id,
+          identity_profile_id,
+          entity_id,
+          display_name,
+          metadata
+        )
+        VALUES ($1, $2::uuid, $3::uuid, $4, $5::jsonb)
+        ON CONFLICT (namespace_id)
+        DO UPDATE SET
+          identity_profile_id = EXCLUDED.identity_profile_id,
+          entity_id = EXCLUDED.entity_id,
+          display_name = EXCLUDED.display_name,
+          metadata = namespace_self_bindings.metadata || EXCLUDED.metadata,
+          updated_at = now()
+      `,
+      [
+        namespaceId,
+        identityProfileId,
+        live.entityId,
+        live.canonicalName,
+        JSON.stringify(buildNamespaceSelfBindingMetadata(metadata))
+      ]
+    );
+
+    await ensureSelfAliases(client, live.entityId, live.canonicalName);
+    return loadNamespaceSelfProfileForClient(client, namespaceId);
+  });
+}
+
 export async function upsertNamespaceSelfProfileForClient(
   client: PoolClient,
   input: {
@@ -398,6 +557,10 @@ export async function upsertNamespaceSelfProfileForClient(
     readonly canonicalName: string;
     readonly aliases?: readonly string[];
     readonly note?: string;
+    readonly source?: NamespaceSelfBindingSource;
+    readonly confidence?: number;
+    readonly evidenceCount?: number;
+    readonly provenanceSummary?: string;
   }
 ): Promise<NamespaceSelfProfile> {
   const canonicalName = normalizeWhitespace(input.canonicalName);
@@ -428,10 +591,15 @@ export async function upsertNamespaceSelfProfileForClient(
       [
         canonicalName,
         normalizeName(canonicalName),
-        JSON.stringify({
-          source: "ops_profile",
-          note: input.note ?? null
-        })
+        JSON.stringify(
+          buildNamespaceSelfBindingMetadata({
+            source: input.source ?? "ops_profile",
+            note: input.note,
+            confidence: input.confidence,
+            evidenceCount: input.evidenceCount,
+            provenanceSummary: input.provenanceSummary
+          })
+        )
       ]
     );
     identityProfileId = profileResult.rows[0]?.id ?? "";
@@ -477,8 +645,13 @@ export async function upsertNamespaceSelfProfileForClient(
       normalizeName(canonicalName),
       identityProfileId || null,
       JSON.stringify({
-        self_profile_source: "ops_profile",
-        self_profile_note: input.note ?? null
+        self_profile_source: input.source ?? "ops_profile",
+        self_profile_note: input.note ?? null,
+        self_profile_confidence: typeof input.confidence === "number" ? input.confidence : null,
+        self_profile_evidence_count: Number.isFinite(input.evidenceCount)
+          ? Math.max(0, Math.trunc(input.evidenceCount ?? 0))
+          : null,
+        self_profile_provenance_summary: input.provenanceSummary ?? null
       })
     ]
   );
@@ -506,9 +679,15 @@ export async function upsertNamespaceSelfProfileForClient(
       identityProfileId || null,
       entityId,
       canonicalName,
-      JSON.stringify({
-        note: input.note ?? null
-      })
+      JSON.stringify(
+        buildNamespaceSelfBindingMetadata({
+          source: input.source ?? "ops_profile",
+          note: input.note,
+          confidence: input.confidence,
+          evidenceCount: input.evidenceCount,
+          provenanceSummary: input.provenanceSummary
+        })
+      )
     ]
   );
 
@@ -528,6 +707,10 @@ export async function upsertNamespaceSelfProfile(input: {
   readonly canonicalName: string;
   readonly aliases?: readonly string[];
   readonly note?: string;
+  readonly source?: NamespaceSelfBindingSource;
+  readonly confidence?: number;
+  readonly evidenceCount?: number;
+  readonly provenanceSummary?: string;
 }): Promise<NamespaceSelfProfile> {
   return withTransaction(async (client) => upsertNamespaceSelfProfileForClient(client, input));
 }

@@ -195,10 +195,40 @@ function normalizePreferenceTarget(value: string): string {
   return normalizeWhitespace(
     value
       .toLowerCase()
+      .replace(/^(?:is\s+like|like)\b\s*[,;:\-\s]*/iu, "")
+      .replace(/^(?:so\s+)?food\s+i\s+usually\s+like\s+is\s+/iu, "")
       .replace(/\b(?:that|the|a|an)\b/gu, " ")
       .replace(/\b(?:instead|now|today|currently|really|very|said)\b/gu, " ")
+      .replace(/\bis\s+always\s+(?:great|good|nice|amazing|awesome)\b[\s\S]*$/iu, "")
       .replace(/[^\p{L}\p{N}\s-]+/gu, " ")
   );
+}
+
+function normalizePreferenceDisplayTarget(value: string): string {
+  return normalizeListItem(
+    value
+      .replace(/^(?:is\s+like|like)\b\s*[,;:\-\s]*/iu, "")
+      .replace(/^(?:so\s+)?food\s+i\s+usually\s+like\s+is\s+/iu, "")
+      .replace(/\bis\s+always\s+(?:great|good|nice|amazing|awesome)\b[\s\S]*$/iu, "")
+  );
+}
+
+function isLowQualityPreferenceTarget(value: string): boolean {
+  const rawLowered = normalizeWhitespace(value).toLowerCase();
+  if (/^(?:is like|like)\b/u.test(rawLowered) || /\b(?:food i usually like|usually like is|is always|always great|always good)\b/u.test(rawLowered)) {
+    return true;
+  }
+  const normalized = normalizePreferenceTarget(value);
+  if (!normalized || normalized.length < 3) {
+    return true;
+  }
+  if (/^(?:is like|like|where|when|how|why)\b/u.test(normalized)) {
+    return true;
+  }
+  if (/\b(?:food i usually like|usually like is|is always|always great|always good)\b/u.test(normalized)) {
+    return true;
+  }
+  return normalized.split(/\s+/u).filter(Boolean).length > 6;
 }
 
 function buildCanonicalPreferenceKey(target: string): string {
@@ -211,6 +241,10 @@ function buildScopedPreferenceKey(target: string, subjectName?: string): string 
   }
 
   return `preference:${normalizeProjectKey(subjectName)}:${target}`;
+}
+
+function preferenceTruthClusterId(canonicalKey: string): string {
+  return `truth_cluster:${canonicalKey.replace(/[^a-z0-9:_-]+/giu, "_").toLowerCase()}`;
 }
 
 function buildCanonicalWatchlistKey(target: string): string {
@@ -674,10 +708,13 @@ function extractPreferenceStatements(content: string): PreferenceStatement[] {
       readonly fragment: string;
       readonly category?: string;
     }): void => {
+      if (isLowQualityPreferenceTarget(options.fragment)) {
+        return;
+      }
       const activityEntity = resolveActivityEntity(options.fragment);
-      const target = activityEntity?.canonicalName ?? normalizeListItem(options.fragment);
+      const target = activityEntity?.canonicalName ?? normalizePreferenceDisplayTarget(options.fragment);
       const canonicalTarget = normalizePreferenceTarget(target);
-      if (!canonicalTarget) {
+      if (!canonicalTarget || isLowQualityPreferenceTarget(target)) {
         return;
       }
       statements.push({
@@ -999,6 +1036,23 @@ function extractConstraintStatements(content: string): ConstraintStatement[] {
   for (const match of content.matchAll(/\b(peanuts?)\s+(?:are|is)\s+an?\s+absolute\s+dietary\s+blocker\s+for\s+(?:me|Steve(?:\s+Tietze)?)(?:\s+now)?\b/giu)) {
     const subject = toDisplayPhrase(match[1] ?? "Peanuts");
     const displayRule = `${subject} are an absolute dietary blocker for Steve`;
+    const normalizedKey = normalizePreferenceTarget(displayRule).replace(/\s+/gu, "_");
+    if (!normalizedKey) {
+      continue;
+    }
+    statements.push({
+      rule: displayRule,
+      canonicalKey: buildCanonicalConstraintKey(normalizedKey),
+      modality: "never"
+    });
+  }
+
+  for (const match of content.matchAll(/\b(?:i|steve(?:\s+tietze)?)\s+(?:can't|cannot|can\s+not|should\s+not|need\s+to\s+avoid|must\s+avoid)\s+(?:have|drink|eat|take|lift|do|use)?\s*([^.!?\n]+?)(?:\s+anymore|\s+right\s+now|\s+now)?(?:[.!?]\s+|\n+|$)/giu)) {
+    const target = normalizeWhitespace(match[1] ?? "").replace(/[.]+$/u, "");
+    if (!target || isLowQualityPreferenceTarget(target)) {
+      continue;
+    }
+    const displayRule = toDisplayPhrase(`avoid ${target}`);
     const normalizedKey = normalizePreferenceTarget(displayRule).replace(/\s+/gu, "_");
     if (!normalizedKey) {
       continue;
@@ -1678,14 +1732,24 @@ async function upsertProceduralPreference(
   );
 
   const activeRow = activeState.rows[0];
+  const truthClusterId = preferenceTruthClusterId(options.canonicalKey);
   if (activeRow) {
     await client.query(
       `
         UPDATE procedural_memory
-        SET valid_until = $2
+        SET valid_until = $2,
+            metadata = procedural_memory.metadata || $3::jsonb
         WHERE id = $1
       `,
-      [activeRow.id, options.occurredAt]
+      [
+        activeRow.id,
+        options.occurredAt,
+        JSON.stringify({
+          supersession_reason: "newer_preference_truth_for_same_cluster",
+          superseded_at: options.occurredAt,
+          truth_cluster_id: truthClusterId
+        })
+      ]
     );
   }
 
@@ -1713,6 +1777,9 @@ async function upsertProceduralPreference(
         person: options.person ?? null,
         target: options.target,
         polarity: options.polarity,
+        truth_cluster_id: truthClusterId,
+        truth_kind: "preference",
+        decay_class: "mutable_current_truth",
         category: options.category ?? null,
         entity_id: options.entityId ?? null,
         entity_type: options.entityType ?? null,
@@ -1726,7 +1793,11 @@ async function upsertProceduralPreference(
         source: "candidate_consolidation"
         ,
         is_anchor: true,
-        memory_temperature: "hot"
+        memory_temperature: "hot",
+        truth_cluster_id: truthClusterId,
+        truth_kind: "preference",
+        supersession_reason: activeRow ? "newer_preference_truth_for_same_cluster" : null,
+        decay_class: "mutable_current_truth"
       })
     ]
   );

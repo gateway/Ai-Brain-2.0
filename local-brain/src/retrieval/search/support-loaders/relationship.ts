@@ -14,22 +14,37 @@ export async function loadRelationshipProfileSupportRows(params: {
     return [];
   }
 
+  const relationshipStatusLike =
+    /\brelationship status\b/i.test(queryText) ||
+    /\b(?:single|dating|married|engaged|partner)\b/i.test(queryText);
   const terms = [
     ...new Set([
       ...nameHints,
+      "single",
+      "dating",
+      "married",
+      "engaged",
+      "partner",
+      "girlfriend",
+      "boyfriend",
+      "wife",
+      "husband",
+      "breakup",
+      "single parent",
+      ...(relationshipStatusLike ? ["not dating", "not seeing anyone", "on my own"] : []),
       "friend",
       "relationship",
       "owner",
       "coworking",
       "Chiang Mai",
       "Burning Man",
-      "old friend",
-      "partner"
+      "old friend"
     ])
   ];
   const episodicMatch = helpers.buildFocusedLikeMatchClause(2, terms, "em.content");
   const derivationMatch = helpers.buildFocusedLikeMatchClause(2, terms, "ad.content_text");
   const trustedSourceClause = "(a.uri ILIKE '%/omi-archive/normalized/%' OR a.uri ILIKE '%/data/inbox/omi/normalized/%')";
+  const sourceScopeClause = namespaceId.startsWith("benchmark_") ? "TRUE" : trustedSourceClause;
 
   const [episodicRows, derivationRows] = await Promise.all([
     helpers.queryRows<SearchRow>(
@@ -42,7 +57,11 @@ export async function loadRelationshipProfileSupportRows(params: {
             ${episodicMatch.scoreExpression}
           ) +
             CASE
-              WHEN em.content ~* '(friend of mine|close friend|good friend|old friend|friend from|owner of|former romantic|dated|off and on relationship|partner in crime|coworking spot|weave artisan society)' THEN 4.4
+              WHEN em.content ~* '(single parent|breakup|broke up|not dating|not seeing anyone|on my own|girlfriend|boyfriend|wife|husband|engaged|married|dating|former romantic|dated|off and on relationship)' THEN 5.0
+              ELSE 0
+            END +
+            CASE
+              WHEN em.content ~* '(friend of mine|close friend|good friend|old friend|friend from|owner of|partner in crime|coworking spot|weave artisan society)' THEN 4.0
               ELSE 0
             END +
             CASE
@@ -64,7 +83,7 @@ export async function loadRelationshipProfileSupportRows(params: {
         FROM episodic_memory em
         JOIN artifacts a ON a.id = em.artifact_id
         WHERE em.namespace_id = $1
-          AND ${trustedSourceClause}
+          AND ${sourceScopeClause}
           AND ${episodicMatch.clause}
         ORDER BY raw_score DESC, em.occurred_at DESC, em.id DESC
         LIMIT $${episodicMatch.values.length + 2}
@@ -81,7 +100,11 @@ export async function loadRelationshipProfileSupportRows(params: {
             ${derivationMatch.scoreExpression}
           ) +
             CASE
-              WHEN ad.content_text ~* '(friend of mine|close friend|good friend|old friend|friend from|owner of|former romantic|dated|off and on relationship|partner in crime|coworking spot|weave artisan society)' THEN 4.1
+              WHEN ad.content_text ~* '(single parent|breakup|broke up|not dating|not seeing anyone|on my own|girlfriend|boyfriend|wife|husband|engaged|married|dating|former romantic|dated|off and on relationship)' THEN 4.7
+              ELSE 0
+            END +
+            CASE
+              WHEN ad.content_text ~* '(friend of mine|close friend|good friend|old friend|friend from|owner of|partner in crime|coworking spot|weave artisan society)' THEN 3.8
               ELSE 0
             END +
             CASE
@@ -107,7 +130,7 @@ export async function loadRelationshipProfileSupportRows(params: {
         JOIN artifacts a ON a.id = ao.artifact_id
         LEFT JOIN episodic_memory source_em ON source_em.id = ad.source_chunk_id
         WHERE a.namespace_id = $1
-          AND ${trustedSourceClause}
+          AND ${sourceScopeClause}
           AND coalesce(ad.content_text, '') <> ''
           AND ${derivationMatch.clause}
         ORDER BY raw_score DESC, COALESCE(source_em.occurred_at, ao.observed_at) DESC, ad.id DESC

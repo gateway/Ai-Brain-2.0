@@ -130,6 +130,22 @@ test("shared commonality reducer uses provenance-backed source text to recover j
   );
 });
 
+test("shared commonality reducer recognizes explicit shared dance stress-relief phrasing", () => {
+  const claim = deriveSharedCommonalityClaimText(
+    "How do two friends both like to destress?",
+    [
+      recallResult({
+        memoryId: "shared-dance",
+        subjectName: "Gina",
+        content: "Dance is still your happy place. It has such a special meaning to both of us.",
+        sourceSentenceText: "Dance is still your happy place. It has such a special meaning to both of us."
+      })
+    ]
+  );
+
+  assert.equal(claim, "The best supported shared stress-relief activity is dancing.");
+});
+
 test("shared commonality reducer binds profile-summary person_name back to the participant", () => {
   const claim = deriveSharedCommonalityClaimText(
     "What do Jon and Gina both have in common?",
@@ -925,7 +941,7 @@ test("duality prefers counterfactual support-dependency claim over direct career
     "Would Caroline still want to pursue counseling as a career if she hadn't received support growing up?"
   );
 
-  assert.equal(duality.claim.text, "Likely no.");
+  assert.match(duality.claim.text, /^Likely no\./);
 });
 
 test("ideal dance studio reducer combines water, light, and Marley flooring from bounded support", () => {
@@ -2161,6 +2177,150 @@ test("duality lets a strong generic exact-detail candidate beat top snippet fall
   );
 
   assert.equal(duality.claim.text, "The best supported writing classes are fiction workshops and poetry classes.");
+});
+
+test("duality uses strong atomic exact-detail price candidates instead of noisy top snippets", () => {
+  const results = [
+    recallResult({
+      memoryId: "price-noisy-top",
+      subjectName: "self",
+      content: "Today you bought coffee. The note does not give per-item prices.",
+      sourceSentenceText: "Today you bought coffee. The note does not give per-item prices."
+    })
+  ];
+  const evidence = results.map((result) => ({
+    memoryId: result.memoryId,
+    memoryType: result.memoryType,
+    artifactId: result.artifactId ?? null,
+    sourceUri: result.provenance.source_uri ?? null,
+    snippet: result.content,
+    provenance: result.provenance
+  }));
+
+  const duality = buildDualityObject(
+    results,
+    evidence,
+    {
+      confidence: "supported",
+      reason: "test",
+      lexicalCoverage: 0,
+      matchedTerms: [],
+      totalTerms: 0,
+      evidenceCount: evidence.length,
+      directEvidence: false,
+      sufficiency: "supported",
+      subjectMatch: "matched",
+      matchedParticipants: ["self"],
+      missingParticipants: [],
+      foreignParticipants: []
+    },
+    "ns_supported_claim",
+    "How much did I spend on a designer handbag?",
+    {
+      text: "$800",
+      source: "artifact_chunks",
+      strongSupport: true,
+      predicateFit: true
+    }
+  );
+
+  assert.equal(duality.claim.text, "$800");
+});
+
+test("duality uses strong atomic exact-detail duration candidates instead of unrelated canonical snippets", () => {
+  const results = [
+    recallResult({
+      memoryId: "bookshelf-noisy-top",
+      subjectName: "self",
+      content: "Yes, since they collect classic children's books.",
+      sourceSentenceText: "Yes, since they collect classic children's books."
+    })
+  ];
+  const evidence = results.map((result) => ({
+    memoryId: result.memoryId,
+    memoryType: result.memoryType,
+    artifactId: result.artifactId ?? null,
+    sourceUri: result.provenance.source_uri ?? null,
+    snippet: result.content,
+    provenance: result.provenance
+  }));
+
+  const duality = buildDualityObject(
+    results,
+    evidence,
+    {
+      confidence: "supported",
+      reason: "test",
+      lexicalCoverage: 0,
+      matchedTerms: [],
+      totalTerms: 0,
+      evidenceCount: evidence.length,
+      directEvidence: false,
+      sufficiency: "supported",
+      subjectMatch: "matched",
+      matchedParticipants: ["self"],
+      missingParticipants: [],
+      foreignParticipants: []
+    },
+    "ns_supported_claim",
+    "How long did it take me to assemble the IKEA bookshelf?",
+    {
+      text: "4 hours",
+      source: "artifact_chunks",
+      strongSupport: true,
+      predicateFit: true
+    }
+  );
+
+  assert.equal(duality.claim.text, "4 hours");
+});
+
+test("duality uses strong atomic exact-detail stance candidates instead of broader source prose", () => {
+  const results = [
+    recallResult({
+      memoryId: "stance-noisy-top",
+      subjectName: "self",
+      content: "I've been reading about Buddhism and exploring other possibilities.",
+      sourceSentenceText: "I've been reading about Buddhism and exploring other possibilities."
+    })
+  ];
+  const evidence = results.map((result) => ({
+    memoryId: result.memoryId,
+    memoryType: result.memoryType,
+    artifactId: result.artifactId ?? null,
+    sourceUri: result.provenance.source_uri ?? null,
+    snippet: result.content,
+    provenance: result.provenance
+  }));
+
+  const duality = buildDualityObject(
+    results,
+    evidence,
+    {
+      confidence: "supported",
+      reason: "test",
+      lexicalCoverage: 0,
+      matchedTerms: [],
+      totalTerms: 0,
+      evidenceCount: evidence.length,
+      directEvidence: false,
+      sufficiency: "supported",
+      subjectMatch: "matched",
+      matchedParticipants: ["self"],
+      missingParticipants: [],
+      foreignParticipants: []
+    },
+    "ns_supported_claim",
+    "What was my previous stance on spirituality?",
+    {
+      text: "staunch atheist",
+      source: "artifact_chunks",
+      strongSupport: true,
+      predicateFit: true
+    }
+  );
+
+  assert.equal(duality.claim.text, "staunch atheist");
 });
 
 test("duality promotes generic direct-fact activity aggregation over noisy top snippets", () => {

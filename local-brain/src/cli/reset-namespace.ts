@@ -74,7 +74,17 @@ export async function resetNamespaceData(
       }
 
       counts.memory_graph_edges = await deleteCount(client, "DELETE FROM memory_graph_edges WHERE namespace_id = $1", [namespaceId]);
+      counts.vector_sync_jobs = await deleteCount(client, "DELETE FROM vector_sync_jobs WHERE namespace_id = $1", [namespaceId]);
       counts.entity_rebuild_runs = await deleteCount(client, "DELETE FROM entity_rebuild_runs WHERE namespace_id = $1", [namespaceId]);
+      counts.temporal_event_support = await deleteCount(client, "DELETE FROM temporal_event_support WHERE namespace_id = $1", [namespaceId]);
+      counts.compiled_memory_coverage = await deleteCount(client, "DELETE FROM compiled_memory_coverage WHERE namespace_id = $1", [namespaceId]);
+      counts.compiled_relationship_observations = await deleteCount(client, "DELETE FROM compiled_relationship_observations WHERE namespace_id = $1", [namespaceId]);
+      counts.compiled_event_observations = await deleteCount(client, "DELETE FROM compiled_event_observations WHERE namespace_id = $1", [namespaceId]);
+      counts.compiled_fact_observations = await deleteCount(client, "DELETE FROM compiled_fact_observations WHERE namespace_id = $1", [namespaceId]);
+      counts.exact_detail_fact_keys = await deleteCount(client, "DELETE FROM exact_detail_fact_keys WHERE namespace_id = $1", [namespaceId]);
+      counts.temporal_event_facts = await deleteCount(client, "DELETE FROM temporal_event_facts WHERE namespace_id = $1", [namespaceId]);
+      counts.contract_projection_entries = await deleteCount(client, "DELETE FROM contract_projection_entries WHERE namespace_id = $1", [namespaceId]);
+      counts.contract_projection_heads = await deleteCount(client, "DELETE FROM contract_projection_heads WHERE namespace_id = $1", [namespaceId]);
       counts.clarification_resolutions = 0;
       counts.answerable_units = await deleteCount(client, "DELETE FROM answerable_units WHERE namespace_id = $1", [namespaceId]);
       counts.task_items = await deleteCount(client, "DELETE FROM task_items WHERE namespace_id = $1", [namespaceId]);

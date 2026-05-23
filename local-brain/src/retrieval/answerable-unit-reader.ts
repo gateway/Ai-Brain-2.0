@@ -168,7 +168,7 @@ function isInterrogativeClaimText(value: string): boolean {
 
 function inferAnswerableUnitCueFamily(
   queryText: string
-): "generic" | "hobbies" | "martial_arts" | "social_exclusion" | "allergy_safe_pets" | "goals" | "owned_pets" | "purchased_items" | "bands" | "plural_names" | "broken_items" | "meal_companion" {
+): "generic" | "hobbies" | "martial_arts" | "social_exclusion" | "support_network" | "allergy_safe_pets" | "goals" | "owned_pets" | "purchased_items" | "bands" | "plural_names" | "broken_items" | "meal_companion" {
   const lowered = queryText.toLowerCase();
   if (/\bhobbies?\b/.test(lowered)) {
     return "hobbies";
@@ -181,6 +181,9 @@ function inferAnswerableUnitCueFamily(
   }
   if (/\bbesides\b/.test(lowered) && /\bfriends?\b/.test(lowered)) {
     return "social_exclusion";
+  }
+  if (/^\s*who\s+supports?\b/.test(lowered) || /\bsupport network\b/.test(lowered)) {
+    return "support_network";
   }
   if (/\bgoals?\b/.test(lowered) && /\b(?:career|basketball|endorsements?|brand|charity)\b/.test(lowered)) {
     return "goals";
@@ -222,6 +225,8 @@ function isMultiUnitAggregationQuery(queryText: string): boolean {
     /\bhobbies?\b/i.test(queryText) ||
     /\bwhat\s+(?:martial arts?|martial art)\b/i.test(queryText) ||
     (/\bbesides\b/i.test(queryText) && /\bfriends?\b/i.test(queryText)) ||
+    /^\s*who\s+supports?\b/i.test(queryText) ||
+    /\bsupport network\b/i.test(queryText) ||
     /\bpets?\s+wouldn'?t\s+cause\b/i.test(queryText) ||
     (/\bpets?\b/i.test(queryText) && /\ballerg/i.test(queryText)) ||
     (/\bgoals?\b/i.test(queryText) && /\b(?:career|basketball|endorsements?|brand|charity)\b/i.test(queryText)) ||
@@ -268,10 +273,12 @@ function familySpecificSupportForCandidate(
         (/\bcreative outlets?\b/i.test(candidateText) && /\b(?:cooking|baking)\b/i.test(candidateText)) ||
         (/\b(?:enjoy|enjoys|love|loves|like|likes)\b/i.test(candidateText) &&
           /\b(?:writing|reading|watching movies|exploring nature|hanging with friends|painting|sketching|hiking|running|cycling|cooking|baking)\b/i.test(candidateText))
-      : family === "allergy_safe_pets"
+    : family === "allergy_safe_pets"
         ? /\b(allerg|animals with fur|hairless cats?|pigs?|dogs?|cats?|birds?|fish|reptiles?|turtles?)\b/i.test(candidateText)
         : family === "social_exclusion"
           ? /\b(old friends?|other friends?|some friends?|teammates?|team|tournament friends?|outside of my circle|my team)\b/i.test(candidateText)
+          : family === "support_network"
+            ? /\b(friends?|family|mentors?|support(?:ive|ing|ed)?|my rocks?|there for me|push on|strength)\b/i.test(candidateText)
           : family === "goals"
             ? /\b(goals?|want|wants|hope|hopes|plan|plans|championship|endorsements?|brand|charity)\b/i.test(candidateText)
             : family === "meal_companion"
@@ -284,7 +291,7 @@ function familySpecificSupportForCandidate(
                 : family === "purchased_items"
                   ? /\b(bought|purchased)\b/i.test(candidateText)
                   : family === "bands"
-                    ? /\b(bands?|listening to|listen to)\b/i.test(candidateText)
+                    ? /\b(bands?|listening to|listen to|favorite|headlined)\b/i.test(candidateText)
                     : family === "broken_items"
                       ? /\b(broken|broke|prius)\b/i.test(candidateText)
                       : false;
@@ -322,6 +329,8 @@ function shouldAggregateOwnedCandidate(
           ? 5
         : family === "social_exclusion"
           ? 6
+        : family === "support_network"
+          ? 5.5
         : family === "goals"
           ? 5.5
         : family === "owned_pets"
@@ -344,6 +353,9 @@ function shouldAggregateOwnedCandidate(
     return false;
   }
   if (family === "social_exclusion" && !familySpecificSupport) {
+    return false;
+  }
+  if (family === "support_network" && !familySpecificSupport) {
     return false;
   }
   if (family === "goals" && !familySpecificSupport) {
@@ -583,17 +595,29 @@ function extractBandValues(text: string): readonly string[] {
     return [];
   }
   const values = new Set<string>();
-  const match =
-    normalized.match(/\b(?:listening to|listen to|enjoyed listening to|likes listening to)\s+([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*)*(?:\s*(?:,|and)\s*[A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*)*)*)/u) ??
-    normalized.match(/\bbands?\s+(?:include|are)\s+([A-Z][^.!?\n]{2,140})/u);
-  if (match?.[1]) {
-    for (const value of match[1].split(/\s*(?:,|and)\s*/u)) {
-      const normalizedValue = normalizeWhitespace(value);
+  const collectList = (value: string | null | undefined): void => {
+    if (!value) {
+      return;
+    }
+    for (const entry of value.split(/\s*(?:,|and)\s*/u)) {
+      const normalizedValue = normalizeWhitespace(entry);
       if (normalizedValue) {
         values.add(normalizedValue);
       }
     }
-  }
+  };
+  const match =
+    normalized.match(/\b(?:listening to|listen to|enjoyed listening to|likes listening to)\s+([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*)*(?:\s*(?:,|and)\s*[A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*)*)*)/u) ??
+    normalized.match(/\bbands?\s+(?:include|are)\s+([A-Z][^.!?\n]{2,140})/u);
+  collectList(match?.[1]);
+  const favoriteMatch =
+    normalized.match(/\bif i had to pick a favorite, it would definitely be ([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b/iu) ??
+    normalized.match(/\bfavorite\b[^.!?\n]{0,40}\b(?:would definitely be|was|is)\s+([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b/iu);
+  collectList(favoriteMatch?.[1]);
+  const headlinerMatch = normalized.match(
+    /\b([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\s+headlined the festival\b/u
+  );
+  collectList(headlinerMatch?.[1]);
   return [...values];
 }
 
@@ -713,6 +737,9 @@ function deriveAggregatedClaimText(
   if (family === "social_exclusion") {
     return deriveSocialExclusionSupportText(queryText, selected) ?? fallbackText;
   }
+  if (family === "support_network") {
+    return deriveSupportNetworkSupportText(selected) ?? fallbackText;
+  }
   if (family === "allergy_safe_pets") {
     return deriveAllergySafePetSupportText(selected) ?? fallbackText;
   }
@@ -773,6 +800,27 @@ function isTemporalQualifiedExactDetailReaderQuery(queryText: string): boolean {
   }
   const family = inferAnswerableUnitCueFamily(queryText);
   return family === "meal_companion";
+}
+
+function deriveSupportNetworkSupportText(selected: readonly AnswerableUnitCandidate[]): string | null {
+  const supportKinds = new Set<string>();
+  for (const candidate of selected) {
+    for (const text of candidateAggregationTexts(candidate)) {
+      if (/\bfriends?\b/i.test(text)) {
+        supportKinds.add("friends");
+      }
+      if (/\bfamily\b/i.test(text)) {
+        supportKinds.add("family");
+      }
+      if (/\bmentors?\b/i.test(text)) {
+        supportKinds.add("mentors");
+      }
+    }
+  }
+  if (supportKinds.size === 0) {
+    return null;
+  }
+  return [...supportKinds].join(", ");
 }
 
 function slotFitScore(queryText: string, candidates: readonly AnswerableUnitCandidate[]): number {

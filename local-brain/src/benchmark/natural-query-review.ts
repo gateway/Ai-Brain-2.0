@@ -2,7 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { closePool } from "../db/client.js";
+import { rebuildContractProjectionsNamespace } from "../contract-projections/service.js";
 import { executeMcpTool } from "../mcp/server.js";
+import { anyDefaultProjectionBackedQueryEnabled } from "../retrieval/query-runtime-flags.js";
 import { runAndWriteHumanSyntheticWatchBenchmark } from "./human-synthetic-watch.js";
 import { runAndWriteLifeReplayBenchmark } from "./life-replay.js";
 import { runAndWriteOmiWatchSmokeBenchmark } from "./omi-watch-smoke.js";
@@ -593,6 +595,11 @@ export async function runAndWriteNaturalQueryReviewBenchmark(): Promise<{
     omi: omi.report.namespaceId,
     public: publicDataset.report.namespaceId
   } as const;
+  if (anyDefaultProjectionBackedQueryEnabled()) {
+    for (const namespaceId of new Set(Object.values(namespaceIds))) {
+      await rebuildContractProjectionsNamespace(namespaceId);
+    }
+  }
 
   const results: ReviewScenarioResult[] = [];
   for (const scenario of scenarios(namespaceIds)) {

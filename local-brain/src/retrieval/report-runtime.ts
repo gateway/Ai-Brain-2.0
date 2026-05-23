@@ -84,6 +84,10 @@ function explicitSubjectHints(queryText: string): readonly string[] {
   ]).map((value) => value.toLowerCase());
 }
 
+function hintMatchesSignals(hints: readonly string[], signals: readonly string[]): boolean {
+  return hints.some((hint) => signals.some((signal) => signal.includes(hint)));
+}
+
 function resultMetadata(result: RecallResult): Record<string, unknown> | null {
   return typeof result.provenance.metadata === "object" && result.provenance.metadata !== null
     ? (result.provenance.metadata as Record<string, unknown>)
@@ -115,6 +119,24 @@ function resultTimestamp(result: RecallResult): number | null {
   return sourceUri && sourceUri.startsWith("/") && existsSync(sourceUri)
     ? parseTimestamp(readSourceCapturedAt(sourceUri))
     : null;
+}
+
+function collectPrimarySubjectSignals(result: RecallResult): readonly string[] {
+  const metadata = resultMetadata(result);
+  const rawValues: unknown[] = [
+    result.provenance.subject_name,
+    result.provenance.transcript_speaker_name,
+    result.provenance.speaker_name,
+    result.provenance.canonical_name,
+    (result.provenance as Record<string, unknown>).person_name,
+    metadata?.subject_name,
+    metadata?.transcript_speaker_name,
+    metadata?.speaker_name,
+    metadata?.canonical_name,
+    metadata?.primary_speaker_name,
+    metadata?.person_name
+  ];
+  return uniqueNormalized(rawValues.filter((value): value is string => typeof value === "string")).map((value) => value.toLowerCase());
 }
 
 function collectSubjectSignals(result: RecallResult): readonly string[] {
@@ -149,9 +171,17 @@ function filterResultsForExplicitSubject(queryText: string, results: readonly Re
   if (hints.length === 0) {
     return results;
   }
+  const strictPrimaryMatches = results.filter((result) => hintMatchesSignals(hints, collectPrimarySubjectSignals(result)));
+  if (strictPrimaryMatches.length > 0) {
+    return strictPrimaryMatches;
+  }
   const filtered = results.filter((result) => {
+    const primarySignals = collectPrimarySubjectSignals(result);
+    if (primarySignals.length > 0 && !hintMatchesSignals(hints, primarySignals)) {
+      return false;
+    }
     const signals = collectSubjectSignals(result);
-    return hints.some((hint) => signals.some((signal) => signal.includes(hint)));
+    return hintMatchesSignals(hints, signals);
   });
   if (filtered.length > 0) {
     return filtered;
@@ -184,6 +214,26 @@ function recallResultSourceTexts(result: RecallResult): readonly string[] {
 
 function isFirstPersonReportSegment(segment: string): boolean {
   return /^(?:[A-Z][a-z]+:\s*)?(?:i\b|i'm\b|i’ve\b|i've\b|i’d\b|i'd\b|my\b|me\b|we\b|our\b)/iu.test(normalizeWhitespace(segment));
+}
+
+function extractSegmentSpeakerName(segment: string): string | null {
+  const match = normalizeWhitespace(segment).match(/^([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}):\s*/u);
+  return match?.[1] ? match[1].toLowerCase() : null;
+}
+
+function isSubjectCompatibleSegment(segment: string, hints: readonly string[], subjectAnchoredSource: boolean): boolean {
+  const lowered = segment.toLowerCase();
+  if (hintMatchesSignals(hints, [lowered])) {
+    return true;
+  }
+  if (!subjectAnchoredSource || !isFirstPersonReportSegment(segment)) {
+    return false;
+  }
+  const segmentSpeakerName = extractSegmentSpeakerName(segment);
+  if (segmentSpeakerName) {
+    return hintMatchesSignals(hints, [segmentSpeakerName]);
+  }
+  return true;
 }
 
 function expandConversationSessionSourceUris(results: readonly RecallResult[]): readonly string[] {
@@ -268,8 +318,7 @@ function subjectBoundSourceTexts(queryText: string, results: readonly RecallResu
       .map((segment) => normalizeWhitespace(segment))
       .filter(Boolean);
     for (const segment of segments) {
-      const lowered = segment.toLowerCase();
-      if (hints.some((hint) => lowered.includes(hint)) || (subjectAnchoredSource && isFirstPersonReportSegment(segment))) {
+      if (isSubjectCompatibleSegment(segment, hints, subjectAnchoredSource)) {
         extracted.push(segment);
       }
     }
@@ -306,7 +355,10 @@ function isPetCareSupportQuery(queryText: string): boolean {
 }
 
 function isTravelSupportQuery(queryText: string): boolean {
-  return /\bwhere\b.*\b(roadtrips?|travel|trip)\b|\broadtrips?\b|\btravel\b/u.test(queryText);
+  return (
+    /\bwhere\b.*\b(roadtrips?|travel|trip)\b|\broadtrips?\b|\btravel\b/u.test(queryText) ||
+    /\bwhat\s+trip\b|\btravel\s+plans?\b|\bplanning\b/iu.test(queryText)
+  );
 }
 
 function isAspirationSupportQuery(queryText: string): boolean {
@@ -329,7 +381,11 @@ function hasPetCareCue(text: string): boolean {
 }
 
 function hasTravelCue(text: string): boolean {
-  return /\broadtrips?\b|\btravel(?:ed|ing)?\b|\btrip\b|\bvisited\b|\bwent\b|\brockies\b|\bjasper\b/iu.test(text);
+  return (
+    /\broadtrips?\b|\bvisited\b|\bwent\b|\brockies\b|\bjasper\b/iu.test(text) ||
+    /\b(?:travel(?:ed|ing)?|trip|going|planning|planned|upcoming)\b[^.!?\n]{0,120}\b(?:to|through|around|in|for)\b/iu.test(text) ||
+    /\bconference\b/iu.test(text)
+  );
 }
 
 function hasAspirationCue(text: string): boolean {
@@ -355,8 +411,7 @@ function targetedBackfillTexts(queryText: string, results: readonly RecallResult
       const lowered = segment.toLowerCase();
       const subjectCompatible =
         hints.length === 0 ||
-        hints.some((hint) => lowered.includes(hint)) ||
-        (subjectAnchoredSource && isFirstPersonReportSegment(segment));
+        isSubjectCompatibleSegment(segment, hints, subjectAnchoredSource);
       if (subjectCompatible && terms.some((term) => lowered.includes(term))) {
         extracted.push(segment);
       }

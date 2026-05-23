@@ -4,11 +4,11 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { closePool } from "../db/client.js";
-import { ingestArtifact } from "../ingest/worker.js";
+import { runMigrations } from "../db/migrations.js";
 import { executeMcpTool } from "../mcp/server.js";
 import { rebuildTypedMemoryNamespace } from "../typed-memory/service.js";
 import { cleanupPublicBenchmarkNamespaces } from "./public-benchmark-cleanup.js";
-import { parseLoCoMoSessionDateTimeToIso } from "./public-memory-date-utils.js";
+import { ingestLoCoMoSessionArtifacts } from "./locomo-ingest.js";
 import { buildBenchmarkRuntimeMetadata, type BenchmarkRuntimeMetadata } from "./runtime-metadata.js";
 
 interface TurnRecord {
@@ -16,6 +16,8 @@ interface TurnRecord {
   readonly text?: string;
   readonly blip_caption?: string;
   readonly query?: string;
+  readonly dia_id?: string;
+  readonly img_url?: readonly string[];
 }
 
 interface LocomoConversation {
@@ -147,31 +149,6 @@ function benchmarkExpectedAnswer(qa: { readonly answer?: string | number; readon
     return String(qa.answer);
   }
   return qa.category === 5 ? "None" : "";
-}
-
-function formatConversationSession(sample: LocomoConversation, sessionKey: string, turns: readonly TurnRecord[]): string {
-  const dateTime = typeof sample.conversation[`${sessionKey}_date_time`] === "string" ? sample.conversation[`${sessionKey}_date_time`] : "";
-  const canonicalCapturedAt = typeof dateTime === "string" && dateTime ? parseLoCoMoSessionDateTimeToIso(dateTime) : null;
-  const speakerA = typeof sample.conversation.speaker_a === "string" ? sample.conversation.speaker_a : "Speaker A";
-  const speakerB = typeof sample.conversation.speaker_b === "string" ? sample.conversation.speaker_b : "Speaker B";
-  const lines: string[] = [];
-  if (canonicalCapturedAt) {
-    lines.push(`Captured: ${canonicalCapturedAt}`, "");
-  } else if (dateTime) {
-    lines.push(`Captured: ${dateTime}`, "");
-  }
-  lines.push(`Conversation between ${speakerA} and ${speakerB}`);
-  for (const turn of turns) {
-    const caption = typeof turn.blip_caption === "string" && turn.blip_caption.trim().length > 0 ? ` [image: ${turn.blip_caption.trim()}]` : "";
-    lines.push(`${turn.speaker}: ${(turn.text ?? "").trim()}${caption}`);
-    if (typeof turn.query === "string" && turn.query.trim().length > 0) {
-      lines.push(`--- image_query: ${turn.query.trim()}`);
-    }
-    if (typeof turn.blip_caption === "string" && turn.blip_caption.trim().length > 0) {
-      lines.push(`--- image_caption: ${turn.blip_caption.trim()}`);
-    }
-  }
-  return lines.join("\n");
 }
 
 function normalize(value: unknown): string {
@@ -366,6 +343,7 @@ export async function runAndWriteFullStandardPressureReviewBenchmark(): Promise<
   readonly report: FullStandardPressureReviewReport;
   readonly output: { readonly jsonPath: string; readonly markdownPath: string };
 }> {
+  await runMigrations();
   const generatedAt = new Date().toISOString();
   const stamp = generatedAt.replace(/[:.]/g, "-");
   const runtime = buildBenchmarkRuntimeMetadata({
@@ -412,24 +390,20 @@ export async function runAndWriteFullStandardPressureReviewBenchmark(): Promise<
       ) as Array<[string, readonly TurnRecord[]]>;
 
       for (const [sessionKey, turns] of sessionEntries) {
-        const sessionPath = path.join(sampleRoot, `${sample.sample_id}-${sessionKey}.md`);
-        const sessionDateTime =
-          typeof sample.conversation[`${sessionKey}_date_time`] === "string"
-            ? parseLoCoMoSessionDateTimeToIso(sample.conversation[`${sessionKey}_date_time`] as string)
-            : null;
-        await writeFile(sessionPath, formatConversationSession(sample, sessionKey, turns), "utf8");
-        await ingestArtifact({
+        const ingestResult = await ingestLoCoMoSessionArtifacts({
+          localBrainRoot: localBrainRoot(),
+          benchmarkName: "full_standard_pressure_review",
+          corpusRoot: sampleRoot,
           namespaceId,
-          sourceType: "markdown",
-          inputUri: sessionPath,
-          capturedAt: sessionDateTime ?? new Date().toISOString(),
-          metadata: {
-            benchmark: "full_standard_pressure_review",
-            sample_id: sample.sample_id,
-            session_key: sessionKey
-          },
-          sourceChannel: "benchmark:full_standard_pressure_review"
+          sample,
+          sessionKey,
+          turns
         });
+        if (ingestResult.imageArtifactCount > 0) {
+          console.log(
+            `[full-standard-pressure-review] sample=${sample.sample_id} session=${sessionKey} imageArtifacts=${ingestResult.imageArtifactCount} imageDerivations=${ingestResult.derivedImageCount} cacheHits=${ingestResult.imageDerivationCacheHits}`
+          );
+        }
       }
 
       await rebuildTypedMemoryNamespace(namespaceId);

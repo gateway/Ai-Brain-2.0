@@ -278,35 +278,47 @@ export function deriveMusicMediaDisambiguationClaimText(
     strictPrimary: true,
     includeFullSourceBackfill: true
   });
-  const combined = texts.join(" ");
+  const normalizedTexts = texts.map((text) => helpers.normalizeWhitespace(text)).filter(Boolean);
+  const combined = normalizedTexts.join(" ");
   if (!combined.trim()) {
     return null;
   }
 
-  if (/\bwhich\s+bands?\b/i.test(queryText) || /\bwhat\s+bands?\b/i.test(queryText)) {
-    const bands = new Set<string>(
-      helpers.extractBandValues(combined, queryText)
-        .map((value) => helpers.normalizeExactDetailValueForQuery(queryText, value))
-        .filter((value): value is string => Boolean(value))
-    );
+  const extractFavoriteBand = (text: string): string | null => {
     const favoriteBandMatch =
-      combined.match(/\bif i had to pick a favorite, it would definitely be ([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b/iu) ??
-      combined.match(/\bfavorite\b[^.!?\n]{0,40}\b(?:would definitely be|was|is)\s+([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b/iu);
-    if (favoriteBandMatch?.[1]) bands.add(helpers.normalizeWhitespace(favoriteBandMatch[1]));
-    const headlinerMatch = combined.match(/\b([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\s+headlined the festival\b/u);
-    if (headlinerMatch?.[1]) bands.add(helpers.normalizeWhitespace(headlinerMatch[1]));
-    if (bands.size > 0) {
-      return helpers.joinExactDetailValues([...bands]);
+      text.match(/\bfavorite\s+band\b[^.!?\n]{0,40}\b(?:was|is)\s+([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b/u) ??
+      text.match(/\b([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b[^.!?\n]{0,40}\bwas\s+my\s+favorite\s+band\b/iu) ??
+      text.match(/\bif i had to pick a favorite, it would definitely be ([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b/iu);
+    return favoriteBandMatch?.[1] ? helpers.normalizeWhitespace(favoriteBandMatch[1]) : null;
+  };
+
+  if (/\bfavorite\b/i.test(queryText) && /\bband\b/i.test(queryText)) {
+    for (const text of normalizedTexts) {
+      const favoriteBand = extractFavoriteBand(text);
+      if (favoriteBand) {
+        return favoriteBand;
+      }
     }
   }
 
-  if (/\bfavorite\b/i.test(queryText) && /\bband\b/i.test(queryText)) {
-    const favoriteBandMatch =
-      combined.match(/\bfavorite\s+band\b[^.!?\n]{0,40}\b(?:was|is)\s+([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b/u) ??
-      combined.match(/\b([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b[^.!?\n]{0,40}\bwas\s+my\s+favorite\s+band\b/iu) ??
-      combined.match(/\bif i had to pick a favorite, it would definitely be ([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b/iu);
-    if (favoriteBandMatch?.[1]) {
-      return helpers.normalizeWhitespace(favoriteBandMatch[1]);
+  if (/\bwhich\s+bands?\b/i.test(queryText) || /\bwhat\s+bands?\b/i.test(queryText)) {
+    const bands = new Set<string>(
+      normalizedTexts.flatMap((text) => helpers.extractBandValues(text, queryText))
+        .map((value) => helpers.normalizeExactDetailValueForQuery(queryText, value))
+        .filter((value): value is string => Boolean(value))
+    );
+    for (const text of normalizedTexts) {
+      const favoriteBand = extractFavoriteBand(text);
+      if (favoriteBand) {
+        bands.add(favoriteBand);
+      }
+      const headlinerMatch = text.match(/\b([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\s+headlined the festival\b/u);
+      if (headlinerMatch?.[1]) {
+        bands.add(helpers.normalizeWhitespace(headlinerMatch[1]));
+      }
+    }
+    if (bands.size > 0) {
+      return helpers.joinExactDetailValues([...bands]);
     }
   }
 

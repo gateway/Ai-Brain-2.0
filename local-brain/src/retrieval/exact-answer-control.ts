@@ -391,7 +391,7 @@ function scoreSlotCueForFamily(queryText: string, family: string, text: string):
     return /\bbought\b|\bpurchased\b/u.test(lowered) ? 1.1 : -0.7;
   }
   if (family === "bands") {
-    return /\bbands?\b|\blistening to\b|\blisten to\b/u.test(lowered) ? 1.1 : -0.7;
+    return /\bbands?\b|\blistening to\b|\blisten to\b|\bfavorite\b|\bheadlined\b/u.test(lowered) ? 1.1 : -0.7;
   }
   if (family === "broken_items") {
     return /\bbroken\b|\bbroke\b|\bprius\b/u.test(lowered) ? 1.05 : -0.7;

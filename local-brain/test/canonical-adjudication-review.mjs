@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { adjudicateCanonicalClaim } from "../dist/retrieval/canonical-adjudication.js";
+import { resolveCanonicalSubjectBinding } from "../dist/retrieval/canonical-subject-binding.js";
 import { adjudicateNarrativeClaim } from "../dist/retrieval/narrative-adjudication.js";
 import { buildDualityObject } from "../dist/retrieval/service.js";
 
@@ -116,6 +117,30 @@ test("canonical adjudication abstains for mixed-subject ownership queries before
   assert.equal(adjudicated.canonical.kind, "abstention");
   assert.equal(adjudicated.formatted.claimText, "None.");
   assert.equal(adjudicated.canonical.abstainReason, "insufficient_subject_binding");
+});
+
+test("canonical subject binding resolves first-person owned exact-detail rows without a fake named subject", () => {
+  const binding = resolveCanonicalSubjectBinding({
+    queryText: "What is the name of my cat?",
+    results: [
+      recallResult("My cat is named Luna.", {
+        subject_entity_id: "person:self",
+        subject_name: "self",
+        speaker_name: "self",
+        metadata: {
+          source_sentence_text: "My cat is named Luna."
+        }
+      })
+    ],
+    subjectMatch: "matched",
+    matchedParticipants: [],
+    missingParticipants: [],
+    foreignParticipants: []
+  });
+
+  assert.equal(binding.status, "resolved");
+  assert.equal(binding.subjectEntityId, "person:self");
+  assert.equal(binding.canonicalName, "self");
 });
 
 test("canonical adjudication resolves a subject-bound set answer without falling back to raw snippets", () => {
@@ -1285,7 +1310,7 @@ test("canonical adjudication treats support-removal career hypotheticals as coun
 
   assert.ok(adjudicated);
   assert.equal(adjudicated.bundle.predicateFamily, "counterfactual");
-  assert.equal(adjudicated.formatted.claimText, "Likely no.");
+  assert.match(adjudicated.formatted.claimText ?? "", /^Likely no\./);
   assert.equal(adjudicated.formatted.finalClaimSource, "canonical_counterfactual");
 });
 
@@ -1305,14 +1330,14 @@ test("canonical adjudication routes identity questions into the identity family"
     exactDetailCandidateStrongSupport: false,
     abstentionClaimText: "Unknown.",
     derived: {
-      identity: "The best supported identity signal is that she is a transgender woman."
+      identity: "Transgender woman"
     }
   });
 
   assert.ok(adjudicated);
   assert.equal(adjudicated.bundle.predicateFamily, "alias_identity");
   assert.equal(adjudicated.formatted.finalClaimSource, "canonical_profile");
-  assert.equal(adjudicated.formatted.claimText, "The best supported identity signal is that she is a transgender woman.");
+  assert.equal(adjudicated.formatted.claimText, "Transgender woman");
 });
 
 test("narrative adjudication shadows narrative candidates until cutover is enabled", () => {

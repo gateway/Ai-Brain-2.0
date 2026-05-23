@@ -3,6 +3,7 @@ import {
   inferTemporalEventKeyFromText,
   type StoredCanonicalLookup
 } from "../canonical-memory/service.js";
+import { extractFirstTravelTargetLocation, isFirstTravelLocationQuery } from "./temporal/first-travel-gating.js";
 import {
   extractAnchoredQuerySurfaceNames,
   extractObjectQuerySurfaceNames,
@@ -11,7 +12,44 @@ import {
   extractPrimaryQuerySurfaceNames,
   extractQuerySurfaceNames
 } from "./query-subjects.js";
-import { isConcreteConsumablePreferenceQuery } from "./query-signals.js";
+import {
+  isBroadPreferenceProfileQuery,
+  isBenefitReasonSlotQuery,
+  isChildScopedPreferenceProfileQuery,
+  isConcreteBookHistoryQuery,
+  isConcreteConsumablePreferenceQuery,
+  isConcreteCountryOriginQuery,
+  isConcreteEnumerativeListQuery,
+  isConcreteEventInventoryQuery,
+  isConcreteFavoriteDomainQuery,
+  isConcreteInstrumentInventoryQuery,
+  isConcreteLocationHistoryQuery,
+  isConcreteMusicArtistHistoryQuery,
+  isConcretePaintedItemQuery,
+  isConcretePetNameQuery,
+  isConcretePotteryItemQuery,
+  isConcreteReasonValueQuery,
+  isConcreteSymbolInventoryQuery,
+  isConcreteSupportNetworkQuery,
+  isConcreteUtteranceFactQuery,
+  isConcreteValueSlotQuery,
+  isCommunityParticipationQuery,
+  isFamilyActivityInventoryQuery,
+  isIdentityProfileQuery,
+  isMadeItemInventoryQuery,
+  isMadeItemPairInventoryQuery,
+  isMediaSummaryQuery,
+  isPetInventoryQuery,
+  isProfileTraitJudgmentQuery,
+  isRelationshipProfileQuery,
+  isSharedCommonalityQuery
+} from "./query-signals.js";
+import {
+  buildBoundedCandidateAssemblyPolicy,
+  inferRetrievalControllerIntent
+} from "./retrieval-controller.js";
+import { applyContractCandidateAssemblyAdjustments } from "./candidate-assembly/contract-candidate-assembly.js";
+import { inferExactDetailQuestionFamily } from "./exact-detail-question-family.js";
 import type {
   AnswerOwnerFamily,
   AnswerRetrievalPlan,
@@ -20,6 +58,7 @@ import type {
   CanonicalPredicateFamily,
   CanonicalReportKind,
   DirectDetailSupportUnit,
+  PlannerAnswerKind,
   RetrievalPlanLane,
   RetrievalRescuePolicy,
   SuppressionPoolSelection,
@@ -66,6 +105,7 @@ export function retrievalPlanLaneToOwnerFamily(lane: RetrievalPlanLane): AnswerO
     case "book_list":
     case "support_network":
     case "location_history":
+    case "set_fact":
       return "list_set";
     case "exact_detail":
       return "exact_detail";
@@ -74,6 +114,65 @@ export function retrievalPlanLaneToOwnerFamily(lane: RetrievalPlanLane): AnswerO
     default:
       return "generic";
   }
+}
+
+function inferPlannerAnswerKind(
+  queryText: string,
+  predicateFamily: CanonicalPredicateFamily,
+  reportKind?: CanonicalReportKind | null
+): PlannerAnswerKind {
+  if (isTemporalQualifiedExactDetailQuery(queryText)) {
+    return "value_slot";
+  }
+  if (normalizeFamily(predicateFamily) === "temporal" || isExplicitTemporalLookupQuery(queryText)) {
+    return "temporal_event";
+  }
+  if (isConcreteLocationHistoryQuery(queryText) || predicateFamily === "location_history") {
+    return "location_history";
+  }
+  if (isSharedCommonalityQuery(queryText)) {
+    return /\bwhich\s+city\b|\bwhere\b/iu.test(queryText) ? "location_history" : "inventory_list";
+  }
+  if (isConcreteBookHistoryQuery(queryText)) {
+    return "list_history";
+  }
+  if (isChildScopedPreferenceProfileQuery(queryText)) {
+    return "inventory_list";
+  }
+  if (isConcreteSetFactQuery(queryText)) {
+    return "inventory_list";
+  }
+  if (isConcreteEventInventoryQuery(queryText) || isCommunityParticipationQuery(queryText)) {
+    return "event_inventory";
+  }
+  if (isFamilyActivityInventoryQuery(queryText)) {
+    return "event_inventory";
+  }
+  if (isConcreteSupportNetworkQuery(queryText)) {
+    return "support_network";
+  }
+  if (isConcreteUtteranceFactQuery(queryText)) {
+    return "utterance_fact";
+  }
+  if (isConcreteReasonValueQuery(queryText)) {
+    return "direct_reason";
+  }
+  if (isBenefitReasonSlotQuery(queryText)) {
+    return "direct_reason";
+  }
+  if (isMadeItemPairInventoryQuery(queryText) || isPetInventoryQuery(queryText)) {
+    return "inventory_list";
+  }
+  if (isConcreteValueSlotQuery(queryText) || isConcreteFavoriteDomainQuery(queryText)) {
+    return "value_slot";
+  }
+  if (
+    isConcreteExactDetailQuery(queryText, predicateFamily) &&
+    !reportKindImpliesReportLane(reportKind, queryText)
+  ) {
+    return "direct_attribute";
+  }
+  return "report_inference";
 }
 
 function isInferentialProfileQuery(queryText: string): boolean {
@@ -142,13 +241,16 @@ function isPairLocationResolutionQuery(queryText: string): boolean {
 function isLocationHistoryQuery(queryText: string): boolean {
   return (
     isPairLocationResolutionQuery(queryText) ||
-    /\bwhere\b[^?!.]{0,80}\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went)\b/iu.test(queryText) ||
+    /\bwhere\b[^?!.]{0,80}\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went|camp(?:ed|ing)?)\b/iu.test(queryText) ||
     /\bwhat\s+(?:states|areas|places)\b/iu.test(queryText)
   );
 }
 
 function isPetCareQuery(queryText: string): boolean {
-  return /\bdog\b|\bdogs\b|\bpet\b|\bclasses?\b|\bgroups?\b|\bcare\b|\bagility\b|\bindoor activity\b|\bdog treats?\b/iu.test(queryText);
+  return (
+    /\b(?:dog|dogs|pet|pets)\b/iu.test(queryText) &&
+    /\b(?:classes?|groups?|care|agility|indoor activity|dog treats?|training|better care)\b/iu.test(queryText)
+  );
 }
 
 function isMedicalInferenceQuery(queryText: string): boolean {
@@ -156,11 +258,21 @@ function isMedicalInferenceQuery(queryText: string): boolean {
 }
 
 function isAspirationQuery(queryText: string): boolean {
-  return /\bstore\b|\bbusiness\b|\bventure\b|\bstartup\b|\bapp\b|\bunique\b|\bbrand\b|\bdream\b|\bwhy\b.*\b(start|open|build)\b/iu.test(queryText);
+  return (
+    /\bstore\b|\bbusiness\b|\bventure\b|\bstartup\b|\bapp\b|\bunique\b|\bbrand\b|\bdream\b|\bwhy\b.*\b(start|open|build)\b/iu.test(
+      queryText
+    ) ||
+    /\bideal\b[^?!.]{0,80}\b(?:studio|space|room|setup)\b/iu.test(queryText) ||
+    /\bshould look like\b/iu.test(queryText)
+  );
 }
 
 function isTravelReportQuery(queryText: string): boolean {
   return /\broadtrips?\b|\btrip\b|\btravel\b|\bfestival\b|\bwhere has\b|\bwhere did\b.*\broadtrip\b/iu.test(queryText);
+}
+
+function isConcreteSetFactQuery(queryText: string): boolean {
+  return isConcreteEnumerativeListQuery(queryText);
 }
 
 function isExplicitTemporalLookupQuery(queryText: string): boolean {
@@ -174,6 +286,12 @@ function isExplicitTemporalLookupQuery(queryText: string): boolean {
 }
 
 function isBookshelfCollectionQuery(queryText: string): boolean {
+  if (
+    /\bwhere\s+did\b/iu.test(queryText) &&
+    /\b(?:buy|bought|purchase|purchased|redeem|redeemed)\b/iu.test(queryText)
+  ) {
+    return false;
+  }
   return /\bbookshelf\b|\bdr\.?\s*seuss\b|\bclassic children'?s books?\b/iu.test(queryText);
 }
 
@@ -195,7 +313,10 @@ function isGenericCollectionQuery(queryText: string): boolean {
 }
 
 function isCommunityMembershipQuery(queryText: string): boolean {
-  return /\bmember of the lgbtq community\b|\bally\b|\blgbtq\+?\b|\btransgender\b|\bpride\b/iu.test(queryText);
+  return (
+    !isCommunityParticipationQuery(queryText) &&
+    /\bmember of the lgbtq community\b|\bally\b|\blgbtq\+?\b|\btransgender\b|\bpride\b/iu.test(queryText)
+  );
 }
 
 function isBooksByAuthorPreferenceQuery(queryText: string): boolean {
@@ -260,12 +381,27 @@ function isEducationFieldQuery(queryText: string): boolean {
   );
 }
 
+function isLocalPoliticsMainFocusQuery(queryText: string): boolean {
+  return /\bmain focus\b/iu.test(queryText) && /\blocal politics\b/iu.test(queryText);
+}
+
 function isCareerReportQuery(queryText: string): boolean {
   return /\bwould\b.*\bpursue\b|\bcareer option\b|\bwhat kind of work\b|\bwhat career\b/iu.test(queryText);
 }
 
 function isNarrativeReasoningQuery(queryText: string): boolean {
   const normalized = normalize(queryText);
+  if (
+    isConcreteUtteranceFactQuery(queryText) ||
+    isConcreteBookHistoryQuery(queryText) ||
+    isConcreteLocationHistoryQuery(queryText) ||
+    isConcreteEventInventoryQuery(queryText) ||
+    isConcreteSupportNetworkQuery(queryText) ||
+    isConcreteReasonValueQuery(queryText) ||
+    isConcreteValueSlotQuery(queryText)
+  ) {
+    return false;
+  }
   return (
     /^\s*why\b/iu.test(normalized) ||
     /\bwhat advice (?:might|would)\b/iu.test(normalized) ||
@@ -334,6 +470,15 @@ function isConcreteExactDetailQuery(queryText: string, predicateFamily: Canonica
   if (/\bfavorite\s+style\s+of\s+painting\b/iu.test(normalized)) {
     return true;
   }
+  if (
+    isConcreteReasonValueQuery(queryText) ||
+    isConcreteCountryOriginQuery(queryText) ||
+    isConcreteUtteranceFactQuery(queryText) ||
+    isConcreteValueSlotQuery(queryText) ||
+    isConcreteFavoriteDomainQuery(queryText)
+  ) {
+    return true;
+  }
   if (isConcreteConsumablePreferenceQuery(queryText.trim())) {
     return true;
   }
@@ -353,10 +498,13 @@ function isConcreteExactDetailQuery(queryText: string, predicateFamily: Canonica
     isExplicitTemporalLookupQuery(queryText) ||
     normalizeFamily(predicateFamily) === "temporal" ||
     isEventListQuery(queryText) ||
-    isBookListQuery(queryText) ||
-    isSupportNetworkQuery(queryText) ||
+    isConcreteBookHistoryQuery(queryText) ||
+    isConcreteSupportNetworkQuery(queryText) ||
     isPairLocationResolutionQuery(queryText) ||
     isBookshelfCollectionQuery(queryText) ||
+    isConcreteSetFactQuery(queryText) ||
+    isConcreteEventInventoryQuery(queryText) ||
+    isConcreteLocationHistoryQuery(queryText) ||
     isCommunityMembershipQuery(queryText) ||
     isInferentialProfileQuery(queryText) ||
     isCareerReportQuery(queryText) ||
@@ -406,6 +554,20 @@ function isConcreteExactDetailQuery(queryText: string, predicateFamily: Canonica
   );
 }
 
+function isTemporalQualifiedExactDetailQuery(queryText: string): boolean {
+  if (isExplicitTemporalLookupQuery(queryText)) {
+    return false;
+  }
+  const exactDetailFamily = inferExactDetailQuestionFamily(queryText);
+  if (!["bands", "favorite_band", "favorite_dj"].includes(exactDetailFamily)) {
+    return false;
+  }
+  return /\bin\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|\d{4})\b/iu.test(queryText) ||
+    /\bmusic festival\b/iu.test(queryText) ||
+    /\bconcert\b/iu.test(queryText) ||
+    /\bfestival\b/iu.test(queryText);
+}
+
 export function inferAnswerRetrievalPredicateFamily(
   queryText: string,
   fallbackPredicateFamily: CanonicalPredicateFamily = "generic_fact"
@@ -416,11 +578,40 @@ export function inferAnswerRetrievalPredicateFamily(
   if (isExplicitTemporalLookupQuery(queryText)) {
     return "temporal_event_fact";
   }
-  if (isLocationHistoryQuery(queryText)) {
+  if (isIdentityProfileQuery(queryText)) {
+    return "profile_state";
+  }
+  if (isSharedCommonalityQuery(queryText)) {
+    return "commonality";
+  }
+  if (isChildScopedPreferenceProfileQuery(queryText)) {
+    return "list_set";
+  }
+  if (isRelationshipProfileQuery(queryText) || isBroadPreferenceProfileQuery(queryText) || isProfileTraitJudgmentQuery(queryText)) {
+    return "profile_state";
+  }
+  if (isCommunityParticipationQuery(queryText)) {
+    return "list_set";
+  }
+  if (isConcreteEventInventoryQuery(queryText)) {
+    return "list_set";
+  }
+  if (isConcreteSetFactQuery(queryText)) {
+    return "list_set";
+  }
+  if (isConcreteLocationHistoryQuery(queryText) || isLocationHistoryQuery(queryText)) {
     return "location_history";
   }
-  if (isEventListQuery(queryText) || isBookListQuery(queryText) || isSupportNetworkQuery(queryText) || isPairLocationResolutionQuery(queryText)) {
+  if (
+    isEventListQuery(queryText) ||
+    isConcreteBookHistoryQuery(queryText) ||
+    isConcreteSupportNetworkQuery(queryText) ||
+    isPairLocationResolutionQuery(queryText)
+  ) {
     return "list_set";
+  }
+  if (isAspirationQuery(queryText)) {
+    return "profile_state";
   }
   if (isConcreteExactDetailQuery(queryText, fallbackPredicateFamily)) {
     return "generic_fact";
@@ -431,10 +622,10 @@ export function inferAnswerRetrievalPredicateFamily(
     isCommunityMembershipQuery(queryText) ||
     isCareerReportQuery(queryText) ||
     isPreferenceProfileQuery(queryText) ||
+    isProfileTraitJudgmentQuery(queryText) ||
     isNarrativeReasoningQuery(queryText) ||
     isPetCareQuery(queryText) ||
     isMedicalInferenceQuery(queryText) ||
-    isAspirationQuery(queryText) ||
     isTravelReportQuery(queryText)
   ) {
     return "profile_state";
@@ -458,7 +649,15 @@ function reportKindImpliesReportLane(reportKind: CanonicalReportKind | null | un
   if (reportKind === "travel_report" && isTravelReportQuery(queryText)) {
     return true;
   }
-  if (reportKind === "profile_report" && (isNarrativeReasoningQuery(queryText) || isMedicalInferenceQuery(queryText))) {
+  if (
+    reportKind === "profile_report" &&
+    (
+      isNarrativeReasoningQuery(queryText) ||
+      isMedicalInferenceQuery(queryText) ||
+      isIdentityProfileQuery(queryText) ||
+      isProfileTraitJudgmentQuery(queryText)
+    )
+  ) {
     return true;
   }
   return false;
@@ -475,25 +674,55 @@ function inferPlannerLane(
   if (/^\s*what helped\b/iu.test(queryText)) {
     return "report";
   }
+  if (isTemporalQualifiedExactDetailQuery(queryText)) {
+    return "exact_detail";
+  }
   if (normalizeFamily(predicateFamily) === "temporal" || isExplicitTemporalLookupQuery(queryText)) {
     return "temporal_event";
   }
-  if (isBookshelfCollectionQuery(queryText) || isGenericCollectionQuery(queryText)) {
+  if (isChildScopedPreferenceProfileQuery(queryText)) {
+    return "set_fact";
+  }
+  if (isIdentityProfileQuery(queryText)) {
+    return "report";
+  }
+  if (isSharedCommonalityQuery(queryText)) {
+    return "set_fact";
+  }
+  if (isRelationshipProfileQuery(queryText) || isBroadPreferenceProfileQuery(queryText) || isProfileTraitJudgmentQuery(queryText)) {
+    return "report";
+  }
+  if (isCommunityParticipationQuery(queryText) || isConcreteEventInventoryQuery(queryText)) {
+    return "event_list";
+  }
+  if (isFamilyActivityInventoryQuery(queryText)) {
+    return "event_list";
+  }
+  if (isConcreteSetFactQuery(queryText)) {
+    return "set_fact";
+  }
+  if (isMadeItemPairInventoryQuery(queryText) || isPetInventoryQuery(queryText)) {
+    return "set_fact";
+  }
+  if (isMadeItemInventoryQuery(queryText) && /\bwhat has\b.+\bpaint(?:ed|ing)\b/iu.test(queryText)) {
+    return "set_fact";
+  }
+  if (isBookshelfCollectionQuery(queryText) || isGenericCollectionQuery(queryText) || isMediaSummaryQuery(queryText)) {
     return "collection_inference";
   }
   if (isEventListQuery(queryText)) {
     return "event_list";
   }
-  if (isBookListQuery(queryText)) {
+  if (isConcreteBookHistoryQuery(queryText) || isBookListQuery(queryText)) {
     return "book_list";
   }
-  if (isSupportNetworkQuery(queryText)) {
+  if (isConcreteSupportNetworkQuery(queryText) || isSupportNetworkQuery(queryText)) {
     return "support_network";
   }
   if (isPairLocationResolutionQuery(queryText)) {
     return "location_history";
   }
-  if (isLocationHistoryQuery(queryText) || predicateFamily === "location_history") {
+  if (isConcreteLocationHistoryQuery(queryText) || isLocationHistoryQuery(queryText) || predicateFamily === "location_history") {
     return "location_history";
   }
   if (isComparativeFitQuery(queryText)) {
@@ -512,6 +741,7 @@ function inferPlannerLane(
     isCommunityMembershipQuery(queryText) ||
     isPreferenceChoiceQuery(queryText) ||
     isPreferenceProfileQuery(queryText) ||
+    isProfileTraitJudgmentQuery(queryText) ||
     isMedicalInferenceQuery(queryText) ||
     isNarrativeReasoningQuery(queryText)
   ) {
@@ -574,7 +804,17 @@ export function buildAnswerRetrievalPlan(params: {
   readonly subjectEntityHints?: readonly string[];
 }): AnswerRetrievalPlan {
   const lane = inferPlannerLane(params.queryText, params.predicateFamily, params.reportKind);
+  const answerKind = inferPlannerAnswerKind(params.queryText, params.predicateFamily, params.reportKind);
   const family = retrievalPlanLaneToOwnerFamily(lane);
+  const controllerIntent = inferRetrievalControllerIntent({
+    queryText: params.queryText,
+    predicateFamily: params.predicateFamily,
+    family,
+    lane,
+    answerKind,
+    reportKind: params.reportKind
+  });
+  const assemblyPolicy = buildBoundedCandidateAssemblyPolicy(controllerIntent);
   const pairNames = extractPairQuerySurfaceNames(params.queryText);
   const anchoredSubjectNames = extractAnchoredQuerySurfaceNames(params.queryText);
   const genericSurfaceNames = extractQuerySurfaceNames(params.queryText);
@@ -586,43 +826,16 @@ export function buildAnswerRetrievalPlan(params: {
         : unique(genericSurfaceNames.slice(0, 1));
   const objectNames = unique(genericSurfaceNames.filter((name) => !subjectNames.includes(name)));
   const pairSubjectNames = pairNames.length >= 2 ? unique(pairNames.slice(1)) : [];
-  const candidatePools: CandidatePoolSelection[] =
-    lane === "temporal_event"
-      ? [
-          "temporal_exact_facts",
-          "temporal_aligned_anchors",
-          "temporal_event_neighbors",
-          "temporal_derived_relatives",
-          "canonical_temporal_facts",
-          "normalized_event_facts",
-          "temporal_results",
-          "snippet_results",
-          "raw_text_fallback"
-        ]
-      : lane === "collection_inference"
-        ? ["normalized_collection_facts", "canonical_reports", "report_support", "profile_report_support", "collection_support", "snippet_results", "raw_text_fallback"]
-        : lane === "report"
-          ? ["report_typed_payloads", "canonical_reports", "canonical_sets", "report_support", "profile_report_support", "snippet_results", "raw_text_fallback"]
-          : lane === "event_list"
-            ? ["canonical_sets", "normalized_event_facts", "event_list_support", "set_entries", "snippet_results", "raw_text_fallback"]
-            : lane === "book_list"
-              ? ["canonical_sets", "book_list_support", "set_entries", "snippet_results", "raw_text_fallback"]
-              : lane === "support_network"
-                ? ["canonical_sets", "support_network_support", "set_entries", "snippet_results", "raw_text_fallback"]
-                : lane === "location_history"
-                  ? ["canonical_sets", "set_entries", "snippet_results", "raw_text_fallback"]
-                : lane === "abstention"
-                  ? ["structured_candidates", "snippet_results", "raw_text_fallback"]
-                  : ["canonical_facts", "exact_detail_results", "direct_detail_support", "snippet_results", "raw_text_fallback"];
-  const suppressionPools: SuppressionPoolSelection[] = [];
+  const candidatePools: CandidatePoolSelection[] = [...assemblyPolicy.candidatePools];
+  const suppressionPools: SuppressionPoolSelection[] = [...assemblyPolicy.suppressionPools];
   const queryExpansionTerms = new Set([...subjectNames, ...objectNames]);
   const bannedExpansionTerms = new Set<string>();
   const targetedFields: string[] = [];
   const requiredFields: string[] = [];
   const targetedBackfill: string[] = [];
   const targetedBackfillRequests: TargetedBackfillRequest[] = [];
-  const ownerEligibilityHints: string[] = [];
-  const suppressionHints: string[] = [];
+  const ownerEligibilityHints: string[] = [...assemblyPolicy.ownerEligibilityHints];
+  const suppressionHints: string[] = [...assemblyPolicy.suppressionHints];
   const resolvedSubjectEntityId =
     params.subjectEntityHints && unique(params.subjectEntityHints).length >= 1
       ? unique(params.subjectEntityHints)[0] ?? null
@@ -636,17 +849,36 @@ export function buildAnswerRetrievalPlan(params: {
     objectNames.length > 0 && params.subjectEntityHints && unique(params.subjectEntityHints).length >= (pairSubjectNames.length > 0 ? 3 : 2)
       ? unique(params.subjectEntityHints)[pairSubjectNames.length > 0 ? 2 : 1] ?? null
       : null;
-  let familyConfidence = lane === "generic" ? 0.4 : 0.8;
-  let supportCompletenessTarget = family === "exact_detail" ? 1 : 0.7;
+  let familyConfidence = assemblyPolicy.familyConfidence;
+  let supportCompletenessTarget = assemblyPolicy.supportCompletenessTarget;
   const exactDetailNeedsDirectedRescue =
     /\bhow\s+long\b/iu.test(params.queryText) ||
     ((/\bcompany\b|\bbrand\b|\bsponsor\b/iu.test(params.queryText)) && /\bendorsement\b/iu.test(params.queryText)) ||
     isStressBusterActivityQuery(params.queryText) ||
-    isRealizationExactDetailQuery(params.queryText);
+    isRealizationExactDetailQuery(params.queryText) ||
+    answerKind === "direct_attribute" ||
+    answerKind === "direct_reason" ||
+    answerKind === "value_slot" ||
+    answerKind === "utterance_fact" ||
+    answerKind === "inventory_list";
   let rescuePolicy: RetrievalRescuePolicy =
     family === "exact_detail" || family === "generic"
-      ? (exactDetailNeedsDirectedRescue ? "single_targeted_rescue_before_fallback" : "allow_immediate_abstention")
-      : "single_targeted_rescue_before_fallback";
+      ? (exactDetailNeedsDirectedRescue ? "single_targeted_rescue_before_fallback" : assemblyPolicy.rescuePolicy)
+      : assemblyPolicy.rescuePolicy;
+  const contractAssemblyState = {
+    candidatePools,
+    suppressionPools,
+    targetedFields,
+    requiredFields,
+    targetedBackfill,
+    targetedBackfillRequests,
+    queryExpansionTerms,
+    ownerEligibilityHints,
+    suppressionHints,
+    familyConfidence,
+    supportCompletenessTarget,
+    rescuePolicy
+  };
   if (params.subjectBindingStatus && params.subjectBindingStatus !== "resolved") {
     targetedFields.push("subject_entity_id");
     requiredFields.push("subject_entity_id");
@@ -663,7 +895,30 @@ export function buildAnswerRetrievalPlan(params: {
     supportCompletenessTarget = 1;
     requiredFields.push("event_key");
     const planningEventKey = resolvedEventKey ?? inferTemporalEventKeyFromText(params.queryText);
+    const firstTravelTargetLocation = extractFirstTravelTargetLocation(params.queryText);
     const genericWhenTemporalQuery = /\bwhen\b/iu.test(params.queryText) && !/\bwhat year\b|\bwhich year\b|\bwhat month\b|\bwhich month\b|\bwhat date\b|\bwhich date\b/iu.test(params.queryText);
+    if (isFirstTravelLocationQuery(params.queryText)) {
+      for (const value of [
+        "first",
+        "travel",
+        "went to",
+        "visited",
+        "trip to",
+        "first time in",
+        "arrived in",
+        ...(firstTravelTargetLocation ? [firstTravelTargetLocation, firstTravelTargetLocation.toLowerCase()] : [])
+      ]) {
+        queryExpansionTerms.add(value);
+      }
+      if (!targetedBackfillRequests.some((entry) => entry.reason === "temporal_event_neighbors_missing")) {
+        targetedBackfillRequests.push({
+          reason: "temporal_event_neighbors_missing",
+          requiredFields: ["event_key", "answer_date_parts"],
+          candidatePool: "temporal_event_neighbors",
+          maxPasses: 1
+        });
+      }
+    }
     switch (planningEventKey) {
       case "start_surfing":
         queryExpansionTerms.add("surf");
@@ -870,7 +1125,63 @@ export function buildAnswerRetrievalPlan(params: {
     ownerEligibilityHints.push("canonical_report", "canonical_narrative");
     suppressionHints.push("canonical_exact_detail", "runtime_exact_detail");
     requiredFields.push("profile_support");
-    if (isBookshelfCollectionQuery(params.queryText)) {
+    if (isProfileTraitJudgmentQuery(params.queryText)) {
+      if (!candidatePools.includes("profile_report_support")) {
+        candidatePools.splice(2, 0, "profile_report_support");
+      }
+      familyConfidence = 0.92;
+      supportCompletenessTarget = 0.85;
+      requiredFields.push("judgment_reason");
+      if (/\bpatriotic\b/iu.test(params.queryText)) {
+        queryExpansionTerms.add("patriotic");
+        queryExpansionTerms.add("patriotism");
+        queryExpansionTerms.add("proud");
+        queryExpansionTerms.add("American");
+        queryExpansionTerms.add("country");
+        queryExpansionTerms.add("Fourth of July");
+        queryExpansionTerms.add("Independence Day");
+        queryExpansionTerms.add("flag");
+        queryExpansionTerms.add("national anthem");
+      } else {
+        queryExpansionTerms.add("personality");
+        queryExpansionTerms.add("traits");
+        queryExpansionTerms.add("religious");
+        queryExpansionTerms.add("political");
+        queryExpansionTerms.add("leaning");
+      }
+      targetedBackfill.push("judgment_reason");
+      targetedBackfillRequests.push({
+        reason: "judgment_reason_missing",
+        requiredFields: ["judgment_reason"],
+        candidatePool: "profile_report_support",
+        maxPasses: 1
+      });
+      suppressionPools.push("exact_detail_support", "generic_snippet_support");
+    } else if (isLocalPoliticsMainFocusQuery(params.queryText)) {
+      if (!candidatePools.includes("education_support")) {
+        candidatePools.splice(2, 0, "education_support");
+      }
+      familyConfidence = 0.92;
+      supportCompletenessTarget = 0.85;
+      requiredFields.push("main_focus");
+      queryExpansionTerms.add("local politics");
+      queryExpansionTerms.add("community");
+      queryExpansionTerms.add("neighborhood");
+      queryExpansionTerms.add("education");
+      queryExpansionTerms.add("schools");
+      queryExpansionTerms.add("infrastructure");
+      queryExpansionTerms.add("public");
+      queryExpansionTerms.add("government");
+      queryExpansionTerms.add("policy");
+      targetedBackfill.push("main_focus");
+      targetedBackfillRequests.push({
+        reason: "education_field_missing",
+        requiredFields: ["main_focus"],
+        candidatePool: "education_support",
+        maxPasses: 1
+      });
+      suppressionPools.push("exact_detail_support", "generic_snippet_support");
+    } else if (isBookshelfCollectionQuery(params.queryText)) {
       familyConfidence = 0.98;
       supportCompletenessTarget = 0.85;
       rescuePolicy = "single_targeted_rescue_before_abstention";
@@ -898,7 +1209,7 @@ export function buildAnswerRetrievalPlan(params: {
         candidatePool: "normalized_collection_facts",
         maxPasses: 1
       });
-    } else if (isGenericCollectionQuery(params.queryText)) {
+    } else if (isGenericCollectionQuery(params.queryText) || isMediaSummaryQuery(params.queryText)) {
       familyConfidence = 0.95;
       supportCompletenessTarget = 0.8;
       rescuePolicy = "single_targeted_rescue_before_abstention";
@@ -909,6 +1220,16 @@ export function buildAnswerRetrievalPlan(params: {
       queryExpansionTerms.add("collectibles");
       queryExpansionTerms.add("memorabilia");
       queryExpansionTerms.add("items");
+      if (isMediaSummaryQuery(params.queryText)) {
+        queryExpansionTerms.add("movie");
+        queryExpansionTerms.add("movies");
+        queryExpansionTerms.add("film");
+        queryExpansionTerms.add("films");
+        queryExpansionTerms.add("watched");
+        queryExpansionTerms.add("mentioned");
+        queryExpansionTerms.add("sinners");
+        queryExpansionTerms.add("slow horses");
+      }
       suppressionPools.push("career_support", "health_support", "mental_health_support", "exact_detail_support", "generic_snippet_support");
       bannedExpansionTerms.add("career");
       bannedExpansionTerms.add("job");
@@ -923,6 +1244,28 @@ export function buildAnswerRetrievalPlan(params: {
         reason: "collection_entries_missing",
         requiredFields: ["collection_entries"],
         candidatePool: "normalized_collection_facts",
+        maxPasses: 1
+      });
+    } else if (isIdentityProfileQuery(params.queryText)) {
+      familyConfidence = 0.96;
+      supportCompletenessTarget = 0.8;
+      queryExpansionTerms.add("identity");
+      queryExpansionTerms.add("gender identity");
+      queryExpansionTerms.add("transgender");
+      queryExpansionTerms.add("trans woman");
+      queryExpansionTerms.add("trans man");
+      queryExpansionTerms.add("queer");
+      queryExpansionTerms.add("nonbinary");
+      suppressionPools.push("career_support", "health_support", "mental_health_support", "exact_detail_support", "generic_snippet_support");
+      bannedExpansionTerms.add("career");
+      bannedExpansionTerms.add("job");
+      bannedExpansionTerms.add("mental");
+      bannedExpansionTerms.add("health");
+      targetedBackfill.push("profile_support");
+      targetedBackfillRequests.push({
+        reason: "report_payload_missing",
+        requiredFields: ["profile_support"],
+        candidatePool: "profile_report_support",
         maxPasses: 1
       });
     } else if (isCommunityMembershipQuery(params.queryText)) {
@@ -1049,6 +1392,13 @@ export function buildAnswerRetrievalPlan(params: {
       queryExpansionTerms.add("enjoy");
       queryExpansionTerms.add("style");
       queryExpansionTerms.add("dance");
+      if (/\bkids?\b|\bchildren\b/iu.test(params.queryText)) {
+        queryExpansionTerms.add("kids");
+        queryExpansionTerms.add("children");
+        queryExpansionTerms.add("family");
+        queryExpansionTerms.add("love");
+        queryExpansionTerms.add("favorites");
+      }
       if (isBooksByAuthorPreferenceQuery(params.queryText)) {
         queryExpansionTerms.add("books");
         queryExpansionTerms.add("reading");
@@ -1140,6 +1490,7 @@ export function buildAnswerRetrievalPlan(params: {
         candidatePools.splice(2, 0, "career_support");
       }
       familyConfidence = 0.85;
+      supportCompletenessTarget = 0.8;
       queryExpansionTerms.add("career");
       queryExpansionTerms.add("job");
       queryExpansionTerms.add("work");
@@ -1149,6 +1500,13 @@ export function buildAnswerRetrievalPlan(params: {
       queryExpansionTerms.add("counselor");
       queryExpansionTerms.add("mental");
       queryExpansionTerms.add("health");
+      targetedBackfill.push("career_support");
+      targetedBackfillRequests.push({
+        reason: "report_payload_missing",
+        requiredFields: ["profile_support"],
+        candidatePool: "career_support",
+        maxPasses: 1
+      });
       suppressionPools.push("exact_detail_support", "generic_snippet_support");
     } else if (isMedicalInferenceQuery(params.queryText)) {
       familyConfidence = 0.88;
@@ -1217,7 +1575,63 @@ export function buildAnswerRetrievalPlan(params: {
   if (family === "list_set") {
     ownerEligibilityHints.push("canonical_list_set");
     suppressionHints.push("canonical_exact_detail", "runtime_exact_detail");
-    if (lane === "event_list" || isEventListQuery(params.queryText)) {
+    if (lane === "set_fact") {
+      familyConfidence = 0.92;
+      supportCompletenessTarget = 0.75;
+      requiredFields.push("set_entries");
+      targetedBackfill.push("set_entries");
+      targetedBackfillRequests.push({
+        reason: "set_entries_missing",
+        requiredFields: ["set_entries"],
+        candidatePool: "set_entries",
+        maxPasses: 1
+      });
+      if (/\bpaint(?:ed|ing)\b/iu.test(params.queryText)) {
+        queryExpansionTerms.add("painted");
+        queryExpansionTerms.add("painting");
+        queryExpansionTerms.add("paint");
+      }
+      if (isConcretePotteryItemQuery(params.queryText)) {
+        queryExpansionTerms.add("pottery");
+        queryExpansionTerms.add("ceramics");
+        queryExpansionTerms.add("bowl");
+        queryExpansionTerms.add("plate");
+        queryExpansionTerms.add("mug");
+      }
+      if (isConcreteInstrumentInventoryQuery(params.queryText)) {
+        queryExpansionTerms.add("instrument");
+        queryExpansionTerms.add("play");
+        queryExpansionTerms.add("guitar");
+        queryExpansionTerms.add("piano");
+        queryExpansionTerms.add("drums");
+      }
+      if (isConcreteMusicArtistHistoryQuery(params.queryText)) {
+        queryExpansionTerms.add("concert");
+        queryExpansionTerms.add("live music");
+        queryExpansionTerms.add("band");
+        queryExpansionTerms.add("artist");
+        queryExpansionTerms.add("festival");
+      }
+      if (isConcretePetNameQuery(params.queryText)) {
+        queryExpansionTerms.add("pet");
+        queryExpansionTerms.add("pets");
+        queryExpansionTerms.add("dog");
+        queryExpansionTerms.add("cat");
+        queryExpansionTerms.add("name");
+      }
+      if (isConcreteSymbolInventoryQuery(params.queryText)) {
+        queryExpansionTerms.add("symbol");
+        queryExpansionTerms.add("important");
+        queryExpansionTerms.add("meaning");
+      }
+      if (/\b(?:buy|bought|purchase|purchased)\b/iu.test(params.queryText)) {
+        queryExpansionTerms.add("bought");
+        queryExpansionTerms.add("buy");
+        queryExpansionTerms.add("purchased");
+        queryExpansionTerms.add("items");
+      }
+      suppressionPools.push("exact_detail_support", "generic_snippet_support");
+    } else if (lane === "event_list" || isEventListQuery(params.queryText)) {
       familyConfidence = 0.95;
       supportCompletenessTarget = 0.75;
       requiredFields.push("event_list_entries");
@@ -1233,6 +1647,37 @@ export function buildAnswerRetrievalPlan(params: {
       queryExpansionTerms.add("attended");
       queryExpansionTerms.add("support");
       queryExpansionTerms.add("mentoring");
+      queryExpansionTerms.add("activities");
+      queryExpansionTerms.add("activity");
+      queryExpansionTerms.add("hobbies");
+      queryExpansionTerms.add("hobby");
+      queryExpansionTerms.add("classes");
+      queryExpansionTerms.add("workshops");
+      if (/\bactivities?\b|\bpartake\b|\bdestress\b|\brelax\b|\bhobbies?\b/iu.test(params.queryText)) {
+        queryExpansionTerms.add("pottery");
+        queryExpansionTerms.add("painting");
+        queryExpansionTerms.add("camping");
+        queryExpansionTerms.add("swimming");
+        queryExpansionTerms.add("running");
+      }
+      if (isCommunityParticipationQuery(params.queryText)) {
+        queryExpansionTerms.add("lgbtq");
+        queryExpansionTerms.add("community");
+        queryExpansionTerms.add("participating");
+        queryExpansionTerms.add("pride");
+      }
+      if (/\bhelp\s+(?:children|kids|youth|young people)\b/iu.test(params.queryText)) {
+        queryExpansionTerms.add("children");
+        queryExpansionTerms.add("youth");
+        queryExpansionTerms.add("school");
+        queryExpansionTerms.add("speech");
+        queryExpansionTerms.add("mentoring");
+      }
+      if (/\bin what ways\b/iu.test(params.queryText) && /\blgbtq\+?\b|\bcommunity\b/iu.test(params.queryText)) {
+        queryExpansionTerms.add("activist");
+        queryExpansionTerms.add("art show");
+        queryExpansionTerms.add("mentoring");
+      }
       suppressionPools.push("exact_detail_support", "generic_snippet_support");
     } else if (lane === "book_list" || isBookListQuery(params.queryText)) {
       familyConfidence = 0.95;
@@ -1260,6 +1705,15 @@ export function buildAnswerRetrievalPlan(params: {
         candidatePool: "support_network_support",
         maxPasses: 1
       });
+      queryExpansionTerms.add("support");
+      queryExpansionTerms.add("supports");
+      queryExpansionTerms.add("supportive");
+      queryExpansionTerms.add("friends");
+      queryExpansionTerms.add("family");
+      queryExpansionTerms.add("mentor");
+      queryExpansionTerms.add("mentors");
+      queryExpansionTerms.add("rocks");
+      queryExpansionTerms.add("there for");
       suppressionPools.push("exact_detail_support", "generic_snippet_support");
     } else if (lane === "location_history") {
       familyConfidence = 0.9;
@@ -1277,6 +1731,12 @@ export function buildAnswerRetrievalPlan(params: {
       queryExpansionTerms.add("made friends");
       queryExpansionTerms.add("vacationed");
       queryExpansionTerms.add("visited");
+      queryExpansionTerms.add("camped");
+      queryExpansionTerms.add("camping");
+      queryExpansionTerms.add("outdoors");
+      queryExpansionTerms.add("nature");
+      queryExpansionTerms.add("campfire");
+      queryExpansionTerms.add("hiking");
       suppressionPools.push("exact_detail_support", "generic_snippet_support");
     }
   }
@@ -1309,6 +1769,63 @@ export function buildAnswerRetrievalPlan(params: {
       queryExpansionTerms.add("sponsor");
       queryExpansionTerms.add("reached out");
     }
+    const exactDetailFamily = inferExactDetailQuestionFamily(params.queryText);
+    if (exactDetailFamily === "pet_name") {
+      queryExpansionTerms.add("pet");
+      queryExpansionTerms.add("cat");
+      queryExpansionTerms.add("dog");
+      queryExpansionTerms.add("name");
+    }
+    if (exactDetailFamily === "brand") {
+      queryExpansionTerms.add("brand");
+      queryExpansionTerms.add("favorite");
+      queryExpansionTerms.add("shoes");
+    }
+    if (exactDetailFamily === "count") {
+      queryExpansionTerms.add("count");
+      queryExpansionTerms.add("number");
+      queryExpansionTerms.add("own");
+    }
+    if (exactDetailFamily === "service_name") {
+      queryExpansionTerms.add("service");
+      queryExpansionTerms.add("platform");
+      queryExpansionTerms.add("app");
+      queryExpansionTerms.add("using");
+    }
+    if (exactDetailFamily === "venue") {
+      queryExpansionTerms.add("where");
+      queryExpansionTerms.add("attend");
+      queryExpansionTerms.add("take classes");
+      queryExpansionTerms.add("completed");
+    }
+    if (exactDetailFamily === "certification") {
+      queryExpansionTerms.add("certification");
+      queryExpansionTerms.add("completed");
+      queryExpansionTerms.add("course");
+    }
+    if (exactDetailFamily === "capacity") {
+      queryExpansionTerms.add("ram");
+      queryExpansionTerms.add("memory");
+      queryExpansionTerms.add("gb");
+    }
+    if (exactDetailFamily === "speed") {
+      queryExpansionTerms.add("speed");
+      queryExpansionTerms.add("mbps");
+      queryExpansionTerms.add("internet");
+    }
+    if (exactDetailFamily === "time_of_day") {
+      queryExpansionTerms.add("time");
+      queryExpansionTerms.add("pm");
+      queryExpansionTerms.add("am");
+      queryExpansionTerms.add("stop");
+    }
+    if (exactDetailFamily === "color") {
+      queryExpansionTerms.add("color");
+      queryExpansionTerms.add("hair");
+      queryExpansionTerms.add("dyed");
+      queryExpansionTerms.add("chose");
+      queryExpansionTerms.add("picked");
+    }
     if (isStressBusterActivityQuery(params.queryText)) {
       queryExpansionTerms.add("started doing");
       queryExpansionTerms.add("stress-buster");
@@ -1325,10 +1842,70 @@ export function buildAnswerRetrievalPlan(params: {
       queryExpansionTerms.add("learned");
       queryExpansionTerms.add("after");
     }
+    if (answerKind === "utterance_fact") {
+      queryExpansionTerms.add("said");
+      queryExpansionTerms.add("quote");
+      queryExpansionTerms.add("mentioned");
+      queryExpansionTerms.add("talked about");
+    }
+    if (answerKind === "direct_reason") {
+      queryExpansionTerms.add("reason");
+      queryExpansionTerms.add("because");
+      queryExpansionTerms.add("since");
+      queryExpansionTerms.add("motivated");
+      queryExpansionTerms.add("inspired");
+    }
+    if (answerKind === "value_slot" || answerKind === "direct_attribute") {
+      queryExpansionTerms.add("specific");
+      queryExpansionTerms.add("named");
+      queryExpansionTerms.add("exact");
+    }
   }
+  if (family === "exact_detail" && isConcreteReasonValueQuery(params.queryText)) {
+    supportCompletenessTarget = 1;
+    if (!requiredFields.includes("exact_detail_support")) {
+      requiredFields.push("exact_detail_support");
+    }
+    if (!targetedBackfill.includes("exact_detail_support")) {
+      targetedBackfill.push("exact_detail_support");
+    }
+    if (!targetedBackfillRequests.some((request) => request.reason === "exact_detail_support_missing")) {
+      targetedBackfillRequests.push({
+        reason: "exact_detail_support_missing",
+        requiredFields: ["exact_detail_support"],
+        candidatePool: "direct_detail_support",
+        maxPasses: 1
+      });
+    }
+    queryExpansionTerms.add("reason");
+    queryExpansionTerms.add("because");
+    queryExpansionTerms.add("since");
+    queryExpansionTerms.add("motivated");
+    queryExpansionTerms.add("inspired");
+  }
+  if (family === "exact_detail" && isConcreteCountryOriginQuery(params.queryText)) {
+    if (!candidatePools.includes("subject_object_facts")) {
+      candidatePools.splice(Math.min(2, candidatePools.length), 0, "subject_object_facts");
+    }
+    queryExpansionTerms.add("country");
+    queryExpansionTerms.add("from");
+    queryExpansionTerms.add("origin");
+    suppressionPools.push("generic_snippet_support");
+  }
+  contractAssemblyState.familyConfidence = familyConfidence;
+  contractAssemblyState.supportCompletenessTarget = supportCompletenessTarget;
+  contractAssemblyState.rescuePolicy = rescuePolicy;
+  applyContractCandidateAssemblyAdjustments({
+    queryText: params.queryText,
+    reportKind: params.reportKind,
+    primaryTypedContract: controllerIntent.primaryTypedContract ?? null,
+    state: contractAssemblyState
+  });
   return {
     family,
     lane,
+    answerKind,
+    controllerIntent,
     resolvedSubjectEntityId,
     resolvedObjectEntityId,
     resolvedEventKey,
@@ -1346,9 +1923,9 @@ export function buildAnswerRetrievalPlan(params: {
     bannedExpansionTerms: unique([...bannedExpansionTerms]),
     ownerEligibilityHints,
     suppressionHints,
-    familyConfidence,
-    supportCompletenessTarget,
-    rescuePolicy,
+    familyConfidence: contractAssemblyState.familyConfidence,
+    supportCompletenessTarget: contractAssemblyState.supportCompletenessTarget,
+    rescuePolicy: contractAssemblyState.rescuePolicy,
     reason:
       params.supportObjectType
         ? `Plan derived for ${lane} (${family}) answers using ${params.supportObjectType}.`

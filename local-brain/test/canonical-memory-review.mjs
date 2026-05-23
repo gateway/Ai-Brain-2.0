@@ -45,6 +45,7 @@ import { selectMixedContextCandidate } from "../dist/canonical-memory/mixed-cont
 import { resolvePairSubjectsFromAliasRows } from "../dist/canonical-memory/graph-reader.js";
 import {
   computeRelativeWindow,
+  deriveTypedMemoryNamespaceSelfBindingCandidate,
   extractPersonTimeFacts,
   extractPreferenceFacts,
   extractRelativeTimeHint,
@@ -55,6 +56,7 @@ import {
   extractPossessiveQuerySurfaceNames,
   extractPrimaryQuerySurfaceNames,
   extractQuerySurfaceNames,
+  inferSubjectBoundAggregationScope,
   isPairAggregationQuery
 } from "../dist/retrieval/query-subjects.js";
 import { resolveCanonicalSubjectBinding } from "../dist/retrieval/canonical-subject-binding.js";
@@ -105,6 +107,17 @@ test("profile summaries promote identity and relationship status into authoritat
   assert.equal(
     inferCanonicalProfileSummaryPredicateFamily("current_picture", "Caroline's current picture is that she works at Northstar Labs."),
     "profile_state"
+  );
+});
+
+test("temporal event key inference recognizes school speech and support-network meetup rows", () => {
+  assert.equal(
+    inferTemporalEventKeyFromText("When did Caroline give a speech at a school?"),
+    "school_speech"
+  );
+  assert.equal(
+    inferTemporalEventKeyFromText("Caroline said they met up with friends, family, and mentors last week."),
+    "support_network_meetup"
   );
 });
 
@@ -474,6 +487,7 @@ test("query surface extraction strips question words from named-subject spans", 
   assert.deepEqual(extractPrimaryQuerySurfaceNames("What Jon thinks the ideal dance studio should look like?"), ["Jon"]);
   assert.deepEqual(extractPrimaryQuerySurfaceNames("When was Jon in Paris?"), ["Jon"]);
   assert.deepEqual(extractPrimaryQuerySurfaceNames("What books has Melanie read?"), ["Melanie"]);
+  assert.deepEqual(extractPrimaryQuerySurfaceNames("Where has Melanie camped?"), ["Melanie"]);
   assert.deepEqual(extractPrimaryQuerySurfaceNames("What LGBTQ+ events has Caroline participated in?"), ["Caroline"]);
   assert.deepEqual(extractPrimaryQuerySurfaceNames("What type of instrument does Caroline play?"), ["Caroline"]);
   assert.deepEqual(extractPrimaryQuerySurfaceNames("Who did Maria have dinner with on May 3, 2023?"), ["Maria"]);
@@ -484,6 +498,9 @@ test("query surface extraction strips question words from named-subject spans", 
   assert.deepEqual(extractPossessiveQuerySurfaceNames("What are John's goals for his career that are not related to his basketball skills?"), ["John"]);
   assert.deepEqual(extractPairQuerySurfaceNames("Which country do Calvin and Dave want to meet in?"), ["Calvin", "Dave"]);
   assert.equal(isPairAggregationQuery("What kind of interests do Joanna and Nate share?"), true);
+  assert.equal(inferSubjectBoundAggregationScope("What do Melanie's kids like?", false), "dependent_group");
+  assert.equal(inferSubjectBoundAggregationScope("What books has Melanie read?", false), "primary_subject");
+  assert.equal(inferSubjectBoundAggregationScope("When did Caroline and Melanie go to a pride festival together?", true), "pair_subject");
 });
 
 test("possessive anchors override mixed-subject ambiguity when the top provenance subject matches", () => {
@@ -1204,6 +1221,59 @@ test("typed preference extraction does not inject a private self subject without
     "Steve Tietze"
   );
   assert.ok(boundSelfFacts.every((fact) => fact.subjectName === "Steve Tietze"));
+});
+
+test("typed-memory self-binding synthesis picks a dominant first-person candidate", () => {
+  const candidate = deriveTypedMemoryNamespaceSelfBindingCandidate([
+    {
+      candidateName: "Steve Tietze",
+      aliases: ["Steve"],
+      source: "structured_truth_binding",
+      evidenceKey: "m1:speaker"
+    },
+    {
+      candidateName: "Steve Tietze",
+      aliases: ["Steve"],
+      source: "typed_scalar_truth",
+      evidenceKey: "m2:preference"
+    },
+    {
+      candidateName: "Steve Tietze",
+      aliases: ["Steve"],
+      source: "event_truth",
+      evidenceKey: "m3:person_time"
+    },
+    {
+      candidateName: "Sarah",
+      aliases: [],
+      source: "structured_truth_binding",
+      evidenceKey: "m4:speaker"
+    }
+  ]);
+
+  assert.equal(candidate?.canonicalName, "Steve Tietze");
+  assert.equal(candidate?.evidenceCount, 3);
+  assert.equal(candidate?.source, "typed_scalar_truth");
+  assert.ok(candidate?.aliases.includes("Steve"));
+});
+
+test("typed-memory self-binding synthesis abstains on tied candidates", () => {
+  const candidate = deriveTypedMemoryNamespaceSelfBindingCandidate([
+    {
+      candidateName: "Steve Tietze",
+      aliases: ["Steve"],
+      source: "structured_truth_binding",
+      evidenceKey: "m1:speaker"
+    },
+    {
+      candidateName: "Sarah",
+      aliases: [],
+      source: "structured_truth_binding",
+      evidenceKey: "m2:speaker"
+    }
+  ]);
+
+  assert.equal(candidate, null);
 });
 
 test("typed temporal extraction recognizes month-scoped relative hints used by canonical rebuild", () => {

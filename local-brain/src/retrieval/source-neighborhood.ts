@@ -58,6 +58,26 @@ export function extendResultsWithLinkedSourceRows(
       .filter((value): value is string => typeof value === "string" && value.length > 0)
   );
 
+  const normalize = (value: unknown): string | null => {
+    if (typeof value !== "string") {
+      return null;
+    }
+    const normalized = value.trim().toLowerCase();
+    return normalized.length > 0 ? normalized : null;
+  };
+  const readSignals = (result: RecallResult): readonly string[] => {
+    const metadata =
+      typeof result.provenance.metadata === "object" && result.provenance.metadata !== null
+        ? (result.provenance.metadata as Record<string, unknown>)
+        : null;
+    return [
+      normalize(result.provenance.subject_name),
+      normalize(result.provenance.speaker_name),
+      normalize(metadata?.subject_name),
+      normalize(metadata?.speaker_name)
+    ].filter((value): value is string => Boolean(value));
+  };
+  const seedSignals = new Set(seedResults.flatMap((result) => readSignals(result)));
   const deduped: RecallResult[] = [];
   const seen = new Set<string>();
   for (const result of [...seedResults, ...allResults]) {
@@ -77,6 +97,12 @@ export function extendResultsWithLinkedSourceRows(
       (hasReadableSourceUri && (sharesArtifact || sharesObservation || sharesChunk || sharesSourceMemory));
     if (!keep) {
       continue;
+    }
+    if (!seedResults.includes(result) && seedSignals.size > 0) {
+      const resultSignals = readSignals(result);
+      if (resultSignals.length > 0 && !resultSignals.some((signal) => seedSignals.has(signal))) {
+        continue;
+      }
     }
     const key = `${result.memoryId}\u0000${result.artifactId ?? ""}\u0000${result.content}`;
     if (seen.has(key)) {

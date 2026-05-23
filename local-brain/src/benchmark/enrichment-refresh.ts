@@ -43,7 +43,11 @@ function outputDir(): string {
 async function latestArtifactPath(prefix: string, excludePath?: string): Promise<string | null> {
   const entries = await readdir(outputDir());
   const matches = entries
-    .filter((entry) => entry.startsWith(`${prefix}-`) && entry.endsWith(".json"))
+    .filter((entry) =>
+      prefix === "locomo"
+        ? /^locomo-\d{4}-\d{2}-\d{2}T.*\.json$/u.test(entry) && !entry.includes(".partial")
+        : entry.startsWith(`${prefix}-`) && entry.endsWith(".json")
+    )
     .sort()
     .map((entry) => path.join(outputDir(), entry))
     .filter((entry) => entry !== excludePath);

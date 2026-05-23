@@ -1,5 +1,6 @@
 import type { RecallResult } from "../../../types.js";
 import type { ExactDetailQuestionFamily } from "../../exact-detail-question-family.js";
+import { extractFirstTravelTargetLocation } from "../../temporal/first-travel-gating.js";
 
 export interface ExactDetailClaimRuntimeHelpers {
   readonly isPreciseFactDetailQuery: (queryText: string) => boolean;
@@ -526,8 +527,7 @@ export function deriveFirstTravelSourceChronologyClaimText(
     return null;
   }
   const entityFocus = helpers.parseQueryEntityFocus(queryText);
-  const travelTargetMatch = queryText.match(/\btravel\s+to\s+([A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*)*)/u);
-  const travelTargetHint = helpers.normalizeWhitespace(travelTargetMatch?.[1] ?? "").toLowerCase();
+  const travelTargetHint = helpers.normalizeWhitespace(extractFirstTravelTargetLocation(queryText) ?? "").toLowerCase();
   const entityHints = (
     entityFocus.primaryHints.length > 0
       ? entityFocus.primaryHints
@@ -544,7 +544,11 @@ export function deriveFirstTravelSourceChronologyClaimText(
     return null;
   }
 
-  const actualCue = /\b(?:just went|went to|travel(?:ed)? to|visited|trip to|festival in)\b/i;
+  if (!travelTargetHint) {
+    return null;
+  }
+  const travelLocationPattern = new RegExp(`\\b${travelTargetHint.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\b`, "i");
+  const actualCue = /\b(?:just went|went to|travel(?:ed)? to|visited|trip to|arrived in|flew to|first time in)\b/i;
   const chronologyRows = sourceUris
     .map((sourceUri) => {
       const content = helpers.readSourceText(sourceUri);
@@ -557,7 +561,7 @@ export function deriveFirstTravelSourceChronologyClaimText(
       const primaryText = helpers.normalizeWhitespace(primaryTurns.map((turn) => turn.text).join(" "));
       return {
         capturedAt,
-        hasActualTravel: /\btokyo\b/i.test(primaryText) && actualCue.test(primaryText)
+        hasActualTravel: travelLocationPattern.test(primaryText) && actualCue.test(primaryText)
       };
     })
     .filter((row): row is { readonly capturedAt: string; readonly hasActualTravel: boolean } => typeof row?.capturedAt === "string" && row.capturedAt.length > 0)

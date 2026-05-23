@@ -169,6 +169,40 @@ function isEventAlignedTemporalSentence(queryEventKey: string | null, sentence: 
     return true;
   }
   if (
+    queryEventKey === "child_birthday" &&
+    /\bbirthday\b/u.test(normalizedSentence) &&
+    /\b(?:daughter|son|child)\b/u.test(normalizedSentence)
+  ) {
+    return true;
+  }
+  if (
+    queryEventKey === "signup_pottery_class" &&
+    /\bpottery class\b/u.test(normalizedSentence) &&
+    /\b(?:sign(?:ed)? up|enroll(?:ed|ing)?|register(?:ed|ing)?)\b/u.test(normalizedSentence)
+  ) {
+    return true;
+  }
+  if (
+    queryEventKey === "make_plate_pottery_class" &&
+    /\bplate\b/u.test(normalizedSentence) &&
+    /\b(?:pottery|clay)\b/u.test(normalizedSentence)
+  ) {
+    return true;
+  }
+  if (
+    queryEventKey === "get_hurt" &&
+    /\b(?:got hurt|hurt|injur(?:ed|y)|accident)\b/u.test(normalizedSentence)
+  ) {
+    return true;
+  }
+  if (
+    queryEventKey === "pride_festival" &&
+    /\bpride\b/u.test(normalizedSentence) &&
+    /\b(?:festival|parade)\b/u.test(normalizedSentence)
+  ) {
+    return true;
+  }
+  if (
     queryEventKey === "start_surfing" &&
     /\bsurf\w*\b/u.test(normalizedSentence) &&
     (/\bstarted?\b/u.test(normalizedSentence) || /\bfirst time\b/u.test(normalizedSentence) || /\byears?\s+ago\b/u.test(normalizedSentence))
@@ -638,7 +672,9 @@ export function readTemporalRecallShape(queryText: string, result: RecallResult)
           ? "aligned"
           : "none"
       : eventKey
-        ? "exact"
+        ? candidateTexts.some((value) => isTemporalQueryTextAligned(queryText, value))
+          ? "exact"
+          : "aligned"
         : hasTemporalSignal && candidateTexts.some((value) => isTemporalQueryTextAligned(queryText, value))
           ? "aligned"
           : "none";

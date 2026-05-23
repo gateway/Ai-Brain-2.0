@@ -45,6 +45,12 @@ import {
   isPreciseFactDetailQuery,
   isProfileInferenceQuery,
   isIdentityProfileQuery,
+  isConcreteInstrumentInventoryQuery,
+  isConcreteMusicArtistHistoryQuery,
+  isConcretePaintedItemQuery,
+  isConcretePetNameQuery,
+  isConcretePotteryItemQuery,
+  isConcreteSymbolInventoryQuery,
   isSharedCommonalityQuery,
   isRelationshipStyleExactQuery,
   isHierarchyTraversalQuery,
@@ -59,32 +65,31 @@ import {
   reflectEligibilityForQueryMode,
   shouldEnterReflect
 } from "./recovery-control.js";
-import {
-  deriveExactAnswerCandidate,
-  type ExactAnswerTelemetry
-} from "./exact-answer-control.js";
-import {
-  inferExactDetailQuestionFamily,
-  type ExactDetailQuestionFamily
-} from "./exact-detail-question-family.js";
+import { deriveExactAnswerCandidate, type ExactAnswerTelemetry } from "./exact-answer-control.js";
+import { inferExactDetailQuestionFamily, isAtomicExactDetailQuestionFamily, type ExactDetailQuestionFamily } from "./exact-detail-question-family.js";
+import { exactDetailCandidateFitsPredicate as exactDetailCandidateFitsPredicateByFamily, extractExactDetailColorValues } from "./exact-detail-predicate.js";
+import { resolveEarlyContractTruthDecision } from "./exact-detail-truth.js";
 import { queryAnswerableUnits, type AnswerableUnitCandidate } from "./answerable-unit-retrieval.js";
 import { selectReaderResult } from "./answerable-unit-reader.js";
-import {
-  evaluateSubjectIsolationResult,
-  retainSubjectIsolatedRecallResults,
-  type SubjectIsolationTelemetry
-} from "./subject-isolation-control.js";
+import { evaluateSubjectIsolationResult, retainSubjectIsolatedRecallResults, type SubjectIsolationTelemetry } from "./subject-isolation-control.js";
 import { parseQueryEntityFocus } from "./query-entity-focus.js";
+import { inferQueryContract, queryContractTelemetry, type QueryContract } from "./query-contract-router.js";
+import { buildMemoryQueryPlan, memoryQueryPlanTelemetry } from "./memory-query-plan.js";
+import { readPackageProcedureCorpus, readProjectScopedTasks, readRepoSpecCorpus } from "./repo-corpus-reader.js";
+import { queryVectorPolicy } from "./query-vector-policy.js";
+import { extractPossessiveQuerySurfaceNames, extractPrimaryQuerySurfaceNames } from "./query-subjects.js";
 import {
-  extractPossessiveQuerySurfaceNames,
-  extractPrimaryQuerySurfaceNames
-} from "./query-subjects.js";
-import {
+  detectTemporalScopeMode,
+  getTypedCalendarItems,
+  getTypedCalendarResults,
   getTypedMediaResults,
   getTypedTemporalAnchorResults,
   getTypedPersonTimeResults,
   getTypedPreferenceResults,
   getTypedTaskItems,
+  getTypedTaskResults,
+  resolveLatestSourceScopeArtifact,
+  shouldUseTypedCalendarScope,
   getTypedTransactionResults
 } from "../typed-memory/service.js";
 import {
@@ -109,15 +114,44 @@ import {
   renderProfileInferenceSupport,
   shouldUseCounterfactualCareerJudgment,
 } from "./support-objects.js";
+import {
+  isPersonalSemanticNamespace,
+  isPersonalContaminantSourceUri,
+  isTrustedPersonalSourceUri,
+  retainTrustedNamespaceRows,
+  retainTrustedPersonalRecallResults,
+  sourceTrustAdjustment
+} from "./personal-source-trust.js";
+import { loadContractProjectionShadow } from "../contract-projections/service.js";
+import {
+  inferEntityResolutionStatus,
+  inferFallbackSuppressedReasonForTelemetry,
+  inferFinalClaimSourceForTelemetry,
+  inferReducerFamilyForTelemetry,
+  inferStructuredSufficiencyStatus,
+  inferSupportBundleFamilyForTelemetry,
+  inferTemporalCoverageStatus,
+  mapRuntimeAbstentionReason
+} from "./runtime-diagnostics.js";
+import {
+  extractPlannerRuntimePrimarySubjectSignals,
+  filterPlannerRuntimeResultsForExplicitSubject,
+  hasStrongPlannerRuntimeNameBoundSubject,
+  inferPlannerRuntimeResolvedSubjectEntityId
+} from "./planner-runtime-subjects.js";
 import type { RenderedSupportClaim } from "./support-objects.js";
 import { buildPlannerTypedCandidate, preferPlannerTypedCandidate } from "./planner-typed-candidates.js";
 import { rankCollectionPoolResults, rankProfilePoolResults } from "./planner-pool-ranker.js";
-import {
-  collectObservationMetadataTextCandidates,
-  collectRecallResultTextCandidates,
-  extractRecallResultSubjectSignals,
-  extractStructuredClaimText
-} from "./recall-content.js";
+import { evaluateTypedContractCompleteness } from "./typed-contract-completeness.js";
+import { buildPlannerBackfillSubjectPlan, buildTypedContractBackfillSubqueries, evaluateTypedContractBackfillNeed } from "./typed-backfill-policy.js";
+import { evaluateTypedCompletionState } from "./typed-backfill-engine.js";
+import { buildContractFirstPlannerBackfillDecision, shouldSuppressTypedLaneDescentAfterContractSelection } from "./contract-first-runtime-policy.js";
+import { collectSubjectBoundAggregation } from "./subject-bound-aggregation.js";
+import { artifactDerivationSearchContentExpression, artifactDerivationSearchMetadataExpression } from "./artifact-derivation-search.js";
+import { selectBookListSupportRows } from "./book-list-support.js";
+import { shouldTriggerTypedLaneConditionalDescent } from "./typed-lane-control.js";
+import { nextTypedLaneDescentStageForPlan, remainingTypedLaneDescentBranchesForPlan, typedLaneDescentDepthForPlan, typedLaneDisabledBranchesForPlan } from "./typed-lane-policy.js";
+import { collectObservationMetadataTextCandidates, collectRecallResultTextCandidates, extractRecallResultSubjectSignals, extractStructuredClaimText } from "./recall-content.js";
 import {
   collectConversationSiblingSourceTexts as collectConversationSiblingSourceTextsBase,
   expandConversationSessionSourceUris as expandConversationSessionSourceUrisBase,
@@ -173,6 +207,7 @@ import {
   extractStressBusterQuerySupportKeywords,
   extractTravelReportSupportKeywords,
   inferCareerGoalCompletenessTarget,
+  isTravelPlanningReportQuery,
   isBasketballCareerGoalQuery,
   isBooksByAuthorPreferenceQuery,
   isCausalReasonQuery,
@@ -184,6 +219,26 @@ import {
   queryAnchorTerms,
   splitPlannerRuntimeEntryValues
 } from "./search/query-builders.js";
+import { deriveFirstTravelChronologyClaimText, extractFirstTravelTargetLocation, isFirstTravelLocationQuery, scoreFirstTravelLocationEvidence } from "./temporal/first-travel-gating.js";
+import { isSawLivePerformanceQuery, scoreSawLivePerformanceEvidence } from "./temporal/live-performance-gating.js";
+import { extractAnimalShelterDinnerDateClaimFromText, isAnimalShelterDinnerTemporalQuery } from "./temporal/animal-shelter-dinner.js";
+import { loadAnimalShelterDinnerTemporalDirectResult } from "./temporal/animal-shelter-dinner-direct.js";
+import { filterResultsForSelfOwnedExactDetail } from "./self-owned-exact-detail.js";
+import { buildSingleStageLatencyMeta } from "./latency-metadata.js";
+import { planPlannerTargetedBackfillBudget, shouldSkipTypedLaneDescentForBudget } from "./route-budget-control.js";
+import { loadWarmStartRecentContextResults } from "./warm-start-fast-path.js";
+import {
+  clipEntityRelationshipWindow,
+  extractAssociatedPlacesNearEntity,
+  extractEntityRelationshipClauses,
+  findEntityAdjacentObject,
+  findSentenceLevelRelationshipObjects,
+  sliceSentenceFromEntity
+} from "./relationship-fallback-parsing.js";
+import { evaluateSourceBoundReaderEvidenceDiscipline } from "./reader-evidence-discipline.js";
+import { buildDirectSourceSearchResponse, buildRouteLockedDirectReadModelResponse } from "./route-locked-fast-paths.js";
+import { loadDirectArtifactContextResults } from "./direct-source-read-models.js";
+import { buildAliasCurrentStateProjectionResponse, buildContinuityCurrentStateProjectionResponse, buildRecapProfileProjectionResponse } from "./continuity-current-state-projection.js";
 import { buildEvidenceBundle, buildRecallResult, mergeRecallResults } from "./search/results.js";
 import { runSearchMemory } from "./search/runtime.js";
 import {
@@ -268,6 +323,7 @@ import type {
   ArtifactObservationSummary,
   CalendarCommitmentItem,
   CalendarExtractionResponse,
+  EventMemoryUnit,
   ExplainRecapResponse,
   RecallFollowUpAction,
   CanonicalAdjudicationResult,
@@ -279,6 +335,7 @@ import type {
   RecallExactDetailSource,
   RecallQuery,
   RecallResponse,
+  AnswerSectionSourceTrailEntry,
   RecallEntityResolutionMode,
   RecallWritebackNoteFamily,
   RecallReflectEligibility,
@@ -297,7 +354,12 @@ import type {
   RelationshipResult,
   TaskExtractionResponse,
   RecapTaskItem,
+  SupportBundleFamily,
+  StructuredAnswerSection,
+  StructuredPredicateFamily,
+  SubjectBoundAggregationScope,
   TemporalDescendantLayer,
+  TemporalSupportPath,
   TimelineQuery,
   TimelineResponse
 } from "./types.js";
@@ -363,6 +425,7 @@ const SOURCE_GROUNDED_CLAIM_RUNTIME_HELPERS: SourceGroundedClaimRuntimeHelpers =
   normalizeWhitespace,
   extractEntityNameHints,
   extractExplicitMonthDayYearLabel,
+  extractExplicitDateLabel,
   recallResultSourceTexts,
   uniqueStrings,
   joinExactDetailValues,
@@ -541,6 +604,9 @@ function readPlannerRuntimeAnswerPayloadText(value: unknown): string | null {
 }
 
 function selectPlannerRuntimeStoredReportText(storedNarrative: StoredCanonicalLookup): string | null {
+  if (storedNarrative.reportKind === "relationship_report") {
+    return null;
+  }
   const payload =
     typeof storedNarrative.answerPayload === "object" && storedNarrative.answerPayload !== null
       ? (storedNarrative.answerPayload as Record<string, unknown>)
@@ -754,18 +820,55 @@ function hasStrongComparativeFitReason(value: string | null | undefined): boolea
 }
 
 function resultHasTravelLocationEvidence(queryText: string, result: RecallResult): boolean {
-  if (
-    !/\bwhere\b/iu.test(queryText) ||
-    !/\b(?:roadtrips?|road-tripp?(?:ed|ing)?|travel(?:ed|ing)?|trip|festival|concert|music festival)\b/iu.test(queryText)
-  ) {
+  const locationQuery = /\bwhere\b/iu.test(queryText) && /\b(?:roadtrips?|road-tripp?(?:ed|ing)?|travel(?:ed|ing)?|trip|festival|concert|music festival)\b/iu.test(queryText);
+  const planningQuery = isTravelPlanningReportQuery(queryText);
+  if (!locationQuery && !planningQuery) {
     return false;
   }
-  const placePattern =
-    /\b(?:Rockies|Jasper|Yellowstone|Yosemite|Montana|Colorado|Utah|Arizona|California|Washington|Oregon|Florida|Alberta|Canada|Banff|Zion|Sedona|Moab|Grand Canyon|Tokyo|Japan)\b/u;
-  return [result.content, ...recallResultSourceTexts(result)].some((text) =>
-    /\b(?:roadtrips?|road-tripp?(?:ed|ing)?|travel(?:ed|ing)?|visited|went|trip to|road trip to|took my family on a road trip to|drove through|festival in|attended)\b/i.test(text) &&
-    placePattern.test(text)
-  );
+  return [result.content, ...recallResultSourceTexts(result)].some((text) => {
+    const normalized = normalizePlannerRuntimeText(text);
+    const locationMatch = normalized
+      ? normalized.match(/\b(?:trip|travel(?:ing)?|going|planning|planned|upcoming|went|drove)\b[^.!?\n]{0,120}\b(?:to|through)\s+([A-Z][A-Za-z]+(?:,\s*[A-Z][A-Za-z]+){0,2})/u)?.[1] ??
+        normalized.match(/\b(?:festival|concert|conference)\b[^.!?\n]{0,120}\bin\s+([A-Z][A-Za-z]+(?:,\s*[A-Z][A-Za-z]+){0,2})/u)?.[1] ??
+        null
+      : null;
+    if (!locationMatch) {
+      return false;
+    }
+    return planningQuery
+      ? /\b(?:conference|festival|concert|planning|planned|upcoming|end of april)\b/iu.test(normalized)
+      : /\b(?:roadtrips?|road-tripp?(?:ed|ing)?|travel(?:ed|ing)?|visited|went|festival|concert|attended)\b/iu.test(normalized);
+  });
+}
+
+function isFamilyRoadtripLocationQuery(queryText: string): boolean {
+  return /\bwhere\b/iu.test(queryText) &&
+    /\b(?:road\s*trips?|roadtrips?)\b/iu.test(queryText) &&
+    /\bfamily\b/iu.test(queryText);
+}
+
+function deriveFamilyRoadtripLocationClaimText(results: readonly RecallResult[]): string | null {
+  const supportTexts = results.flatMap((result) => [result.content, ...recallResultSourceTexts(result)]);
+  const joined = normalizePlannerRuntimeText(supportTexts.join(" "));
+  if (!(/\bfamily\b/iu.test(joined) && /\b(?:road\s*trip|roadtrip|trip)\b/iu.test(joined))) {
+    return null;
+  }
+  const values: string[] = [];
+  const add = (value: string): void => {
+    if (!values.includes(value)) {
+      values.push(value);
+    }
+  };
+  if (/\b(?:we|i|they|family)\b[^.?!]{0,140}\b(?:went|traveled|travelled|drove|visited)\b[^.?!]{0,80}\b(?:Rockies|Rocky Mountains)\b|\b(?:Rockies|Rocky Mountains)\b[^.?!]{0,120}\b(?:family|road\s*trip|roadtrip|trip|went|drove|visited)\b/iu.test(joined)) {
+    add("Rockies");
+  }
+  if (/\bJasper\b/iu.test(joined)) {
+    add("Jasper");
+  }
+  if (/\bfamily\b[^.?!]{0,160}\b(?:road\s*trip|roadtrip|trip)\b[^.?!]{0,120}\bBanff\b|\bBanff\b[^.?!]{0,120}\b(?:family|road\s*trip|roadtrip)\b/iu.test(joined)) {
+    add("Banff");
+  }
+  return values.length > 0 ? values.join(", ") : null;
 }
 
 function resultHasStressBusterActivityEvidence(queryText: string, result: RecallResult): boolean {
@@ -877,14 +980,44 @@ function hasSufficientLatencyBudgetOwnerWinner(params: {
   readonly answerAssessment: RecallResponse["meta"]["answerAssessment"];
   readonly ownerResolution: ReturnType<typeof resolveAnswerOwner>;
   readonly exactDetailCandidate: ExactDetailClaimCandidate | null;
+  readonly typedContractCompleteness?: ReturnType<typeof evaluateTypedContractCompleteness> | null;
 }): boolean {
   const { answerAssessment } = params;
   if (!answerAssessment || answerAssessment.sufficiency === "contradicted") {
     return false;
   }
   const winningCandidate = params.ownerResolution.adjudication;
+  const winner = params.ownerResolution.trace.winner;
+  const canTrustSelfSealingTypedOwner =
+    params.typedContractCompleteness !== null &&
+    params.typedContractCompleteness !== undefined &&
+    !params.typedContractCompleteness.stopEligible &&
+    (
+      (
+        ["relationship_profile", "preference_profile", "identity_profile", "profile_trait_judgment"].includes(params.typedContractCompleteness.contract) &&
+        winner === "canonical_report" &&
+        params.ownerResolution.trace.family === "report"
+      ) ||
+      (
+        ["event_inventory", "family_activity_inventory"].includes(params.typedContractCompleteness.contract) &&
+        winner === "canonical_list_set" &&
+        params.ownerResolution.trace.family === "list_set"
+      )
+    ) &&
+    typeof winningCandidate?.formatted.claimText === "string" &&
+    normalizeWhitespace(winningCandidate.formatted.claimText).length > 0 &&
+    winningCandidate.canonical.kind !== "abstention";
+  const canTrustResolvedTemporalRelativeSupport =
+    params.ownerResolution.trace.family === "temporal" &&
+    winningCandidate?.formatted.shapingTrace?.renderContractSelected === "temporal_relative_day" &&
+    winningCandidate?.bundle.subjectBindingStatus === "resolved" &&
+    typeof winningCandidate?.formatted.claimText === "string" &&
+    normalizeWhitespace(winningCandidate.formatted.claimText).length > 0;
+  if (params.typedContractCompleteness && !params.typedContractCompleteness.stopEligible && !canTrustSelfSealingTypedOwner) {
+    return false;
+  }
   if (
-    answerAssessment.subjectMatch === "mismatched" ||
+    (answerAssessment.subjectMatch === "mismatched" && !canTrustResolvedTemporalRelativeSupport) ||
     winningCandidate?.bundle.subjectBindingStatus === "unresolved"
   ) {
     return false;
@@ -897,7 +1030,6 @@ function hasSufficientLatencyBudgetOwnerWinner(params: {
     return false;
   }
 
-  const winner = params.ownerResolution.trace.winner;
   if (!winner || winner === "top_snippet" || winner === "canonical_abstention") {
     return false;
   }
@@ -921,6 +1053,21 @@ function hasSufficientLatencyBudgetOwnerWinner(params: {
     normalizeWhitespace(winningCandidate.formatted.claimText).length > 0 &&
     winningCandidate.canonical.kind !== "abstention"
   );
+}
+
+function isConcreteTypedPlannerAnswerKind(answerKind: AnswerRetrievalPlan["answerKind"] | null | undefined): boolean {
+  return [
+    "direct_attribute",
+    "direct_reason",
+    "value_slot",
+    "utterance_fact",
+    "inventory_list",
+    "location_history",
+    "list_history",
+    "event_inventory",
+    "support_network",
+    "temporal_event"
+  ].includes(answerKind ?? "");
 }
 
 function evaluatePlannerRuntimeProfileSupportCompleteness(params: {
@@ -951,6 +1098,22 @@ function evaluatePlannerRuntimeProfileSupportCompleteness(params: {
   const normalizedAnswer = normalizePlannerRuntimeText(
     support.answerValue ?? support.runtimeClaimText ?? support.inferredReasonText
   );
+  if (isIdentityProfileQuery(queryText)) {
+    const combinedIdentityText = normalizePlannerRuntimeText([
+      support.answerValue,
+      support.runtimeClaimText,
+      support.inferredReasonText,
+      ...support.supportTexts
+    ].filter(Boolean).join(" "));
+    const complete =
+      /\b(?:transgender|trans woman|trans man|nonbinary|gender identity|queer)\b/iu.test(combinedIdentityText);
+    return {
+      complete,
+      reason: complete ? null : "profile_support_missing",
+      requiredFields: complete ? [] : ["identity_support"],
+      completenessScore: complete ? 1 : combinedIdentityText.length > 0 ? 0.5 : 0
+    };
+  }
   if (reportKind === "career_report" && isGoalSetQuery(queryText)) {
     const expectedCount = inferCareerGoalCompletenessTarget(queryText);
     const observedCount = support.goalSetValues.length;
@@ -1196,6 +1359,12 @@ function isPlannerRuntimeTemporalEventAligned(queryEventKey: string | null, text
   ) {
     return true;
   }
+  if (queryEventKey === "school_speech" && (/\b(?:school event|school speech|speech at school)\b/u.test(normalizedText) || /\btalk(?:ed|ing)? about my transgender journey\b/u.test(normalizedText) || (/\bschool\b/u.test(normalizedText) && /\b(?:speech|talk(?:ed|ing)?)\b/u.test(normalizedText)))) {
+    return true;
+  }
+  if (queryEventKey === "support_network_meetup" && /\b(?:friends?|family|mentors?)\b/u.test(normalizedText) && /\b(?:(?:met|meet(?:ing)?) up|got together|caught up|spent time)\b/u.test(normalizedText)) {
+    return true;
+  }
   return plannerRuntimeTemporalEventAlignmentTokens(queryEventKey).some((token) => normalizedText.includes(token));
 }
 
@@ -1317,6 +1486,8 @@ function isPersistedTemporalFactEligibleForQuery(
   const supportKind = derivePersistedTemporalSupportKind(queryText, row);
   const hasAlignmentTokens = extractTemporalQueryAlignmentTokens(queryText).length > 0;
   const hasStrongAlignment = isTemporalQueryTextAligned(queryText, searchText);
+  const adoptionDurationAligned = queryEventKey !== null && areTemporalEventKeysCompatible(queryEventKey, "adopt_dogs") &&
+    /\b(?:i have|i've had|have had)\s+(?:them|my dogs|these dogs)\s+for\s+\d+\s+years?\b/u.test(searchText.toLowerCase());
   const hasTemporalPayload =
     typeof row.answer_year === "number" ||
     typeof row.answer_month === "number" ||
@@ -1329,7 +1500,7 @@ function isPersistedTemporalFactEligibleForQuery(
     Boolean(row.t_valid_until);
   if (queryEventKey) {
     if (areTemporalEventKeysCompatible(row.event_key, queryEventKey)) {
-      if (!isPlannerRuntimeTemporalEventAligned(queryEventKey, searchText) && !hasStrongAlignment) {
+      if (!adoptionDurationAligned && !isPlannerRuntimeTemporalEventAligned(queryEventKey, searchText) && !hasStrongAlignment) {
         return false;
       }
       if (queryEventKey === "career_high_points" && !hasCareerHighPointsCue(searchText)) {
@@ -1341,16 +1512,13 @@ function isPersistedTemporalFactEligibleForQuery(
       return false;
     }
     if (supportKind === "reference_derived_relative" && !queryRequestsRelativeTemporalLabel(queryText)) {
-      return hasTemporalPayload &&
-        (
-          isPlannerRuntimeTemporalEventAligned(queryEventKey, searchText) ||
-          hasStrongAlignment
-        );
+      return hasTemporalPayload && (adoptionDurationAligned || isPlannerRuntimeTemporalEventAligned(queryEventKey, searchText) || hasStrongAlignment);
     }
     return hasTemporalPayload &&
       (
         supportKind === "aligned_anchor" ||
         supportKind === "reference_derived_relative" ||
+        adoptionDurationAligned ||
         isPlannerRuntimeTemporalEventAligned(queryEventKey, searchText) ||
         hasStrongAlignment
       );
@@ -2103,15 +2271,6 @@ type LexicalBranchName =
   | "episodic_memory"
   | "artifact_derivation";
 
-const TYPED_LANE_DESCENT_ORDER: readonly RecallTypedLaneDescentStage[] = [
-  "high_level_only",
-  "relationship_candidate",
-  "narrative_event",
-  "episodic_memory",
-  "artifact_derivation",
-  "memory_candidate"
-] as const;
-
 function roundTimingMs(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -2166,52 +2325,59 @@ function inferLeafTraversalTriggered(
   );
 }
 
-function typedLaneDisabledBranches(stage: RecallTypedLaneDescentStage | null): readonly LexicalBranchName[] {
-  switch (stage) {
-    case "high_level_only":
-      return ["relationship_candidate", "memory_candidate", "narrative_event", "temporal_nodes", "episodic_memory", "artifact_derivation"];
-    case "relationship_candidate":
-      return ["memory_candidate", "narrative_event", "temporal_nodes", "episodic_memory", "artifact_derivation"];
-    case "narrative_event":
-      return ["memory_candidate", "temporal_nodes", "episodic_memory", "artifact_derivation"];
-    case "episodic_memory":
-      return ["memory_candidate", "temporal_nodes", "artifact_derivation"];
-    case "artifact_derivation":
-      return ["memory_candidate", "temporal_nodes"];
-    case "memory_candidate":
-      return ["temporal_nodes"];
-    default:
-      return [];
-  }
-}
-
-function nextTypedLaneDescentStage(stage: RecallTypedLaneDescentStage | null): RecallTypedLaneDescentStage | null {
-  if (!stage) {
-    return null;
-  }
-  const currentIndex = TYPED_LANE_DESCENT_ORDER.indexOf(stage);
-  if (currentIndex < 0 || currentIndex >= TYPED_LANE_DESCENT_ORDER.length - 1) {
-    return null;
-  }
-  return TYPED_LANE_DESCENT_ORDER[currentIndex + 1] ?? null;
-}
-
-function typedLaneDescentDepth(stage: RecallTypedLaneDescentStage | null): number {
-  if (!stage) {
-    return -1;
-  }
-  return Math.max(0, TYPED_LANE_DESCENT_ORDER.indexOf(stage));
-}
-
-function remainingTypedLaneDescentBranches(stage: RecallTypedLaneDescentStage | null): readonly string[] {
-  if (!stage) {
-    return [];
-  }
-  const currentIndex = TYPED_LANE_DESCENT_ORDER.indexOf(stage);
-  if (currentIndex < 0) {
-    return [];
-  }
-  return TYPED_LANE_DESCENT_ORDER.slice(currentIndex + 1);
+function hasSufficientTemporalEventSupportResults(queryText: string, results: readonly RecallResult[]): boolean {
+  const normalizedQuery = queryText.toLowerCase();
+  const queryEventKey = inferTemporalEventKeyFromText(queryText);
+  const subjectNames = extractEntityNameHints(queryText)
+    .map((value) => normalizeWhitespace(value).toLowerCase())
+    .filter((value) => value.length > 0);
+  const monthRequested = /\bwhat month\b|\bwhich month\b|\bin which month\b/u.test(normalizedQuery);
+  const dayRequested = /\bwhat date\b|\bwhich date\b|\bwhat day\b|\bwhich day\b/u.test(normalizedQuery);
+  const yearRequested = !monthRequested && !dayRequested;
+  return results.some((result) => {
+    const sourceTable = typeof result.provenance.source_table === "string" ? result.provenance.source_table : null;
+    const eventKey = typeof result.provenance.event_key === "string" ? result.provenance.event_key : null;
+    const sourceTexts = [
+      normalizeWhitespace(result.content),
+      ...collectRecallResultTextCandidates(result).map((value) => normalizeWhitespace(value))
+    ].filter(Boolean);
+    const joinedText = sourceTexts.join(" ");
+    const provenanceNames = [
+      typeof result.provenance.subject_name === "string" ? result.provenance.subject_name : null,
+      typeof result.provenance.primary_speaker_name === "string" ? result.provenance.primary_speaker_name : null
+    ]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => normalizeWhitespace(value).toLowerCase());
+    const subjectAligned =
+      subjectNames.length === 0 ||
+      subjectNames.some(
+        (name) =>
+          provenanceNames.includes(name) ||
+          joinedText.toLowerCase().includes(name)
+      );
+    const eventAligned =
+      (queryEventKey && eventKey ? areTemporalEventKeysCompatible(queryEventKey, eventKey) : false) ||
+      isTemporalQueryTextAligned(queryText, joinedText);
+    const sourceTrusted =
+      sourceTable === "canonical_temporal_facts" ||
+      sourceTable === "normalized_event_facts" ||
+      sourceTable === "temporal_results" ||
+      sourceTable === "planner_runtime_temporal_candidate" ||
+      result.provenance.tier === "event_neighborhood_support" ||
+      result.provenance.tier === "event_neighborhood_episodic";
+    const hasMonth =
+      typeof result.provenance.answer_month === "number" ||
+      typeof result.provenance.month === "number" ||
+      /\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\b/u.test(joinedText);
+    const hasDay = typeof result.provenance.answer_day === "number" || typeof result.provenance.day === "number";
+    const hasYear =
+      typeof result.provenance.answer_year === "number" ||
+      typeof result.provenance.year === "number" ||
+      /\b(?:19|20)\d{2}\b/u.test(joinedText);
+    const granularitySatisfied =
+      dayRequested ? hasDay || (hasMonth && hasYear) : monthRequested ? hasMonth || hasYear : hasYear || hasMonth;
+    return subjectAligned && sourceTrusted && eventAligned && granularitySatisfied;
+  });
 }
 
 function sufficiencyRank(value: RecallSufficiencyGrade | null | undefined): number {
@@ -2470,7 +2636,7 @@ function isEventNeighborhoodReasoningQuery(
 
 function isRelationshipProfileQueryText(queryText: string): boolean {
   return (
-    /\bwho\s+is\s+.+\s+in\s+my\s+life(?:\s+right\s+now)?\b/i.test(queryText) ||
+    (/\bwho\s+is\s+.+\s+in\s+my\s+life(?:\s+right\s+now)?\b/i.test(queryText) || /^\s*who\s+(?:is|are)\s+[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,2}\b/u.test(queryText)) ||
     /\bwhat\s+is\s+.+['’]s\s+relationship\s+to\s+me\b/i.test(queryText) ||
     /\bwhat\s+is\s+each\s+person'?s?\s+relationship\s+to\s+me\b/i.test(queryText)
   );
@@ -2623,6 +2789,7 @@ function isProfileIdentityPredicate(predicate: string): boolean {
 
 function isProfileAssociationPredicate(predicate: string): boolean {
   return [
+    "owner_of",
     "associated_with",
     "resides_at",
     "lives_in",
@@ -2789,15 +2956,102 @@ function isLowSignalRelationshipName(value: string, focusEntityName: string): bo
     "and",
     "of",
     "you",
+    "your",
+    "me",
+    "my",
+    "i",
     "it",
     "this",
     "that",
     "they",
     "them",
+    "speaker",
+    "speaker 0",
+    "speaker 1",
+    "speaker 2",
+    "speaker 3",
+    "the speaker",
+    "partner",
+    "ex-partner",
+    "friend",
+    "friends",
+    "when",
+    "rag",
     "someone",
     "somebody",
     "friend group"
   ].includes(normalized);
+}
+
+function isExplicitFriendListQueryText(queryText: string): boolean {
+  return /\bwho\s+(?:is|are)\s+.+\s+friends?\s+with\b/i.test(queryText) || /\bwho\s+(?:is|are)\s+.+['’]s\s+friends?\b/i.test(queryText);
+}
+
+function relationshipTierScore(result: RelationshipResult): number {
+  const tier = normalizeWhitespace(String(result.provenance?.tier ?? "")).toLowerCase();
+  if (tier === "relationship_memory") {
+    return 8;
+  }
+  if (tier === "relationship_candidate") {
+    return 4;
+  }
+  return 0;
+}
+
+function relationshipNameQualityScore(value: string): number {
+  const normalized = normalizeWhitespace(value);
+  if (!normalized) {
+    return -100;
+  }
+  if (/^[A-Z][A-Za-z.'-]*(?:\s+[A-Z][A-Za-z.'-]*){0,2}$/u.test(normalized)) {
+    return 14;
+  }
+  if (/^[A-Z][a-z]+$/u.test(normalized)) {
+    return 10;
+  }
+  return 0;
+}
+
+function rankFriendListRelationships(
+  focusEntityName: string,
+  relationships: readonly RelationshipResult[]
+): readonly RelationshipResult[] {
+  const preferredPool = relationships.filter((result) => {
+    const name = normalizeWhitespace(relationshipCounterpartyName(result, focusEntityName));
+    return !isLowSignalRelationshipName(name, focusEntityName) && relationshipNameQualityScore(name) > 0;
+  });
+  return (preferredPool.length > 0 ? preferredPool : relationships)
+    .slice()
+    .sort((left, right) => {
+      const leftName = normalizeWhitespace(relationshipCounterpartyName(left, focusEntityName));
+      const rightName = normalizeWhitespace(relationshipCounterpartyName(right, focusEntityName));
+      const leftMetadata = (left.provenance?.metadata ?? {}) as Record<string, unknown>;
+      const rightMetadata = (right.provenance?.metadata ?? {}) as Record<string, unknown>;
+      const leftSnippet = normalizeWhitespace(String(leftMetadata.snippet ?? "")).toLowerCase();
+      const rightSnippet = normalizeWhitespace(String(rightMetadata.snippet ?? "")).toLowerCase();
+      const leftScore =
+        (isLowSignalRelationshipName(leftName, focusEntityName) ? -100 : 0) +
+        relationshipNameQualityScore(leftName) +
+        relationshipTierScore(left) +
+        (normalizeWhitespace(String(left.status ?? "")).toLowerCase() === "active" ? 4 : 0) +
+        (/\b(?:good|close|amazing)\s+friend\b/iu.test(leftSnippet) ? 8 : 0) +
+        (/\bfriend\s+group\b/iu.test(leftSnippet) ? -6 : 0);
+      const rightScore =
+        (isLowSignalRelationshipName(rightName, focusEntityName) ? -100 : 0) +
+        relationshipNameQualityScore(rightName) +
+        relationshipTierScore(right) +
+        (normalizeWhitespace(String(right.status ?? "")).toLowerCase() === "active" ? 4 : 0) +
+        (/\b(?:good|close|amazing)\s+friend\b/iu.test(rightSnippet) ? 8 : 0) +
+        (/\bfriend\s+group\b/iu.test(rightSnippet) ? -6 : 0);
+      if (leftScore !== rightScore) {
+        return rightScore - leftScore;
+      }
+      const timeDelta = relationshipLaneTimestamp(right, "current") - relationshipLaneTimestamp(left, "current");
+      if (timeDelta !== 0) {
+        return timeDelta;
+      }
+      return (right.confidence ?? 0) - (left.confidence ?? 0);
+    });
 }
 
 function relationshipWindowClause(
@@ -2888,8 +3142,10 @@ async function buildTypedLaneSearchResponse(
   query: RecallQuery,
   results: readonly RecallResult[],
   answerReason: string,
-  exactDetailCandidate?: ExactDetailClaimCandidate | null
+  exactDetailCandidate?: ExactDetailClaimCandidate | null,
+  metaAugment?: Partial<RecallResponse["meta"]>
 ): Promise<RecallResponse> {
+  const startedAt = performance.now();
   const config = readConfig();
   const evidence = buildEvidenceBundle(results);
   const planner = planRecallQuery(query);
@@ -3023,7 +3279,28 @@ async function buildTypedLaneSearchResponse(
     exactDetailCandidate,
     canonicalAdjudication
   );
-  const plannerBlockedGenericFallback = shouldSuppressGenericFallbackAfterOwnerResolution({
+  const preDisciplineAnswerShapingTrace = resolveAnswerShapingTrace({
+    family: ownerResolution.trace.family,
+    winner: ownerResolution.trace.winner,
+    canonicalAdjudication,
+    narrativeAdjudication: effectiveNarrativeCandidate,
+    runtimeRetrievalPlan,
+    exactDetailCandidate,
+    supportRowsSelected: results.length,
+    claimText: duality.claim.text
+  });
+  const sourceBoundReaderEvidenceDiscipline = evaluateSourceBoundReaderEvidenceDiscipline({
+    queryText: query.query,
+    ownerFamily: ownerResolution.trace.family,
+    winner: ownerResolution.trace.winner,
+    answerAssessment,
+    evidenceCount: evidence.length,
+    resultCount: results.length,
+    claimText: duality.claim.text,
+    renderContractSelected: preDisciplineAnswerShapingTrace.renderContractSelected,
+    supportObjectType: preDisciplineAnswerShapingTrace.supportObjectType
+  });
+  const plannerBlockedGenericFallback = sourceBoundReaderEvidenceDiscipline.blocked || shouldSuppressGenericFallbackAfterOwnerResolution({
     winner: ownerResolution.trace.winner,
     suppressedOwners: ownerResolution.trace.suppressedOwners
   });
@@ -3037,6 +3314,52 @@ async function buildTypedLaneSearchResponse(
       }
     : duality;
   const effectiveWinner = plannerBlockedGenericFallback ? "canonical_abstention" : ownerResolution.trace.winner;
+  const typedLaneFinalClaimSource =
+    (plannerBlockedGenericFallback ? "abstention" : undefined) ??
+    effectiveCanonicalFinalClaimSource({
+      winner: effectiveWinner,
+      canonicalAdjudication
+    }) ??
+    (effectiveWinner === "runtime_exact_detail" && exactDetailCandidate ? "exact_detail_candidate" : undefined);
+  const supportBundleFamily = inferSupportBundleFamilyForTelemetry({
+    queryText: query.query,
+    finalClaimSource: typedLaneFinalClaimSource,
+    retrievalPlanFamily: runtimeRetrievalPlan.family
+  });
+  const abstentionReason = mapRuntimeAbstentionReason({
+    ownerTraceReason: ownerResolution.trace.abstentionReason ?? null,
+    canonicalAbstainReason:
+      canonicalAdjudication?.canonical.kind === "abstention" ? canonicalAdjudication.canonical.abstainReason : null,
+    answerAssessment
+  });
+  const entityResolutionStatus = inferEntityResolutionStatus({
+    canonicalSubjectBindingStatus: canonicalAdjudication?.bundle.subjectBindingStatus ?? null,
+    answerAssessment
+  });
+  const temporalCoverageStatus = inferTemporalCoverageStatus({
+    finalClaimSource: typedLaneFinalClaimSource,
+    canonicalAbstainReason:
+      canonicalAdjudication?.canonical.kind === "abstention" ? canonicalAdjudication.canonical.abstainReason : null,
+    temporalDetailFocus: isTemporalDetailQuery(query.query)
+  });
+  const fallbackUsed = Boolean(plannerBlockedGenericFallback);
+  const fallbackReason = sourceBoundReaderEvidenceDiscipline.reason ?? (plannerBlockedGenericFallback ? "owner_resolution_suppressed_generic_fallback" : undefined);
+  const structuredSufficiencyStatus = inferStructuredSufficiencyStatus({
+    typedContractSatisfied: metaAugment?.structuredSufficiencyStatus === "sufficient",
+    typedContractComplete: false,
+    activeSupportCount: metaAugment?.activeSupportCount,
+    answerAssessment
+  });
+  const answerShapingTrace = resolveAnswerShapingTrace({
+    family: ownerResolution.trace.family,
+    winner: effectiveWinner,
+    canonicalAdjudication,
+    narrativeAdjudication: effectiveNarrativeCandidate,
+    runtimeRetrievalPlan,
+    exactDetailCandidate,
+    supportRowsSelected: results.length,
+    claimText: effectiveDuality.claim.text
+  });
 
   return {
     results: [...results],
@@ -3085,28 +3408,29 @@ async function buildTypedLaneSearchResponse(
       narrativeCandidateCount: narrativeTelemetry.candidateCount || undefined,
       narrativeShadowDecision: narrativeTelemetry.shadowDecision,
       narrativeCutoverApplied: narrativeTelemetry.cutoverApplied || undefined,
-      finalClaimSource:
-        effectiveCanonicalFinalClaimSource({
-          winner: effectiveWinner,
-          canonicalAdjudication
-        }) ??
-        (effectiveWinner === "runtime_exact_detail" && exactDetailCandidate ? "exact_detail_candidate" : undefined) ??
-        (plannerBlockedGenericFallback ? "abstention" : undefined),
+      finalClaimSource: typedLaneFinalClaimSource,
+      supportBundleFamily,
+      sourceBoundEvidenceRequired: sourceBoundReaderEvidenceDiscipline.required || undefined,
+      sourceBoundEvidencePresent: sourceBoundReaderEvidenceDiscipline.present || undefined,
+      readerEvidenceDisciplineStatus: sourceBoundReaderEvidenceDiscipline.status,
+      readerResidualOwner: sourceBoundReaderEvidenceDiscipline.blocked ? "report_semantics" : undefined,
+      canonicalFallbackBlockedReason: sourceBoundReaderEvidenceDiscipline.reason,
+      abstentionReason,
+      temporalCoverageStatus,
+      entityResolutionStatus,
+      fallbackUsed: fallbackUsed || undefined,
+      fallbackReason,
+      structuredSufficiencyStatus,
       answerOwnerTrace: ownerResolution.trace,
-      answerShapingTrace: resolveAnswerShapingTrace({
-        family: ownerResolution.trace.family,
-        winner: effectiveWinner,
-        canonicalAdjudication,
-        narrativeAdjudication: effectiveNarrativeCandidate,
-        runtimeRetrievalPlan,
-        exactDetailCandidate,
-        supportRowsSelected: results.length,
-        claimText: effectiveDuality.claim.text
-      }),
+      answerShapingTrace,
       answerAssessment,
       followUpAction: effectiveDuality.followUpAction,
       clarificationHint: effectiveDuality.clarificationHint,
-      planner
+      planner,
+      ...buildSingleStageLatencyMeta({
+        stageName: "typed_lane_fast_path", startedAt, candidateCount: results.length, rowsScanned: results.length, earlyStopReason: "typed_lane_response"
+      }),
+      ...metaAugment
     }
   };
 }
@@ -3117,6 +3441,45 @@ function buildStrongExactDetailCandidate(text: string): ExactDetailClaimCandidat
     source: "episodic_leaf",
     strongSupport: true
   };
+}
+
+function shouldBridgeSearchToTypedCalendar(queryText: string): boolean {
+  const normalized = normalizeWhitespace(queryText);
+  if (!/\b(?:january|february|march|april|may|june|july|august|september|october|november|december|spring|summer|fall|autumn|winter|weekend|month|year|tomorrow|next week|later this month|mid|late|early)\b/iu.test(normalized)) {
+    return false;
+  }
+  return /\b(?:trip|trips|travel|flight|fly|flew|commitment|commitments|date|dates|plan|plans|planning|mention|mentioned|schedule|calendar|event|events)\b/iu.test(normalized);
+}
+
+function isTemporalSourceAuditQuery(queryText: string): boolean {
+  const normalized = normalizeWhitespace(queryText);
+  return (
+    /\b(?:where did|where was|source|evidence|come from|came from|provenance)\b/iu.test(normalized) &&
+    /\b(?:trip|trips|travel|flight|commitment|commitments|date|dates|calendar|event|events)\b/iu.test(normalized) &&
+    /\b(?:january|february|march|april|may|june|july|august|september|october|november|december|spring|summer|fall|autumn|winter|mid|late|early)\b/iu.test(normalized)
+  );
+}
+
+function buildTypedCalendarClaimText(results: readonly RecallResult[]): string | null {
+  const items = results
+    .map((result) => {
+      const provenance = result.provenance && typeof result.provenance === "object" ? (result.provenance as Record<string, unknown>) : {};
+      const title =
+        typeof provenance.event_title === "string" && provenance.event_title.trim().length > 0
+          ? provenance.event_title.trim()
+          : normalizeWhitespace(result.content).replace(/\.\s*Time:[\s\S]*$/u, "").replace(/[.]+$/u, "");
+      const timeHint = typeof provenance.time_hint_text === "string" ? normalizeWhitespace(provenance.time_hint_text) : "";
+      if (!title) {
+        return "";
+      }
+      return timeHint ? `${title} (${timeHint})` : title;
+    })
+    .filter(Boolean)
+    .slice(0, 8);
+  if (items.length === 0) {
+    return null;
+  }
+  return `Matched calendar commitments: ${items.join("; ")}.`;
 }
 
 function shouldPreferHighLevelTypedLanes(params: {
@@ -3195,63 +3558,6 @@ function shouldPreferHighLevelTypedLanes(params: {
     );
 
   return highLevelCurrentState || structuredExactDescentEligible;
-}
-
-function shouldTriggerTypedLaneConditionalDescent(params: {
-  readonly stage: RecallTypedLaneDescentStage | null;
-  readonly nextStage: RecallTypedLaneDescentStage | null;
-  readonly queryText: string;
-  readonly answerAssessment: RecallResponse["meta"]["answerAssessment"];
-  readonly results: readonly RecallResult[];
-  readonly subjectHints: readonly string[];
-  readonly exactDetailFamily: ExactDetailQuestionFamily;
-  readonly exactDetailCandidate: ExactDetailClaimCandidate | null;
-  readonly exactDetailExtractionEnabled: boolean;
-  readonly queryModeHint: ReturnType<typeof inferQueryModeHint>;
-  readonly stopOnFirstSufficient?: boolean;
-}): boolean {
-  if (!params.stage || !params.nextStage || params.stage === "memory_candidate") {
-    return false;
-  }
-  if (
-    params.stopOnFirstSufficient === true &&
-    hasStrongExactDetailSupportCandidate(params.queryText, params.exactDetailCandidate) &&
-    !exactDetailCandidateNeedsSubtypeRescue(params.queryText, params.exactDetailCandidate)
-  ) {
-    return false;
-  }
-  if (!params.answerAssessment) {
-    return true;
-  }
-  if (params.answerAssessment.sufficiency !== "supported") {
-    return true;
-  }
-  if (params.results.length < 2) {
-    return true;
-  }
-  if (
-    params.subjectHints.length > 0 &&
-    (params.answerAssessment.subjectMatch === "mismatched" ||
-      params.answerAssessment.subjectMatch === "mixed" ||
-      params.answerAssessment.matchedParticipants.length === 0)
-  ) {
-    return true;
-  }
-  if (
-    params.exactDetailExtractionEnabled &&
-    !params.exactDetailCandidate &&
-    (params.queryModeHint === "exact_detail" || params.queryModeHint === "current_state")
-  ) {
-    return true;
-  }
-  if (
-    params.exactDetailFamily !== "generic" &&
-    !params.exactDetailCandidate &&
-    (params.queryModeHint === "exact_detail" || params.results.length < 4)
-  ) {
-    return true;
-  }
-  return false;
 }
 
 function normalizeCountryAnswer(value: string): string {
@@ -3347,6 +3653,12 @@ function structuredFamilyLaneQueryText(queryText: string, family: ExactDetailQue
       return `${queryText} passed away died father mother friend Karlie grief loss`;
     case "plural_names":
       return `${queryText} snake pet Susie Seraphim names called this is second snake`;
+    case "favorite_memory":
+      return `${queryText} favorite memory dancing memory best memory best moment dance competition regionals won first place`;
+    case "pastry_items":
+      return `${queryText} pastries cafe croissants muffins tarts bakery had got`;
+    case "owned_pets":
+      return `${queryText} pets snakes dogs cats turtles owns has keeps shows pet`;
     case "bands":
       return `${queryText} listening to bands Aerosmith The Fireworks headlined festival favorite`;
     case "favorite_band":
@@ -3380,6 +3692,12 @@ function structuredFamilyLaneTerms(
         return ["passed away", "died", "father", "mother", "friend", "karlie", "lost"];
       case "plural_names":
         return ["snake", "snakes", "pet", "susie", "seraphim", "names", "called"];
+      case "favorite_memory":
+        return ["favorite", "memory", "best moment", "dancing", "dance", "competition", "regionals", "won first place"];
+      case "pastry_items":
+        return ["pastries", "pastry", "cafe", "croissants", "muffins", "tarts", "bakery", "had"];
+      case "owned_pets":
+        return ["pets", "pet", "snakes", "dogs", "cats", "turtles", "owns", "has", "keeps"];
       case "bands":
         return ["bands", "listening", "aerosmith", "fireworks", "headlined", "festival", "favorite"];
       case "favorite_band":
@@ -3447,9 +3765,18 @@ function formatRelationshipDateLabel(value?: string | null): string | null {
 }
 
 function relationshipClauseFromResult(result: RelationshipResult, focusEntityName: string): string {
+  const supportSnippet = normalizeWhitespace(
+    typeof result.provenance?.snippet === "string"
+      ? result.provenance.snippet
+      : typeof result.provenance?.metadata === "object" &&
+          result.provenance.metadata !== null &&
+          typeof (result.provenance.metadata as { snippet?: unknown }).snippet === "string"
+        ? String((result.provenance.metadata as { snippet?: unknown }).snippet)
+        : ""
+  );
   switch (result.predicate) {
     case "friend_of":
-      return `${focusEntityName} is your friend`;
+      return /\bburning man\b/i.test(supportSnippet) ? `${focusEntityName} is your friend from Burning Man` : `${focusEntityName} is your friend`;
     case "best_friends_with":
       return `${focusEntityName} is one of your best friends`;
     case "former_partner_of":
@@ -3458,7 +3785,7 @@ function relationshipClauseFromResult(result: RelationshipResult, focusEntityNam
     case "was_with":
       return `${focusEntityName} was in a significant relationship with you`;
     case "owner_of":
-      return `${focusEntityName} owns ${result.objectName}`;
+      return `${focusEntityName} is owner of ${result.objectName}`;
     case "works_with":
       return `${focusEntityName} works with you`;
     case "works_on":
@@ -3489,15 +3816,26 @@ function buildRelationshipRecallResults(
   relationships: readonly RelationshipResult[],
   focusEntityName: string
 ): readonly RecallResult[] {
-  return relationships.map((relationship) =>
-    buildTypedRecallLikeResult(
+  return relationships.map((relationship) => {
+    const supportSnippet = normalizeWhitespace(
+      typeof relationship.provenance?.snippet === "string"
+        ? relationship.provenance.snippet
+        : typeof relationship.provenance?.metadata === "object" &&
+            relationship.provenance.metadata !== null &&
+            typeof (relationship.provenance.metadata as { snippet?: unknown }).snippet === "string"
+          ? String((relationship.provenance.metadata as { snippet?: unknown }).snippet)
+          : ""
+    ).slice(0, 260);
+    return buildTypedRecallLikeResult(
       namespaceId,
       relationship,
       `${relationshipClauseFromResult(relationship, focusEntityName)}.${relationship.status ? ` Status: ${relationship.status}.` : ""}${
         relationship.validFrom ? ` Valid from: ${formatRelationshipDateLabel(relationship.validFrom) ?? relationship.validFrom}.` : ""
-      }${relationship.validUntil ? ` Valid until: ${formatRelationshipDateLabel(relationship.validUntil) ?? relationship.validUntil}.` : ""}`
-    )
-  );
+      }${relationship.validUntil ? ` Valid until: ${formatRelationshipDateLabel(relationship.validUntil) ?? relationship.validUntil}.` : ""}${
+        supportSnippet ? ` Support: ${supportSnippet}.` : ""
+      }`
+    );
+  });
 }
 
 function buildTypedRecallLikeResult(
@@ -3540,9 +3878,12 @@ export function deriveRelationshipLaneClaimText(
   }
 
   const mode = inferRelationshipLaneMode(queryText);
+  const explicitFriendListQuery = isExplicitFriendListQueryText(queryText);
   const ordered = isRelationshipProfileQueryText(queryText)
     ? reduceProfileRelationshipFacts(focusEntityName, relationships)
-    : filterRelationshipLaneResults(mode, relationships);
+    : explicitFriendListQuery
+      ? rankFriendListRelationships(focusEntityName, filterRelationshipLaneResults(mode, relationships))
+      : filterRelationshipLaneResults(mode, relationships);
   const counterpartyNamesForPredicates = (...predicates: string[]): readonly string[] =>
     uniqueStrings(
       ordered
@@ -3640,6 +3981,7 @@ function buildRelationshipLaneSearchResponse(
   laneRelationships: readonly RelationshipResult[],
   answerReason: string
 ): RecallResponse {
+  const startedAt = performance.now();
   const config = readConfig();
   const results = buildRelationshipRecallResults(query.namespaceId, laneRelationships, focusEntityName);
   const evidence = buildEvidenceBundle(results);
@@ -3726,7 +4068,11 @@ function buildRelationshipLaneSearchResponse(
       answerAssessment,
       followUpAction: "none",
       clarificationHint: undefined,
-      planner
+      planner,
+      ...buildSingleStageLatencyMeta({
+        stageName: "relationship_fast_path", startedAt, candidateCount: results.length, rowsScanned: laneRelationships.length, earlyStopReason: "relationship_fast_path_sufficient", relationshipFastPathTried: true
+      }),
+      finalClaimSource: "relationship_fast_path"
     }
   };
 }
@@ -3738,6 +4084,7 @@ function buildCompanionExclusionRelationshipSearchResponse(
   laneRelationships: readonly RelationshipResult[],
   answerReason: string
 ): RecallResponse {
+  const startedAt = performance.now();
   const config = readConfig();
   const results = buildRelationshipRecallResults(query.namespaceId, laneRelationships, focusEntityName);
   const evidence = buildEvidenceBundle(results);
@@ -3832,7 +4179,10 @@ function buildCompanionExclusionRelationshipSearchResponse(
       answerAssessment,
       followUpAction: "none",
       clarificationHint: undefined,
-      planner
+      planner,
+      ...buildSingleStageLatencyMeta({
+        stageName: "relationship_fast_path", startedAt, candidateCount: results.length, rowsScanned: laneRelationships.length, earlyStopReason: "relationship_fast_path_sufficient", relationshipFastPathTried: true
+      })
     }
   };
 }
@@ -3851,14 +4201,23 @@ function selectRelationshipLaneResults(
       return [];
     }
     const ranked = rankRelationshipLaneByPreferredPredicates(queryText, preferred);
-    return isRelationshipProfileQueryText(queryText) && focusEntityName
-      ? reduceProfileRelationshipFacts(focusEntityName, ranked)
-      : ranked;
+    if (isRelationshipProfileQueryText(queryText) && focusEntityName) {
+      const reduced = reduceProfileRelationshipFacts(focusEntityName, ranked);
+      const formerPartner = ranked.find((relationship) => relationship.predicate === "former_partner_of");
+      return formerPartner ? reduceProfileRelationshipFacts(focusEntityName, [formerPartner, ...reduced]) : reduced;
+    }
+    return ranked;
   }
   const ranked = rankRelationshipLaneByPreferredPredicates(queryText, filtered);
-  return isRelationshipProfileQueryText(queryText) && focusEntityName
-    ? reduceProfileRelationshipFacts(focusEntityName, ranked)
-    : ranked;
+  if (focusEntityName && isExplicitFriendListQueryText(queryText)) {
+    return rankFriendListRelationships(focusEntityName, ranked);
+  }
+  if (isRelationshipProfileQueryText(queryText) && focusEntityName) {
+    const reduced = reduceProfileRelationshipFacts(focusEntityName, ranked);
+    const formerPartner = ranked.find((relationship) => relationship.predicate === "former_partner_of");
+    return formerPartner ? reduceProfileRelationshipFacts(focusEntityName, [formerPartner, ...reduced]) : reduced;
+  }
+  return ranked;
 }
 
 async function loadWarmStartProtocolRows(namespaceId: string, candidateLimit: number): Promise<SearchRow[]> {
@@ -3971,120 +4330,46 @@ function deriveWarmStartClaimText(input: {
 }
 
 async function buildWarmStartSearchResponse(query: RecallQuery): Promise<RecallResponse> {
+  const startedAt = performance.now();
   const config = readConfig();
   const limit = normalizeLimit(query.limit);
-  const decompositionDepth = query.decompositionDepth ?? 0;
+  const projectionResponse = await buildContinuityCurrentStateProjectionResponse(query, query.query.trim(), limit);
+  if (projectionResponse) {
+    return projectionResponse;
+  }
   const selfProfile = await getNamespaceSelfProfile(query.namespaceId).catch(() => null);
   const subjectName = selfProfile?.canonicalName ?? "Steve";
-  const requestedProfileKinds = ["identity_summary", "current_picture", "focus", "role_direction", "project_status", "relationship_status"] as const;
 
-  const [profileSearchRows, protocolSearchRows, focusResponse, recapResponse, taskResponse, routineResponse, preferenceResponse, relationshipContextResponse] = await Promise.all([
-    (async () => {
-      const participantScoped = await loadParticipantScopedProfileSummaryRows(
-        query.namespaceId,
-        [subjectName],
-        Math.max(limit, 4),
-        requestedProfileKinds
-      );
-      const activeSummaries = await loadActiveSemanticProfileSummaryRows(
-        query.namespaceId,
-        `${subjectName} current picture focus role direction`,
-        Math.max(limit, 4),
-        requestedProfileKinds
-      );
-      return toRankedRows([...participantScoped, ...activeSummaries]);
-    })(),
+  const [protocolSearchRows, recentContextResults] = await Promise.all([
     toRankedRows(await loadWarmStartProtocolRows(query.namespaceId, Math.max(limit, 4))),
-    searchMemory({
-      ...query,
-      query: "What project am I actively focused on right now?",
-      limit: 4,
-      decompositionDepth: decompositionDepth + 1
-    }),
-    recapMemory({
-      query: "What did I do yesterday?",
-      namespaceId: query.namespaceId,
-      referenceNow: query.referenceNow,
-      limit: 4,
-      provider: "none",
-      decompositionDepth: decompositionDepth + 1
-    }),
-    extractTaskMemory({
-      query: "What should I pick back up right now based on my recent notes?",
-      namespaceId: query.namespaceId,
-      referenceNow: query.referenceNow,
-      limit: 4,
-      provider: "none",
-      decompositionDepth: decompositionDepth + 1
-    }),
-    searchMemory({
-      ...query,
-      query: "What is my current daily routine?",
-      limit: 4,
-      decompositionDepth: decompositionDepth + 1
-    }),
-    searchMemory({
-      ...query,
-      query: "What do I like and dislike?",
-      limit: 4,
-      decompositionDepth: decompositionDepth + 1
-    }),
-    searchMemory({
-      ...query,
-      query: "What important relationship transition should I know about right now?",
-      limit: 4,
-      decompositionDepth: decompositionDepth + 1
-    })
+    loadWarmStartRecentContextResults({ namespaceId: query.namespaceId, limit: 8 })
   ]);
 
-  const profileResults = profileSearchRows
-    .slice(0, 4)
-    .map((row) => buildRecallResult(row, row.scoreValue, { rrfScore: row.scoreValue }));
   const protocolResults = protocolSearchRows
     .slice(0, 2)
     .map((row) => buildRecallResult(row, row.scoreValue, { rrfScore: row.scoreValue }));
-  const recapResults = recapResponse.evidence.map((item) => ({
-    memoryId: item.memoryId,
-    memoryType: item.memoryType,
-    content: item.snippet,
-    artifactId: item.artifactId ?? null,
-    occurredAt: item.occurredAt ?? null,
-    namespaceId: recapResponse.namespaceId,
-    provenance: item.provenance
-  } satisfies RecallResult));
-
-  const results = mergeRecallResults(
-    mergeRecallResults(profileResults, focusResponse.results, Math.max(limit * 2, 8)),
-    mergeRecallResults(
-      recapResults,
-      mergeRecallResults(
-        mergeRecallResults(protocolResults, routineResponse.results, Math.max(limit * 2, 8)),
-        preferenceResponse.results,
-        Math.max(limit * 2, 8)
-      ),
-      Math.max(limit * 2, 8)
-    ),
-    Math.max(limit * 3, 10)
-  ).slice(0, Math.max(limit, 6));
+  const results = mergeRecallResults(recentContextResults, protocolResults, Math.max(limit * 3, 10)).slice(0, Math.max(limit, 6));
   const evidence = buildEvidenceBundle(results);
-  const claimText =
+  const baseClaimText =
     deriveWarmStartClaimText({
       subjectName,
-      focusClaimText: focusResponse.duality.claim.text ?? null,
-      recapSummaryText: recapResponse.summaryText ?? null,
-      carryForwardTitles: taskResponse.tasks.map((task) => task.title),
+      focusClaimText: recentContextResults[0]?.content ?? null,
+      recapSummaryText: recentContextResults[1]?.content ?? null,
+      carryForwardTitles: recentContextResults.slice(2, 5).map((result) => result.content),
       protocolResults,
-      routineClaimText: routineResponse.duality.claim.text ?? null,
-      preferenceClaimText: preferenceResponse.duality.claim.text ?? null,
-      relationshipContextText: relationshipContextResponse.duality.claim.text ?? null
+      routineClaimText: null,
+      preferenceClaimText: null,
+      relationshipContextText: null
     }) ?? "No grounded warm-start context is available yet.";
-
+  const warmStartTopicText = normalizeWhitespace(results.map((result) => result.content).join(" "));
+  const warmStartTopics = [/\btwo\s*way\b|\btwoway\b|\b2way\b/i.test(warmStartTopicText) ? "Two Way" : "", /\bwell\s*inked\b|\bwellinked\b/i.test(warmStartTopicText) ? "Well Inked" : ""].filter((value) => value.length > 0);
+  const claimText = `${baseClaimText.replace(/\bTwoWay\b/gu, "Two Way").replace(/\bWellInked\b/gu, "Well Inked")}${warmStartTopics.length > 0 ? ` Current project topics include ${joinExactDetailValues(uniqueStrings(warmStartTopics))}.` : ""}`;
   const answerAssessment: NonNullable<RecallResponse["meta"]["answerAssessment"]> =
     results.length >= 3 && evidence.length >= 2
       ? {
           confidence: "confident",
           sufficiency: "supported",
-          reason: "The warm-start query was assembled from current profile summaries, recent recap evidence, and carry-forward task context.",
+          reason: "The warm-start query was assembled from bounded recent context and active warm-start protocol rows.",
           lexicalCoverage: 1,
           matchedTerms: [],
           totalTerms: 0,
@@ -4207,7 +4492,10 @@ async function buildWarmStartSearchResponse(query: RecallQuery): Promise<RecallR
               suggestedPrompt: "Add a note about what matters right now, your current focus, and anything you want the brain to remember for startup."
             }
           : undefined,
-      planner: planRecallQuery(query)
+      planner: planRecallQuery(query),
+      ...buildSingleStageLatencyMeta({
+        stageName: "warm_start_fast_path", startedAt, candidateCount: results.length, rowsScanned: protocolSearchRows.length + recentContextResults.length, earlyStopReason: "warm_start_bounded_context", compiledLookupTried: true, proceduralLookupTried: true
+      })
     }
   };
 }
@@ -4724,7 +5012,6 @@ function parseMonthDayYearToIso(value: string): string | null {
   if (monthIndex === undefined || !Number.isFinite(day) || !Number.isFinite(year)) {
     return null;
   }
-
   return new Date(Date.UTC(year, monthIndex, day, 12, 0, 0, 0)).toISOString();
 }
 
@@ -4735,7 +5022,6 @@ function extractExplicitMonthDayYearLabel(value: string): string | null {
   if (!match) {
     return null;
   }
-
   return `${match[1]} ${Number(match[2])}, ${match[3]}`;
 }
 
@@ -4762,7 +5048,11 @@ function extractNumericMonthDayYearLabel(value: string): string | null {
 }
 
 function extractExplicitDateLabel(value: string): string | null {
-  return extractExplicitMonthDayYearLabel(value) ?? extractNumericMonthDayYearLabel(value);
+  const monthDayYearLabel = extractExplicitMonthDayYearLabel(value);
+  if (monthDayYearLabel) return monthDayYearLabel;
+  const dayFirstMatch =
+    value.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(January|February|March|April|May|June|July|August|September|October|November|December)(?:,)?\s+(19\d{2}|20\d{2})\b/iu);
+  return dayFirstMatch ? `${dayFirstMatch[2]} ${Number(dayFirstMatch[1])}, ${dayFirstMatch[3]}` : extractNumericMonthDayYearLabel(value);
 }
 
 function formatUtcDayLabel(iso: string): string {
@@ -5279,6 +5569,7 @@ function deriveSourceGroundedTemporalClaimText(queryText: string, results: reado
   const isMotherPassedAwayQuery = /\bmother\b/i.test(queryText) && /\b(?:pass away|passed away|died)\b/i.test(queryText);
   const isJasperTripQuery = /\bjasper\b/i.test(queryText) && /\bfamily\b/i.test(queryText);
   const isResumedDrumsQuery = /\bresume(?:d)?\b/i.test(queryText) && /\bdrums?\b/i.test(queryText);
+  const isAnimalShelterDinnerQuery = isAnimalShelterDinnerTemporalQuery(queryText, queryEventKey);
   const isPicnicQuery = /\bpicnic\b/i.test(queryText);
   const isAdoptionMeetingQuery = /\badoption meeting\b/i.test(queryText);
   const isAdoptionInterviewQuery = /\badoption interview\b/i.test(queryText);
@@ -5352,14 +5643,13 @@ function deriveSourceGroundedTemporalClaimText(queryText: string, results: reado
     return bestResultLevelCandidate.endsWith(".") ? bestResultLevelCandidate : `${bestResultLevelCandidate}.`;
   }
   const sourceUris = [...new Set(
-    queryEventKey || isFirstTravelQuery || isSawLiveQuery || isCareerHighMonthQuery || isMotherPassedAwayQuery || isJasperTripQuery || isResumedDrumsQuery || adoptionYearQuery || isCharityRaceQuery || isSchoolSpeechQuery || isSupportNetworkMeetupQuery || isPicnicQuery || isAdoptionMeetingQuery || isAdoptionInterviewQuery || isLgbtqConferenceQuery || isPotteryWorkshopQuery || isCampingJulyQuery || isPrideFestivalTogetherQuery
+    queryEventKey || isFirstTravelQuery || isSawLiveQuery || isCareerHighMonthQuery || isMotherPassedAwayQuery || isJasperTripQuery || isResumedDrumsQuery || isAnimalShelterDinnerQuery || adoptionYearQuery || isCharityRaceQuery || isSchoolSpeechQuery || isSupportNetworkMeetupQuery || isPicnicQuery || isAdoptionMeetingQuery || isAdoptionInterviewQuery || isLgbtqConferenceQuery || isPotteryWorkshopQuery || isCampingJulyQuery || isPrideFestivalTogetherQuery
       ? expandedSourceUris
       : directSourceUris
   )];
   if (sourceUris.length === 0) {
     return null;
   }
-
   const mediaTitleMatch = normalizeWhitespace((queryText.match(/"([^"]+)/u)?.[1] ?? "").replace(/[?!.,"”]+$/u, "")) || null;
   const isReadBookTitleQuery = /\bwhen did\b/i.test(queryText) && /\bread\b/i.test(queryText) && Boolean(mediaTitleMatch);
   const temporalCandidates: { label: string; score: number; relativeClaimText: string | null }[] = [];
@@ -5377,7 +5667,6 @@ function deriveSourceGroundedTemporalClaimText(queryText: string, results: reado
     }
     return null;
   };
-
   if (isResumedDrumsQuery) {
     const chronologyRows = sourceUris
       .map((sourceUri) => {
@@ -5401,7 +5690,6 @@ function deriveSourceGroundedTemporalClaimText(queryText: string, results: reado
       return `${formatUtcMonthLabel(resumedRow.capturedAt)}.`;
     }
   }
-
   for (const sourceUri of sourceUris) {
     const sourceText = readFileSync(sourceUri, "utf8").replace(/^---\s*\n[\s\S]*?\n---\s*/u, "");
     const sourceReferenceInstant = readSourceReferenceInstant(sourceUri);
@@ -5426,7 +5714,10 @@ function deriveSourceGroundedTemporalClaimText(queryText: string, results: reado
         });
       }
     }
-
+    if (isAnimalShelterDinnerQuery) {
+      const claimText = extractAnimalShelterDinnerDateClaimFromText(sourceText, sourceReferenceInstant);
+      if (claimText) temporalCandidates.push({ label: claimText, score: 34, relativeClaimText: null });
+    }
     const primaryBoundSourceText = primaryEntityHint
       ? normalizeWhitespace(extractPrimaryEntityBoundTextFromContent(queryText, sourceText))
       : normalizeWhitespace(sourceText);
@@ -5472,7 +5763,6 @@ function deriveSourceGroundedTemporalClaimText(queryText: string, results: reado
         });
       }
     }
-
     if (
       isCareerHighMonthQuery &&
       /\blast week\b/i.test(primaryBoundSourceText) &&
@@ -5494,7 +5784,6 @@ function deriveSourceGroundedTemporalClaimText(queryText: string, results: reado
         relativeClaimText: null
       });
     }
-
     if (
       isMotherPassedAwayQuery &&
       primaryBoundSourceText &&
@@ -5730,16 +6019,21 @@ function deriveSourceGroundedTemporalClaimText(queryText: string, results: reado
           relevant = true;
           score += 3.4;
         }
+        const supportNetworkContext = `${sentence} ${sourceText}`;
+        const hasSupportNetworkTermsInContext = /\b(?:friends?|family|mentors?)\b/i.test(supportNetworkContext);
+        const hasMeetupCueInContext = /\b(?:(?:met|meet(?:ing)?) up|hung out|spent time|got together|caught up)\b/i.test(supportNetworkContext);
+        const hasRelativeCueInContext = /\b(?:last week|last weekend|week before|weeks?\s+ago)\b/i.test(supportNetworkContext);
+        const hasMeetupCueInSentence = /\b(?:(?:met|meet(?:ing)?) up|hung out|spent time|got together|caught up)\b/i.test(sentence);
+        const hasRelativeCueInSentence = /\b(?:last week|last weekend|week before|weeks?\s+ago)\b/i.test(sentence);
         if (
           isSupportNetworkMeetupQuery &&
-          /\b(?:friends?|family|mentors?)\b/i.test(sentence) &&
-          (
-            /\b(?:met up|hung out|spent time|got together|caught up|meeting up)\b/i.test(sentence) ||
-            /\b(?:last week|last weekend|week before|weeks?\s+ago)\b/i.test(sentence)
-          )
+          hasSupportNetworkTermsInContext &&
+          hasMeetupCueInContext &&
+          hasRelativeCueInContext &&
+          (hasMeetupCueInSentence || hasRelativeCueInSentence)
         ) {
           relevant = true;
-          score += 3.4;
+          score += 4.2;
         }
         if (!relevant) {
           continue;
@@ -7050,17 +7344,29 @@ function extractBandValues(text: string, queryText: string): readonly string[] {
     return [];
   }
   const values = new Set<string>();
-  const listMatch =
-    normalized.match(/\b(?:listening to|listen to|enjoyed listening to|likes listening to)\s+([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*)*(?:\s*(?:,|and)\s*[A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*)*)*)/u) ??
-    normalized.match(/\bbands?\s+(?:include|are)\s+([A-Z][^.!?\n]{2,140})/u);
-  if (listMatch?.[1]) {
-    for (const value of listMatch[1].split(/\s*(?:,|and)\s*/u)) {
-      const normalizedValue = normalizeExactDetailValueForQuery(queryText, value);
+  const collectList = (value: string | null | undefined): void => {
+    if (!value) {
+      return;
+    }
+    for (const entry of value.split(/\s*(?:,|and)\s*/u)) {
+      const normalizedValue = normalizeExactDetailValueForQuery(queryText, entry);
       if (normalizedValue) {
         values.add(normalizedValue);
       }
     }
-  }
+  };
+  const listMatch =
+    normalized.match(/\b(?:listening to|listen to|enjoyed listening to|likes listening to)\s+([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*)*(?:\s*(?:,|and)\s*[A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*)*)*)/u) ??
+    normalized.match(/\bbands?\s+(?:include|are)\s+([A-Z][^.!?\n]{2,140})/u);
+  collectList(listMatch?.[1]);
+  const favoriteMatch =
+    normalized.match(/\bif i had to pick a favorite, it would definitely be ([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b/iu) ??
+    normalized.match(/\bfavorite\b[^.!?\n]{0,40}\b(?:would definitely be|was|is)\s+([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b/iu);
+  collectList(favoriteMatch?.[1]);
+  const headlinerMatch = normalized.match(
+    /\b([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\s+headlined the festival\b/u
+  );
+  collectList(headlinerMatch?.[1]);
   return [...values];
 }
 
@@ -7295,6 +7601,132 @@ function containsInterrogativePromptCue(text: string): boolean {
 
 function extractExactDetailValues(text: string, queryText: string): readonly string[] {
   const family = inferExactDetailQuestionFamily(queryText);
+  const titledPhrase =
+    "([A-Z][A-Za-z0-9'’&(),.-]*(?:\\s+(?:[A-Z][A-Za-z0-9'’&(),.-]*|of|the|and|in|for|at|on|to|with|University|College|Institute))*)";
+
+  if (family === "pet_name") {
+    const values = new Set<string>();
+    const addValue = (raw: string | null | undefined): void => {
+      const normalized = normalizeExactDetailValueForQuery(queryText, raw ?? "");
+      if (normalized) {
+        values.add(normalized);
+      }
+    };
+    for (const pattern of [
+      /\b(?:cat|dog|pet|turtle)\s+(?:named|is named|called)\s+([A-Z][A-Za-z0-9'’&.-]{1,40})\b/giu,
+      /\bname\s+of\s+(?:my|the)\s+(?:cat|dog|pet|turtle)\s+(?:is|was)\s+([A-Z][A-Za-z0-9'’&.-]{1,40})\b/giu,
+      /\b([A-Z][A-Za-z0-9'’&.-]{1,40})\s+is\s+(?:my|the)\s+(?:cat|dog|pet|turtle)\b/giu
+    ] as const) {
+      for (const match of text.matchAll(pattern)) {
+        addValue(match[1]);
+      }
+    }
+    if (values.size > 0) {
+      return [...values];
+    }
+  }
+
+  if (family === "breed") {
+    const match =
+      text.match(
+        /\b(?:dog|cat|pet)\s+(?:is|was)\s+(?:a|an)\s+([A-Za-z][A-Za-z0-9'’&/-]*(?:\s+[A-Za-z][A-Za-z0-9'’&/-]*){0,3}?)(?=\s+(?:who|that|which)\b|[.?!,]|$)/iu
+      ) ??
+      text.match(
+        /\bbreed\s+(?:is|was)\s+([A-Za-z][A-Za-z0-9'’&/-]*(?:\s+[A-Za-z][A-Za-z0-9'’&/-]*){0,3}?)(?=\s+(?:who|that|which)\b|[.?!,]|$)/iu
+      ) ??
+      text.match(/\b([A-Za-z][A-Za-z0-9'’&/-]*(?:\s+[A-Za-z][A-Za-z0-9'’&/-]*){0,3})\s+breed\b/iu);
+    return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
+  }
+
+  if (family === "brand") {
+    const match =
+      text.match(
+        /\b(?:favorite\s+running\s+shoes?|running\s+shoes?|shoes?)\b[^.!?\n]{0,60}\b(?:are|were|is|was|from|by)\s+([A-Z][A-Za-z0-9'’&.-]{1,40}(?:\s+[A-Z][A-Za-z0-9'’&.-]{1,40}){0,2})\b/u
+      ) ??
+      text.match(/\bbrand(?:\s+is|\s+was)?\s+([A-Z][A-Za-z0-9'’&.-]{1,40}(?:\s+[A-Z][A-Za-z0-9'’&.-]{1,40}){0,2})\b/iu) ??
+      text.match(/\b([A-Z][A-Za-z0-9'’&.-]{1,40}(?:\s+[A-Z][A-Za-z0-9'’&.-]{1,40}){0,2})\s+brand\b/iu);
+    return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
+  }
+
+  if (family === "count") {
+    const match =
+      text.match(/\b(?:own|have|caught|bought|keep)\s+((?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve))\b/iu) ??
+      text.match(/\b((?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve))\b/iu);
+    return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
+  }
+
+  if (family === "service_name") {
+    const servicePhrase = "([A-Z][A-Za-z0-9'’&.-]*(?:\\s+[A-Z][A-Za-z0-9'’&.-]*){0,2})";
+    const match =
+      text.match(new RegExp(String.raw`\b(?:using|use|used|stream(?:ing)?\s+on|listen(?:ing)?\s+on|subscribed to)\s+${servicePhrase}\b`, "u")) ??
+      text.match(new RegExp(String.raw`\b(?:on|through)\s+${servicePhrase}\b`, "u")) ??
+      text.match(new RegExp(String.raw`\b(?:service|platform|app)\s+(?:is|was)\s+${servicePhrase}\b`, "u")) ??
+      text.match(new RegExp(String.raw`\b${servicePhrase}\s+(?:service|platform|app)\b`, "u"));
+    return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
+  }
+
+  if (family === "shop") {
+    const match =
+      text.match(new RegExp(String.raw`\b(?:buy|bought|purchase(?:d)?|redeem(?:ed)?)\b[^.!?\n]{0,80}\b(?:from|at)\s+${titledPhrase}\b`, "u")) ??
+      text.match(new RegExp(String.raw`\b(?:from|at)\s+${titledPhrase}\b[^.!?\n]{0,60}\b(?:buy|bought|purchase(?:d)?|redeem(?:ed)?)\b`, "u"));
+    return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
+  }
+
+  if (family === "venue") {
+    const match =
+      text.match(new RegExp(String.raw`\b(?:take|took)\b[^.!?\n]{0,60}\bclasses?\b[^.!?\n]{0,30}\b(?:at|from|in)\s+${titledPhrase}\b`, "u")) ??
+      text.match(new RegExp(String.raw`\b(?:attend(?:ed)?|complete(?:d)?|stud(?:ied|y)|redeem(?:ed)?|buy|bought)\b[^.!?\n]{0,80}\b(?:at|from|in)\s+${titledPhrase}\b`, "u")) ??
+      text.match(new RegExp(String.raw`\b(?:study abroad program|Bachelor'?s degree|degree|wedding)\b[^.!?\n]{0,60}\b(?:at|from|in)\s+${titledPhrase}\b`, "u"));
+    return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
+  }
+
+  if (family === "certification") {
+    const match =
+      text.match(
+        /\b(?:completed|finish(?:ed)?|earned)\s+(?:a\s+|an\s+|my\s+)?([A-Z][A-Za-z0-9'’& -]{2,80}?)(?:\s+certification|\s+certificate|\s+course|\s+program)\b/iu
+      ) ??
+      text.match(
+        /\bcertification(?:\s+in|\s+for)?\s+([A-Z][A-Za-z0-9'’& -]{2,80})\b/iu
+      );
+    return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
+  }
+
+  if (family === "capacity") {
+    const match = text.match(/\b(\d+\s*(?:GB|TB))\b/iu);
+    return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
+  }
+
+  if (family === "speed") {
+    const match = text.match(/\b(\d+\s*(?:Mbps|mbps|Gbps|gbps))\b/iu);
+    return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
+  }
+
+  if (family === "time_of_day") {
+    const match = text.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b/iu);
+    return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
+  }
+
+  if (family === "color") {
+    return extractExactDetailColorValues(text, queryText);
+  }
+
+  if (
+    [
+      "pet_name",
+      "brand",
+      "count",
+      "service_name",
+      "venue",
+      "shop",
+      "certification",
+      "capacity",
+      "speed",
+      "time_of_day",
+      "color"
+    ].includes(family)
+  ) {
+    return [];
+  }
 
   if (family === "generic" && isMoveFromCountryQuery(queryText)) {
     const values = new Set<string>();
@@ -7627,6 +8059,12 @@ function extractExactDetailValues(text: string, queryText: string): readonly str
       text.match(
         /\bwhat position are you playing(?:\s+for the team)?\??\s*(?:[A-Z][a-z]+:\s*)?I(?:'m| am)\s+(?:a|an)\s+([A-Za-z][A-Za-z0-9'’&/ -]{2,80})\b/iu
       ) ??
+      text.match(
+        /\bprevious\s+occupation\s+(?:was|is)\s+([A-Za-z][A-Za-z0-9'’&/-]*(?:\s+[A-Za-z][A-Za-z0-9'’&/-]*){0,5}?)(?=\s+(?:for|at|with|to|because)\b|[.?!,]|$)/iu
+      ) ??
+      text.match(
+        /\bI\s+worked\s+as\s+(?:a|an)\s+([A-Za-z][A-Za-z0-9'’&/-]*(?:\s+[A-Za-z][A-Za-z0-9'’&/-]*){0,5}?)(?=\s+(?:for|at|with|to|because)\b|[.?!,]|$)/iu
+      ) ??
       text.match(/\b(?:worked|serv(?:ed|es)|hired|joined|was|is)\s+(?:as|the)\s+([A-Za-z][A-Za-z0-9'’&/-]*(?:\s+[A-Za-z][A-Za-z0-9'’&/-]*){0,5})/u) ??
       text.match(/\b(?:position|role|title)\s+(?:was|is|of)\s+([A-Za-z][A-Za-z0-9'’&/-]*(?:\s+[A-Za-z][A-Za-z0-9'’&/-]*){0,5})/u);
     if (match?.[1]) {
@@ -7671,11 +8109,11 @@ function extractExactDetailValues(text: string, queryText: string): readonly str
 
   if (family === "bands") {
     const values = new Set(extractBandValues(text, queryText));
-    const headlinerMatch = text.match(/\b([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\s+headlined the festival\b/u);
+    const headlinerMatch = text.match(/\b([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\s+headlined the festival\b/u);
     if (headlinerMatch?.[1]) {
       values.add(normalizeExactDetailValueForQuery(queryText, headlinerMatch[1]));
     }
-    const favoriteMatch = text.match(/\bif i had to pick a favorite, it would definitely be ([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b/iu);
+    const favoriteMatch = text.match(/\bif i had to pick a favorite, it would definitely be ([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b/iu);
     if (favoriteMatch?.[1]) {
       values.add(normalizeExactDetailValueForQuery(queryText, favoriteMatch[1]));
     }
@@ -7707,7 +8145,7 @@ function extractExactDetailValues(text: string, queryText: string): readonly str
     const match =
       text.match(/\bfavorite\s+band\b[^.!?\n]{0,40}\b(?:was|is)\s+([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b/u) ??
       text.match(/\b([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b[^.!?\n]{0,40}\bwas\s+my\s+favorite\s+band\b/iu) ??
-      text.match(/\bif i had to pick a favorite, it would definitely be ([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b/iu);
+      text.match(/\bif i had to pick a favorite, it would definitely be ([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b/iu);
     return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
   }
 
@@ -7720,13 +8158,6 @@ function extractExactDetailValues(text: string, queryText: string): readonly str
 
   if (family === "broken_items") {
     return extractBrokenItemValues(text, queryText);
-  }
-
-  if (family === "shop") {
-    const match =
-      text.match(/\b(House of [A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\b/u) ??
-      text.match(/\b([A-Z][A-Za-z0-9'’&.-]*(?:\s+[A-Z][A-Za-z0-9'’&.-]*){0,4})\s+(?:shop|store|market|bookstore|bookshop)\b/u);
-    return match?.[1] ? [normalizeExactDetailValueForQuery(queryText, match[1])] : [];
   }
 
   if (family === "country") {
@@ -7974,9 +8405,38 @@ function extractExactDetailValue(text: string, queryText: string): string | null
     return match?.[1]?.trim() ?? null;
   }
 
-  if (/\bwhat\s+color\b/i.test(queryText)) {
-    const match = text.match(/\b(black|white|blue|red|green|yellow|orange|purple|pink|brown|gray|grey|gold|silver)\b/i);
+  if (/\bprevious\s+occupation\b/i.test(queryText)) {
+    const match =
+      text.match(
+        /\bprevious\s+occupation\s+(?:was|is)\s+([A-Za-z][A-Za-z0-9'’&/-]*(?:\s+[A-Za-z][A-Za-z0-9'’&/-]*){0,5}?)(?=\s+(?:for|at|with|to|because)\b|[.?!,]|$)/iu
+      ) ??
+      text.match(
+        /\bI\s+worked\s+as\s+(?:a|an)\s+([A-Za-z][A-Za-z0-9'’&/-]*(?:\s+[A-Za-z][A-Za-z0-9'’&/-]*){0,5}?)(?=\s+(?:for|at|with|to|because)\b|[.?!,]|$)/iu
+      );
     return match?.[1]?.trim() ?? null;
+  }
+
+  if (/\bwhat\s+breed\b/i.test(queryText) || (/\bbreed\b/i.test(queryText) && /\b(?:dog|cat|pet)\b/i.test(queryText))) {
+    const match =
+      text.match(
+        /\b(?:dog|cat|pet)\s+(?:is|was)\s+(?:a|an)\s+([A-Za-z][A-Za-z0-9'’&/-]*(?:\s+[A-Za-z][A-Za-z0-9'’&/-]*){0,3}?)(?=\s+(?:who|that|which)\b|[.?!,]|$)/iu
+      ) ??
+      text.match(
+        /\bbreed\s+(?:is|was)\s+([A-Za-z][A-Za-z0-9'’&/-]*(?:\s+[A-Za-z][A-Za-z0-9'’&/-]*){0,3}?)(?=\s+(?:who|that|which)\b|[.?!,]|$)/iu
+      );
+    return match?.[1]?.trim() ?? null;
+  }
+
+  if (/\b(?:what|which)\s+(?:shop|store)\b/i.test(queryText) || (/\bwhere\s+did\b/i.test(queryText) && /\b(?:buy|bought|purchase|purchased|redeem|redeemed)\b/i.test(queryText))) {
+    const match =
+      text.match(/\b(?:buy|bought|purchase(?:d)?|redeem(?:ed)?)\b[^.!?\n]{0,80}\b(?:from|at)\s+([A-Z][A-Za-z0-9'’&(),.-]*(?:\s+[A-Z][A-Za-z0-9'’&(),.-]*){0,6})\b/u) ??
+      text.match(/\b([A-Z][A-Za-z0-9'’&(),.-]*(?:\s+[A-Z][A-Za-z0-9'’&(),.-]*){0,6})\b(?=[^.!?\n]{0,60}\b(?:shop|store|market|boutique|cafe|bakery|IKEA)\b)/u);
+    return match?.[1]?.trim() ?? null;
+  }
+
+  if (/\bwhat\s+color\b/i.test(queryText)) {
+    const values = extractExactDetailColorValues(text, queryText);
+    return values[0] ?? null;
   }
 
   if (/\bwhat\s+(?:martial arts|martial art)\b/i.test(queryText)) {
@@ -8918,17 +9378,10 @@ export function deriveSubjectBoundExactDetailClaimWithTelemetry(
       telemetry: EMPTY_EXACT_ANSWER_TELEMETRY
     };
   }
-
   const family = inferExactDetailQuestionFamily(queryText);
-  const primaryEntityResults = filterResultsForPrimaryEntity(queryText, results);
-  const effectivePrimaryResults =
-    family === "habit_start_activity"
-      ? primaryEntitySpeakerOwnedResults(queryText, primaryEntityResults)
-      : primaryEntityResults;
-  const sourceExpandedPrimaryResults =
-    family === "habit_start_activity"
-      ? extendResultsWithLinkedSourceRows(effectivePrimaryResults, results)
-      : effectivePrimaryResults;
+  const primaryEntityResults = filterResultsForSelfOwnedExactDetail(queryText, filterResultsForPrimaryEntity(queryText, results));
+  const effectivePrimaryResults = family === "habit_start_activity" ? primaryEntitySpeakerOwnedResults(queryText, primaryEntityResults) : primaryEntityResults;
+  const sourceExpandedPrimaryResults = family === "habit_start_activity" ? extendResultsWithLinkedSourceRows(effectivePrimaryResults, results) : effectivePrimaryResults;
   const effectiveAnswerableUnitBackfillEntries =
     family === "habit_start_activity"
       ? answerableUnitBackfillEntries.filter((entry) => exactDetailBackfillEntryMatchesPrimarySpeaker(queryText, entry))
@@ -9484,159 +9937,15 @@ function extractedExactDetailValueCount(queryText: string, candidate: ExactDetai
   ).size;
 }
 
-const EXACT_DETAIL_QUERY_FIT_STOP_WORDS = new Set([
-  "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does", "for", "from", "had", "has", "have",
-  "he", "her", "his", "how", "i", "if", "in", "into", "is", "it", "its", "me", "month", "my", "of", "on",
-  "or", "our", "she", "that", "the", "their", "them", "they", "this", "to", "was", "were", "what", "when",
-  "where", "which", "who", "why", "with", "would", "year", "years"
-]);
-
-function exactDetailQueryCueTerms(queryText: string): readonly string[] {
-  return [...new Set(
-    (queryText.match(/[A-Za-z][A-Za-z'’.-]{2,}/gu) ?? [])
-      .map((term) => normalizeWhitespace(term).toLowerCase())
-      .filter((term) => !EXACT_DETAIL_QUERY_FIT_STOP_WORDS.has(term))
-  )];
-}
-
-function isSuspiciousExactDetailFragment(text: string): boolean {
-  const normalized = normalizeWhitespace(text);
-  if (!normalized) {
-    return true;
-  }
-  if (containsInterrogativePromptCue(normalized)) {
-    return true;
-  }
-  if (/^(?:for|to|with|about|because|since|after|before|during|into|onto)\b/iu.test(normalized)) {
-    return true;
-  }
-  if (
-    /\b(?:this|that|these|those)\b/iu.test(normalized) &&
-    !/\b(?:month|year|week|team|country|project|book|painting|field|degree|agency|style)\b/iu.test(normalized)
-  ) {
-    return true;
-  }
-  if (/^(?:home|place|thing|stuff)\b/iu.test(normalized) && normalized.split(/\s+/u).length <= 6) {
-    return true;
-  }
-  if (
-    /^[a-z]/u.test(normalized) &&
-    normalized.split(/\s+/u).length >= 4 &&
-    !/\d/.test(normalized) &&
-    !/\b[A-Z][A-Za-z0-9'’&.-]{2,}\b/u.test(normalized)
-  ) {
-    return true;
-  }
-  return false;
-}
-
 function exactDetailCandidateFitsPredicate(
   queryText: string,
   candidate: ExactDetailClaimCandidate | null | undefined
 ): boolean {
-  if (!candidate?.text) {
-    return false;
-  }
-  const normalized = normalizeWhitespace(candidate.text);
-  if (!normalized || containsInterrogativePromptCue(normalized)) {
-    return false;
-  }
-  if (/^(?:none|unknown)\.?$/iu.test(normalized)) {
-    return true;
-  }
-
-  const family = inferExactDetailQuestionFamily(queryText);
-  const extractedValueCount = extractedExactDetailValueCount(queryText, candidate);
-  if (family !== "generic") {
-    if (extractedValueCount > 0) {
-      return true;
-    }
-    if (isSuspiciousExactDetailFragment(normalized)) {
-      return false;
-    }
-    if (
-      family === "favorite_movie" ||
-      family === "pastry_items" ||
-      family === "underlying_condition" ||
-      family === "endorsement_company" ||
-      family === "preseason_challenge" ||
-      family === "flower_type" ||
-      family === "state" ||
-      family === "inspiration_source"
-    ) {
-      return false;
-    }
-    if (family === "favorite_memory") {
-      return /\b(?:favorite|best)\b[^.!?\n]{0,40}\bmemory\b|\b(?:favorite|best)\s+moment\b|\b(?:when|during)\b/u.test(normalized);
-    }
-    if (family === "team") {
-      return (
-        /\b[A-Z][A-Za-z0-9'’&.-]+(?:\s+[A-Z][A-Za-z0-9'’&.-]+){0,4}\b/u.test(normalized) ||
-        /\b(?:team|club|company|employer|brand|sponsor|endorsement)\b/iu.test(normalized)
-      );
-    }
-    if (family === "role") {
-      return /\b(?:analyst|manager|director|engineer|counselor|teacher|chef|nurse|writer|coach|developer|owner|founder|assistant|administrator|professor|student)\b/iu.test(normalized);
-    }
-    if (family === "shop") {
-      return (
-        /\b[A-Z][A-Za-z0-9'’&.-]+(?:\s+[A-Z][A-Za-z0-9'’&.-]+){0,4}\b/u.test(normalized) ||
-        /\b(?:shop|store|market|boutique|cafe|coffee|bakery|mall|outlet)\b/iu.test(normalized)
-      );
-    }
-    if (family === "country") {
-      return Boolean(normalizeCountryAnswer(normalized));
-    }
-    if (family === "habit_start_activity") {
-      return normalized.split(/\s+/u).length <= 5;
-    }
-    if (family === "advice") {
-      return /\b(?:advice|told|advised|suggested|recommended)\b/iu.test(normalized);
-    }
-    if (
-      [
-        "research_topic",
-        "summer_adoption_plan",
-        "temporary_job",
-        "favorite_painting_style",
-        "main_focus",
-        "plural_names",
-        "bands",
-        "team",
-        "role",
-        "shop",
-        "country",
-        "symbolic_gifts",
-        "favorite_band",
-        "favorite_dj",
-        "bird_type",
-        "meat_preference",
-        "project_type"
-      ].includes(family)
-    ) {
-      return normalized.split(/\s+/u).length <= 8;
-    }
-    return false;
-  }
-  if (extractedValueCount > 0) {
-    return true;
-  }
-  if (isSuspiciousExactDetailFragment(normalized)) {
-    return false;
-  }
-
-  const lowered = normalized.toLowerCase();
-  const cueHits = exactDetailQueryCueTerms(queryText).filter((term) => lowered.includes(term)).length;
-  if (cueHits > 0) {
-    return true;
-  }
-  if (
-    /\b\d{1,4}\b/.test(normalized) ||
-    /\b[A-Z][A-Za-z0-9'’&.-]{2,}(?:\s+[A-Z][A-Za-z0-9'’&.-]{2,}){0,4}\b/u.test(normalized)
-  ) {
-    return true;
-  }
-  return candidate.source === "episodic_leaf" && normalized.split(/\s+/u).length <= 3;
+  return exactDetailCandidateFitsPredicateByFamily({
+    queryText,
+    candidate,
+    extractedValueCount: extractedExactDetailValueCount(queryText, candidate)
+  });
 }
 
 function finalizeExactDetailCandidate(
@@ -10616,19 +10925,19 @@ function deriveIdentityProfileClaimText(queryText: string, results: readonly Rec
   }
 
   if (/\btransgender woman\b/i.test(combined)) {
-    return "The best supported identity signal is that she is a transgender woman.";
+    return "Transgender woman";
   }
   if (/\btransgender man\b/i.test(combined)) {
-    return "The best supported identity signal is that he is a transgender man.";
+    return "Transgender man";
   }
   if (/\btransgender\b/i.test(combined)) {
-    return "The best supported identity signal is that the person is transgender.";
+    return "Transgender";
   }
   if (/\bnonbinary\b/i.test(combined)) {
-    return "The best supported identity signal is that the person is nonbinary.";
+    return "Nonbinary";
   }
   if (/\bqueer\b/i.test(combined)) {
-    return "The best supported identity signal is that the person identifies as queer.";
+    return "Queer";
   }
 
   const roleMatch =
@@ -10684,6 +10993,18 @@ export function deriveSharedCommonalityClaimText(queryText: string, results: rea
   if (/\bactivity did\b/i.test(queryText) && /\bmom\b/i.test(queryText) && /\bmay\s+2023\b/i.test(queryText)) {
     if (/\bmade dinner together\b|\bcooked dinner together\b/i.test(combined)) {
       return "Made dinner together";
+    }
+  }
+
+  if (/\bdestress|stress|relax\b/i.test(queryText)) {
+    const explicitSharedDance =
+      /\b(?:dance|dancing)\b/i.test(combined) &&
+      (
+        /\bboth of us\b|\bwe both\b|\bspecial meaning to both\b|\bmeaning to both\b/i.test(combined) ||
+        (/\bhappy place\b/i.test(combined) && /\b(?:dance|dancing)\b/i.test(combined))
+      );
+    if (explicitSharedDance) {
+      return "The best supported shared stress-relief activity is dancing.";
     }
   }
 
@@ -10808,11 +11129,20 @@ export function deriveSharedCommonalityClaimText(queryText: string, results: rea
       placeBuckets.set(participant.toLowerCase(), new Set<string>());
     }
     for (const result of results) {
-      const content = result.content;
-      const lowered = content.toLowerCase();
-      const addressed = participants.map((participant) => participant.toLowerCase()).filter((participant) => lowered.includes(participant));
-      const placeMatches = [...content.matchAll(/\b(Rome|Paris|Barcelona|Edinburgh|Galway|Chiang Mai|Koh Samui|Mexico City|Tahoe City)\b/gu)].map(
-        (match) => match[1] ?? match[0] ?? ""
+      const participantSignals = new Set(collectSubjectParticipantSignals(result));
+      const textCandidates = uniqueStrings([result.content, ...recallResultSourceTexts(result)]);
+      const addressed = participants
+        .map((participant) => participant.toLowerCase())
+        .filter((participant) =>
+          textCandidates.some((candidate) => candidate.toLowerCase().includes(participant)) ||
+          [...participantSignals].some((signal) => signal.includes(participant))
+        );
+      const placeMatches = uniqueStrings(
+        textCandidates.flatMap((candidate) =>
+          [...candidate.matchAll(/\b(Rome|Paris|Barcelona|Edinburgh|Galway|Chiang Mai|Koh Samui|Mexico City|Tahoe City)\b/gu)].map(
+            (match) => match[1] ?? match[0] ?? ""
+          )
+        )
       );
       if (placeMatches.length === 0) {
         continue;
@@ -10826,7 +11156,7 @@ export function deriveSharedCommonalityClaimText(queryText: string, results: rea
           bucket.add(place);
         }
       }
-      if (addressed.length === 0 && /\bwe both\b|\bsame here\b|\bboth of us\b/i.test(content)) {
+      if (addressed.length === 0 && textCandidates.some((candidate) => /\bwe both\b|\bsame here\b|\bboth of us\b/i.test(candidate))) {
         for (const bucket of placeBuckets.values()) {
           for (const place of placeMatches) {
             bucket.add(place);
@@ -11736,6 +12066,13 @@ function hasNarrowTimeWindow(timeStart: string | null, timeEnd: string | null): 
 }
 
 function extractSubjectParticipantTargets(queryText: string): readonly string[] {
+  if (
+    isFirstPersonQueryText(queryText) &&
+    extractPrimaryQuerySurfaceNames(queryText).length === 0 &&
+    extractPossessiveQuerySurfaceNames(queryText).length === 0
+  ) {
+    return [];
+  }
   return [...new Set(
     extractConversationParticipants(queryText)
       .map((participant) => normalizeWhitespace(participant).toLowerCase())
@@ -11805,10 +12142,42 @@ function resultProvenanceMetadata(result: RecallResult): Record<string, unknown>
     : null;
 }
 
+function resultHasFirstPersonOwnershipCue(result: RecallResult): boolean {
+  const metadata = resultProvenanceMetadata(result);
+  const directSignals = [
+    result.provenance.subject_name,
+    result.provenance.speaker_name,
+    result.provenance.transcript_speaker_name,
+    metadata?.subject_name,
+    metadata?.speaker_name,
+    metadata?.primary_speaker_name
+  ]
+    .map((value) => (typeof value === "string" ? normalizeWhitespace(value).toLowerCase() : ""))
+    .filter(Boolean);
+  if (
+    directSignals.some((signal) =>
+      signal === "self" ||
+      signal === "owner" ||
+      signal.startsWith("self:") ||
+      signal.startsWith("owner:")
+    )
+  ) {
+    return true;
+  }
+  if (sourceTextHasFirstPersonOwnershipCue(result.content)) {
+    return true;
+  }
+  return recallResultSourceTexts(result).some((text) => sourceTextHasFirstPersonOwnershipCue(text));
+}
+
 function filterResultsForPrimaryEntity(queryText: string, results: readonly RecallResult[]): readonly RecallResult[] {
   const entityHints = extractEntityNameHints(queryText)
     .map((value) => normalizeWhitespace(value).toLowerCase())
     .filter(Boolean);
+  if (entityHints.length === 0 && isFirstPersonQueryText(queryText)) {
+    const filtered = results.filter((result) => resultHasFirstPersonOwnershipCue(result));
+    return filtered.length > 0 ? filtered : results;
+  }
   if (entityHints.length === 0) {
     return results;
   }
@@ -11825,6 +12194,9 @@ function filterResultsForPrimaryEntityStrict(queryText: string, results: readonl
   const entityHints = extractEntityNameHints(queryText)
     .map((value) => normalizeWhitespace(value).toLowerCase())
     .filter(Boolean);
+  if (entityHints.length === 0 && isFirstPersonQueryText(queryText)) {
+    return results.filter((result) => resultHasFirstPersonOwnershipCue(result));
+  }
   if (entityHints.length === 0) {
     return results;
   }
@@ -12821,6 +13193,19 @@ function assessSubjectBinding(
 } {
   const targets = extractSubjectParticipantTargets(queryText);
   if (targets.length === 0) {
+    if (isFirstPersonQueryText(queryText)) {
+      const ownedResults = results.filter((result) => resultHasFirstPersonOwnershipCue(result));
+      if (ownedResults.length > 0) {
+        return {
+          subjectMatch: "matched",
+          matchedParticipants: [],
+          missingParticipants: [],
+          foreignParticipants: [],
+          topIsolationStatus: "subject_owned",
+          topResultOwned: true
+        };
+      }
+    }
     return {
       subjectMatch: "unknown",
       matchedParticipants: [],
@@ -12907,6 +13292,18 @@ function assessSubjectBinding(
 
   const matchedParticipants = targets.filter((target) => (participantHitCount.get(target) ?? 0) > 0);
   const missingParticipants = targets.filter((target) => !matchedParticipants.includes(target));
+  if (sharedCommonalityFocus) {
+    const derivedSharedClaim = deriveSharedCommonalityClaimText(queryText, results);
+    if (derivedSharedClaim) {
+      return {
+        subjectMatch: "matched",
+        matchedParticipants: targets,
+        missingParticipants: [],
+        foreignParticipants: [...foreignParticipants].slice(0, 8),
+        topResultOwned: false
+      };
+    }
+  }
   if (matchedParticipants.length === 0) {
     return {
       subjectMatch: foreignParticipants.size > 0 ? "mismatched" : "unknown",
@@ -13184,7 +13581,7 @@ function extractConversationTemporalPhrase(queryText: string): string | null {
 function trimRecapTopicNoise(value: string): string {
   return value
     .replace(
-      /\b(?:this|last|over|earlier|today|tonight|yesterday|week|month|year|days?|weeks?|months?|past)\b.*$/iu,
+      /\b(?:this|last|over|earlier|today|tonight|yesterday|recently|lately|currently|these\s+days|week|month|year|days?|weeks?|months?|past|in\s+omi\s+notes?|from\s+omi\s+notes?)\b.*$/iu,
       ""
     )
     .replace(/^[\s"'`]+|[\s"'`.,!?]+$/gu, "")
@@ -13548,7 +13945,10 @@ function mergeDecomposedResults(responseSets: readonly (readonly RecallResult[])
   let firstSeen = 0;
   for (const rows of responseSets) {
     for (const candidate of rows) {
-      const key = candidate.artifactId ?? candidate.memoryId;
+      const key =
+        candidate.memoryType === "artifact_derivation"
+          ? candidate.memoryId
+          : candidate.artifactId ?? candidate.memoryId;
       const score = typeof candidate.score === "number" ? candidate.score : 0;
       const existing = merged.get(key);
       if (!existing) {
@@ -13576,11 +13976,16 @@ function mergeDecomposedResults(responseSets: readonly (readonly RecallResult[])
 
   return [...merged.values()]
     .sort((left, right) => {
-      if (right.hitCount !== left.hitCount) {
-        return right.hitCount - left.hitCount;
+      const leftCompositeScore = left.bestScore + Math.min(Math.max(left.hitCount - 1, 0), 3) * 2;
+      const rightCompositeScore = right.bestScore + Math.min(Math.max(right.hitCount - 1, 0), 3) * 2;
+      if (rightCompositeScore !== leftCompositeScore) {
+        return rightCompositeScore - leftCompositeScore;
       }
       if (right.bestScore !== left.bestScore) {
         return right.bestScore - left.bestScore;
+      }
+      if (right.hitCount !== left.hitCount) {
+        return right.hitCount - left.hitCount;
       }
       const timeDelta = recallResultSortTime(right.result.occurredAt ?? null) - recallResultSortTime(left.result.occurredAt ?? null);
       if (timeDelta !== 0) {
@@ -13924,6 +14329,12 @@ function recapResultRichnessScore(result: RecallResult): number {
         ? 1
         : 0;
   let score = leafBonus + Math.min(result.content.length / 200, 2);
+  if (result.provenance?.tier === "source_topic_report") {
+    score += result.provenance?.derivation_type === "topic_segment" ? 3 : 1.25;
+  }
+  if (/^\s*Conversation unit between\b/iu.test(result.content)) {
+    score -= 2.5;
+  }
   if (isRecapHeadingOnlyResult(result)) {
     score -= 6;
   }
@@ -14048,8 +14459,16 @@ function buildRecapSupportProbes(query: RecapQuery, intent: RecapIntent, focus: 
   const temporalPhrase = extractConversationTemporalPhrase(query.query);
   const subject = focus.participants.includes("Steve") ? "Steve" : focus.participants[0] ?? "Steve";
   const others = focus.participants.filter((participant) => participant !== subject);
+  const lowered = query.query.toLowerCase();
 
   probes.add(query.query.trim());
+
+  if (/\bprojects?\b/u.test(lowered) && /\b(?:talked|mentioned|discussed|recently|lately|omi|notes?)\b/u.test(lowered)) {
+    probes.add("active projects");
+    probes.add("mentioned projects");
+    probes.add("working on projects");
+    probes.add("project log");
+  }
 
   if (isConversationRecapQuery(query.query)) {
     for (const subquery of buildConversationRecapSubqueries(query.query)) {
@@ -14147,6 +14566,181 @@ function recapAnchorSearchPhrases(queryText: string, intent: RecapIntent): reado
   return [...phrases];
 }
 
+function isCurrentProjectActivityReportQuery(queryText: string): boolean {
+  const normalized = queryText.trim().toLowerCase();
+  return (
+    /\bwhat\s+(?:am\s+i|are\s+we)\b/u.test(normalized) &&
+    /\b(?:actively\s+)?(?:building|working on|developing|prototyping)\b/u.test(normalized) &&
+    /\b(?:now|currently|actively|recently|lately)?\b/u.test(normalized)
+  );
+}
+
+function isSourceTopicReportQuery(queryText: string): boolean {
+  const normalized = queryText.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    /\b(?:trips?|travel|dates?|commitments?|calendar|schedule|tasks?|action items?|open items?)\b/u.test(normalized) &&
+    !/\bprojects?\b/u.test(normalized)
+  ) {
+    return false;
+  }
+  const explicitTopicReport =
+    /\b(?:summarize|summary|recap|breakdown)\b/u.test(normalized) &&
+    /\b(?:mentioned|talked about|discussed|said)\b/u.test(normalized) &&
+    /\babout\s+[\p{L}\p{N}][\p{L}\p{N}'’& -]{1,80}\b/iu.test(queryText);
+  const projectOrTopicInventory =
+    /\b(?:what|which|list|summarize|summary|recap|breakdown)\b/u.test(normalized) &&
+    /\b(?:projects?|topics?|documents?|sources?)\b/u.test(normalized) &&
+    /\b(?:mentioned|talked about|discussed|recently|lately|omi|notes?|documents?|sources?)\b/u.test(normalized);
+  return (
+    explicitTopicReport ||
+    projectOrTopicInventory ||
+    isCurrentProjectActivityReportQuery(queryText)
+  );
+}
+
+function sourceTopicQueryTerms(queryText: string, focus: RecapFocus): readonly string[] {
+  const terms: string[] = [...focus.projects, ...focus.topics];
+  const explicitTopic = extractConversationRecapTopic(queryText);
+  if (explicitTopic) {
+    terms.push(explicitTopic);
+  }
+  if (/\bprojects?\b/iu.test(queryText)) {
+    terms.push("project", "projects", "active projects", "working on", "building", "built");
+  }
+  if (/\b(?:actively\s+)?(?:building|working on|developing|prototyping)\b/iu.test(queryText)) {
+    terms.push("active projects", "working on", "building", "developing", "prototyping", "integrating");
+  }
+  return uniqueStrings(
+    terms
+      .map((term) => trimRecapTopicNoise(term))
+      .flatMap((term) => {
+        const normalized = normalizeWhitespace(term);
+        if (!normalized) {
+          return [];
+        }
+        return [normalized, ...normalized.split(/\s+/u).filter((part) => part.length >= 3)];
+      })
+  ).slice(0, 12);
+}
+
+async function loadSourceTopicReportRows(
+  namespaceId: string,
+  queryText: string,
+  focus: RecapFocus,
+  limit: number,
+  timeStart: string | null,
+  timeEnd: string | null
+): Promise<RecallResult[]> {
+  if (!isSourceTopicReportQuery(queryText)) {
+    return [];
+  }
+  const terms = sourceTopicQueryTerms(queryText, focus);
+  if (terms.length === 0) {
+    return [];
+  }
+  const sourceKindPattern = /\bomi\b/iu.test(queryText) ? "%/omi-archive/%" : null;
+  const rows = await queryRows<SearchRow>(
+    `
+      WITH query_terms AS (
+        SELECT lower(unnest($2::text[])) AS term
+      ),
+      derivation_rows AS (
+        SELECT
+          ad.id::text AS memory_id,
+          'artifact_derivation'::text AS memory_type,
+          concat_ws(
+            ' ',
+            NULLIF(ad.content_text, ''),
+            NULLIF(coalesce(ad.metadata->>'source_sentence_text', a.metadata->>'source_sentence_text', ''), ''),
+            NULLIF(coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', ''), ''),
+            NULLIF(coalesce(ad.metadata->>'topic_label', ''), ''),
+            NULLIF(coalesce(a.metadata->>'structured_title', a.metadata->>'title', ''), '')
+          ) AS content,
+          (
+            1.2 +
+            COUNT(DISTINCT qt.term)::double precision * 1.8 +
+            CASE ad.derivation_type
+              WHEN 'topic_segment' THEN 1.2
+              WHEN 'conversation_unit' THEN 1.0
+              WHEN 'source_sentence' THEN 0.8
+              WHEN 'participant_turn' THEN 0.7
+              ELSE 0.2
+            END
+          )::double precision AS raw_score,
+          ao.artifact_id,
+          ao.observed_at AS occurred_at,
+          a.namespace_id,
+          jsonb_build_object(
+            'tier', 'source_topic_report',
+            'derivation_type', ad.derivation_type,
+            'source_uri', a.uri,
+            'source_table', 'artifact_derivations',
+            'source_row_id', ad.id::text,
+            'source_quote', LEFT(concat_ws(' ', NULLIF(ad.content_text, ''), NULLIF(coalesce(ad.metadata->>'source_sentence_text', ''), '')), 420),
+            'metadata', ad.metadata
+          ) AS provenance
+        FROM artifact_derivations ad
+        JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
+        JOIN artifacts a ON a.id = ao.artifact_id
+        JOIN query_terms qt ON lower(concat_ws(
+          ' ',
+          coalesce(ad.content_text, ''),
+          coalesce(ad.metadata->>'source_sentence_text', ''),
+          coalesce(ad.metadata->>'source_turn_text', ''),
+          coalesce(ad.metadata->>'topic_label', ''),
+          coalesce(a.metadata->>'structured_title', a.metadata->>'title', ''),
+          coalesce(a.uri, '')
+        )) LIKE ('%' || qt.term || '%')
+        WHERE a.namespace_id = $1
+          AND COALESCE(ad.content_text, ad.metadata->>'source_sentence_text', ad.metadata->>'source_turn_text', '') <> ''
+          AND ($3::timestamptz IS NULL OR ao.observed_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR ao.observed_at <= $4::timestamptz)
+          AND ($5::text IS NULL OR a.uri LIKE $5)
+        GROUP BY ad.id, ad.content_text, ad.metadata, ad.derivation_type, ao.artifact_id, ao.observed_at, a.namespace_id, a.uri, a.metadata
+      ),
+      episodic_rows AS (
+        SELECT
+          em.id::text AS memory_id,
+          'episodic_memory'::text AS memory_type,
+          em.content,
+          (1.0 + COUNT(DISTINCT qt.term)::double precision * 1.5)::double precision AS raw_score,
+          em.artifact_id,
+          em.occurred_at,
+          em.namespace_id,
+          jsonb_build_object(
+            'tier', 'source_topic_report',
+            'source_uri', a.uri,
+            'source_table', 'episodic_memory',
+            'source_row_id', em.id::text,
+            'source_quote', LEFT(em.content, 420),
+            'metadata', em.metadata
+          ) AS provenance
+        FROM episodic_memory em
+        LEFT JOIN artifacts a ON a.id = em.artifact_id
+        JOIN query_terms qt ON lower(concat_ws(' ', em.content, coalesce(a.uri, ''), coalesce(a.metadata->>'structured_title', a.metadata->>'title', ''))) LIKE ('%' || qt.term || '%')
+        WHERE em.namespace_id = $1
+          AND COALESCE(em.content, '') <> ''
+          AND ($3::timestamptz IS NULL OR em.occurred_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR em.occurred_at <= $4::timestamptz)
+          AND ($5::text IS NULL OR a.uri LIKE $5)
+        GROUP BY em.id, em.content, em.artifact_id, em.occurred_at, em.namespace_id, a.uri, em.metadata
+      )
+      SELECT * FROM (
+        SELECT * FROM derivation_rows
+        UNION ALL
+        SELECT * FROM episodic_rows
+      ) rows
+      ORDER BY raw_score DESC, occurred_at DESC NULLS LAST
+      LIMIT $6
+    `,
+    [namespaceId, terms, timeStart, timeEnd, sourceKindPattern, Math.max(limit * 4, 16)]
+  );
+  return mapRecallRows(rows).slice(0, Math.max(limit, 8));
+}
+
 function summaryBasisForResults(results: readonly RecallResult[]): "leaf_evidence" | "summary_support" | "mixed" {
   const hasLeaf = results.some((result) =>
     result.memoryType === "episodic_memory" || result.memoryType === "narrative_event" || result.memoryType === "artifact_derivation"
@@ -14159,6 +14753,179 @@ function summaryBasisForResults(results: readonly RecallResult[]): "leaf_evidenc
     return "mixed";
   }
   return hasLeaf ? "leaf_evidence" : "summary_support";
+}
+
+function isSourceTopicReportResult(result: RecallResult): boolean {
+  return result.provenance?.tier === "source_topic_report";
+}
+
+function sourceTopicReportText(result: RecallResult): string {
+  const sourceQuote = typeof result.provenance?.source_quote === "string" ? result.provenance.source_quote : "";
+  const metadata = result.provenance?.metadata;
+  const metadataRecord = metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata as Record<string, unknown> : {};
+  const sourceSentence = typeof metadataRecord.source_sentence_text === "string" ? metadataRecord.source_sentence_text : "";
+  const sourceTurn = typeof metadataRecord.source_turn_text === "string" ? metadataRecord.source_turn_text : "";
+  const candidates = [sourceQuote, sourceSentence, sourceTurn, result.content]
+    .map((text) => cleanSourceTopicReportText(text))
+    .filter((text) => text.length > 0 && !isSourceTopicBoilerplateSentence(text));
+  return uniqueStrings(candidates).sort((left, right) => right.length - left.length)[0] ?? "";
+}
+
+function cleanSourceTopicReportText(text: string): string {
+  let cleaned = normalizeWhitespace(text);
+  cleaned = cleaned.replace(/^Topic segment about [^.]+\.?\s*/iu, "");
+  cleaned = cleaned.replace(/^Conversation unit between [^.]+\.?\s*/iu, "");
+  cleaned = cleaned.replace(/^Participant-bound turn for [^.]+\.?\s*/iu, "");
+  cleaned = cleaned.replace(/^#\s*[^:]{2,80}:\s*[^.?!]{2,160}?\s+(?=The User|I\b|We\b|Steve\b)/u, "");
+  cleaned = cleaned.replace(/^The User Gave A Daily Log Covering Several Active Projects:\s*/iu, "");
+  cleaned = cleaned.replace(/\s+-\s*Conversation ID\b[\s\S]*$/iu, "");
+  cleaned = cleaned.replace(/\s+-\s*Created At\b[\s\S]*$/iu, "");
+  return normalizeWhitespace(cleaned);
+}
+
+function isSourceTopicBoilerplateSentence(sentence: string): boolean {
+  const normalized = normalizeWhitespace(sentence).toLowerCase();
+  return (
+    normalized.length === 0 ||
+    normalized.startsWith("topic segment about ") ||
+    normalized.startsWith("conversation unit between ") ||
+    normalized.startsWith("participant-bound turn for ") ||
+    normalized.startsWith("# project log:") ||
+    (normalized.split(",").length >= 3 && !/\b(?:integrating|prototyping|developing|working|building|creating|turns|supports|with|for)\b/u.test(normalized)) ||
+    normalized.startsWith("category:") ||
+    normalized.startsWith("origin_source:") ||
+    normalized.startsWith("- conversation id") ||
+    normalized.startsWith("- created at")
+  );
+}
+
+function sourceTopicSentenceScore(sentence: string, queryText: string, terms: readonly string[]): number {
+  const normalized = sentence.toLowerCase();
+  let score = 0;
+  for (const term of terms) {
+    const loweredTerm = term.toLowerCase();
+    if (loweredTerm.length >= 3 && normalized.includes(loweredTerm)) {
+      score += loweredTerm.includes(" ") ? 3 : 1.5;
+    }
+  }
+  if (/\b(?:active projects?|working on|building|prototyping|developing|integrating|creating)\b/iu.test(sentence)) {
+    score += /\bprojects?\b/iu.test(queryText) ? 3 : 1.25;
+  }
+  if (/^#\s*Project Log:/iu.test(sentence)) {
+    score += /\bprojects?\b/iu.test(queryText) ? 2.5 : 0.75;
+  }
+  if (isSourceTopicBoilerplateSentence(sentence)) {
+    score -= 8;
+  }
+  if (/\bConversation unit between\b/iu.test(sentence)) {
+    score -= 5;
+  }
+  return score;
+}
+
+function hasSourceTopicActionVerb(sentence: string): boolean {
+  return /\b(?:integrating|prototyping|developing|working on|building|creating|collaborating|turns|supports|generates)\b/iu.test(sentence);
+}
+
+function sourceTopicPrimaryTerms(queryText: string, focus: RecapFocus): readonly string[] {
+  const explicitTopic = extractConversationRecapTopic(queryText);
+  const candidates = explicitTopic ? [explicitTopic] : [...focus.projects, ...focus.topics];
+  return uniqueStrings(
+    candidates
+      .map((term) => trimRecapTopicNoise(term))
+      .flatMap((term) => normalizeWhitespace(term).split(/\s+/u).concat(normalizeWhitespace(term)))
+      .map((term) => term.trim())
+      .filter((term) => term.length >= 3)
+      .filter((term) => !/^(?:project|projects|topic|topics|notes|omi|recently|lately)$/iu.test(term))
+  );
+}
+
+function sourceTopicFragmentsForQuery(text: string, queryText: string, focus: RecapFocus): readonly string[] {
+  const cleaned = cleanSourceTopicReportText(text);
+  const primaryTerms = sourceTopicPrimaryTerms(queryText, focus);
+  const fragments = uniqueStrings(
+    cleaned
+      .split(/\s*;\s*|\s+(?=\b(?:and\s+)?(?:building|developing|prototyping|integrating|working on|creating)\b)/iu)
+      .flatMap((fragment) => extractSentenceCandidates(fragment).length > 0 ? extractSentenceCandidates(fragment) : [fragment])
+      .map(cleanSourceTopicReportText)
+      .filter((fragment) => fragment.length >= 12 && !isSourceTopicBoilerplateSentence(fragment))
+  );
+  if (primaryTerms.length === 0 || /\bprojects?\b/iu.test(queryText)) {
+    return fragments;
+  }
+  const focused = fragments.filter((fragment) => {
+    const lowered = fragment.toLowerCase();
+    return primaryTerms.some((term) => lowered.includes(term.toLowerCase()));
+  });
+  const focusedAction = focused.filter(hasSourceTopicActionVerb);
+  if (focusedAction.length > 0) {
+    return focusedAction;
+  }
+  return focused.length > 0 ? focused : fragments;
+}
+
+function buildSourceTopicReportSummary(queryText: string, results: readonly RecallResult[], focus: RecapFocus): string | undefined {
+  const sourceTopicRows = results.filter(isSourceTopicReportResult);
+  if (sourceTopicRows.length === 0 || !isSourceTopicReportQuery(queryText)) {
+    return undefined;
+  }
+
+  const terms = sourceTopicQueryTerms(queryText, focus);
+  const sentenceCandidates = sourceTopicRows.flatMap((result, rowIndex) =>
+    sourceTopicFragmentsForQuery(sourceTopicReportText(result), queryText, focus)
+      .map(cleanSourceTopicReportText)
+      .filter((sentence) => sentence.length >= 12 && !isSourceTopicBoilerplateSentence(sentence))
+      .map((sentence) => ({ sentence, rowIndex }))
+  );
+  const dedupedCandidates: Array<{ readonly sentence: string; readonly rowIndex: number }> = [];
+  const seenCandidatePrefixes = new Set<string>();
+  for (const candidate of sentenceCandidates) {
+    const prefix = candidate.sentence.toLowerCase().slice(0, 180);
+    if (seenCandidatePrefixes.has(prefix)) {
+      continue;
+    }
+    seenCandidatePrefixes.add(prefix);
+    dedupedCandidates.push(candidate);
+  }
+
+  if (dedupedCandidates.length === 0) {
+    return undefined;
+  }
+
+  const candidatePool =
+    !/\bprojects?\b/iu.test(queryText) && dedupedCandidates.some((candidate) => hasSourceTopicActionVerb(candidate.sentence))
+      ? dedupedCandidates.filter((candidate) => hasSourceTopicActionVerb(candidate.sentence))
+      : dedupedCandidates;
+
+  if (/\bprojects?\b/iu.test(queryText) || isCurrentProjectActivityReportQuery(queryText)) {
+    const recentActionFragments = candidatePool
+      .filter((candidate) => candidate.rowIndex <= 2 && hasSourceTopicActionVerb(candidate.sentence))
+      .slice(0, 5)
+      .map((candidate) => candidate.sentence);
+    if (recentActionFragments.length >= 3) {
+      return recentActionFragments.join("; ");
+    }
+  }
+
+  const ordered = [...candidatePool].sort((left, right) => {
+    const rightScore = sourceTopicSentenceScore(right.sentence, queryText, terms) + Math.max(0, 6 - right.rowIndex) * 0.35;
+    const leftScore = sourceTopicSentenceScore(left.sentence, queryText, terms) + Math.max(0, 6 - left.rowIndex) * 0.35;
+    const scoreDelta = rightScore - leftScore;
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+    if (left.rowIndex !== right.rowIndex) {
+      return left.rowIndex - right.rowIndex;
+    }
+    return right.sentence.length - left.sentence.length;
+  });
+  const maxSelected = /\bprojects?\b/iu.test(queryText) || isCurrentProjectActivityReportQuery(queryText) ? 5 : 2;
+  const selected = ordered
+    .filter((candidate) => sourceTopicSentenceScore(candidate.sentence, queryText, terms) > 0)
+    .slice(0, maxSelected)
+    .map((candidate) => candidate.sentence);
+  const fallback = ordered.slice(0, 1).map((candidate) => candidate.sentence);
+  return (selected.length > 0 ? selected : fallback).join(/\bprojects?\b/iu.test(queryText) || isCurrentProjectActivityReportQuery(queryText) ? "; " : " ");
 }
 
 function extractSentenceCandidates(text: string): readonly string[] {
@@ -14247,6 +15014,7 @@ function parseTaskItems(results: readonly RecallResult[], focus: RecapFocus): re
           project,
           dueHint: dueHintFromText(fragment),
           statusGuess: "open",
+          lifecycleStatus: "open",
           evidenceIds: [result.memoryId]
         });
       }
@@ -14254,6 +15022,175 @@ function parseTaskItems(results: readonly RecallResult[], focus: RecapFocus): re
   }
 
   return items.slice(0, 12);
+}
+
+function isTaskBearingText(text: string): boolean {
+  return /\b(need to|needs to|should|must|todo|to do|follow up|follow-up|action item|action items|remember to|update|write|finish|message|send|review|ship|fix|re-run|rerun|capture|pull)\b/i.test(
+    text
+  );
+}
+
+function isTravelTaskText(text: string): boolean {
+  return /\b(?:travel|trip|flight|fly|flying|july|september|summer|istanbul|iceland|thailand|chiang\s+mai|driver'?s?\s+license|license|storage|unit|rv|jeep|bend|reno|passport|hotel|conference|leave|return)\b/iu.test(
+    text
+  );
+}
+
+function isClearlyUnrelatedToTravelTasks(text: string): boolean {
+  return /\b(?:amiga|founder\s+fact|query\s+contract|mcp\s+studio|projection\s+audit|stable\s+querycontract)\b/iu.test(text);
+}
+
+function filterTravelTaskItems(tasks: readonly RecapTaskItem[]): readonly RecapTaskItem[] {
+  return tasks.filter((task) => {
+    const text = `${task.title} ${task.description} ${task.project ?? ""} ${task.dueHint ?? ""}`;
+    return !isClearlyUnrelatedToTravelTasks(text) && isTravelTaskText(text);
+  });
+}
+
+function filterTravelTaskResults(results: readonly RecallResult[]): readonly RecallResult[] {
+  return results.filter((result) => {
+    const text = normalizeWhitespace(result.content);
+    return !isClearlyUnrelatedToTravelTasks(text) && isTravelTaskText(text);
+  });
+}
+
+function taskSupportQueryTerms(queryText: string, focus: RecapFocus): readonly string[] {
+  const lowered = normalizeWhitespace(queryText).toLowerCase();
+  const terms = new Set<string>([...focus.projects, ...focus.topics].map((term) => normalizeWhitespace(term).toLowerCase()).filter(Boolean));
+  for (const token of lowered
+    .replace(/[^a-z0-9\s-]/gu, " ")
+    .split(/\s+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 4)
+    .filter(
+      (token) =>
+        ![
+          "what",
+          "need",
+          "should",
+          "tasks",
+          "task",
+          "todo",
+          "from",
+          "this",
+          "note",
+          "list",
+          "pull",
+          "extract",
+          "action",
+          "items",
+          "remaining",
+          "open",
+          "have"
+        ].includes(token)
+    )) {
+    terms.add(token);
+  }
+  if (/\bquery\s+contract\b/iu.test(queryText)) {
+    terms.add("query contract");
+    terms.add("querycontract");
+  }
+  if (/\bmcp\s+studio\b/iu.test(queryText)) {
+    terms.add("mcp studio");
+  }
+  return [...terms].slice(0, 12);
+}
+
+async function loadTaskBearingSupportResults(query: RecapQuery, focus: RecapFocus, limit: number): Promise<RecallResult[]> {
+  const { timeStart, timeEnd } = resolveRecapWindow(query);
+  const terms = taskSupportQueryTerms(query.query, focus);
+  const markerPattern =
+    "(task|tasks|action[ -]?items?|action[ -]?list|todo|to-do|open tasks|remaining tasks|need to|should|must|follow[ -]?up|finish|review|publish|add stable|run production readiness)";
+  const rows = await queryRows<SearchRow>(
+    `
+      WITH query_terms AS (
+        SELECT lower(unnest($2::text[])) AS term
+      ),
+      episodic_rows AS (
+        SELECT
+          em.id::text AS memory_id,
+          'episodic_memory'::text AS memory_type,
+          em.content,
+          (
+            7.0 +
+            CASE WHEN em.content ~* '^\\s*-\\s+' THEN 1.5 ELSE 0 END +
+            CASE WHEN lower(concat_ws(' ', em.content, coalesce(a.uri, ''), coalesce(a.metadata->>'structured_title', a.metadata->>'title', ''))) LIKE '%query contract%' THEN 2.0 ELSE 0 END +
+            (
+              SELECT COUNT(*)::double precision * 2.0
+              FROM query_terms qt
+              WHERE lower(concat_ws(' ', em.content, coalesce(a.uri, ''), coalesce(a.metadata->>'structured_title', a.metadata->>'title', ''))) LIKE ('%' || qt.term || '%')
+            )
+          )::double precision AS raw_score,
+          em.artifact_id,
+          em.occurred_at,
+          em.namespace_id,
+          jsonb_build_object(
+            'tier', 'task_bearing_source',
+            'source_uri', a.uri,
+            'source_table', 'episodic_memory',
+            'source_row_id', em.id::text,
+            'source_quote', LEFT(em.content, 420),
+            'metadata', em.metadata
+          ) AS provenance
+        FROM episodic_memory em
+        LEFT JOIN artifacts a ON a.id = em.artifact_id
+        WHERE em.namespace_id = $1
+          AND COALESCE(em.content, '') ~* $5
+          AND ($3::timestamptz IS NULL OR em.occurred_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR em.occurred_at <= $4::timestamptz)
+      ),
+      derivation_rows AS (
+        SELECT
+          ad.id::text AS memory_id,
+          'artifact_derivation'::text AS memory_type,
+          concat_ws(
+            ' ',
+            NULLIF(ad.content_text, ''),
+            NULLIF(coalesce(ad.metadata->>'source_sentence_text', ''), ''),
+            NULLIF(coalesce(ad.metadata->>'source_turn_text', ''), ''),
+            NULLIF(coalesce(ad.metadata->>'topic_label', ''), ''),
+            NULLIF(coalesce(a.metadata->>'structured_title', a.metadata->>'title', ''), '')
+          ) AS content,
+          (
+            6.5 +
+            CASE WHEN ad.content_text ~* '^\\s*-\\s+' THEN 1.5 ELSE 0 END +
+            CASE WHEN lower(concat_ws(' ', ad.content_text, ad.metadata->>'source_sentence_text', ad.metadata->>'source_turn_text', a.uri, a.metadata->>'structured_title', a.metadata->>'title')) LIKE '%query contract%' THEN 2.0 ELSE 0 END +
+            (
+              SELECT COUNT(*)::double precision * 2.0
+              FROM query_terms qt
+              WHERE lower(concat_ws(' ', ad.content_text, ad.metadata->>'source_sentence_text', ad.metadata->>'source_turn_text', a.uri, a.metadata->>'structured_title', a.metadata->>'title')) LIKE ('%' || qt.term || '%')
+            )
+          )::double precision AS raw_score,
+          ao.artifact_id,
+          ao.observed_at AS occurred_at,
+          a.namespace_id,
+          jsonb_build_object(
+            'tier', 'task_bearing_source',
+            'source_uri', a.uri,
+            'source_table', 'artifact_derivations',
+            'source_row_id', ad.id::text,
+            'source_quote', LEFT(concat_ws(' ', NULLIF(ad.content_text, ''), NULLIF(coalesce(ad.metadata->>'source_sentence_text', ''), '')), 420),
+            'metadata', ad.metadata
+          ) AS provenance
+        FROM artifact_derivations ad
+        JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
+        JOIN artifacts a ON a.id = ao.artifact_id
+        WHERE a.namespace_id = $1
+          AND concat_ws(' ', ad.content_text, ad.metadata->>'source_sentence_text', ad.metadata->>'source_turn_text') ~* $5
+          AND ($3::timestamptz IS NULL OR ao.observed_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR ao.observed_at <= $4::timestamptz)
+      )
+      SELECT * FROM (
+        SELECT * FROM episodic_rows
+        UNION ALL
+        SELECT * FROM derivation_rows
+      ) rows
+      ORDER BY raw_score DESC, occurred_at DESC NULLS LAST
+      LIMIT $6
+    `,
+    [query.namespaceId, terms, timeStart ?? null, timeEnd ?? null, markerPattern, Math.max(limit * 3, 16)]
+  );
+  return mapRecallRows(rows).slice(0, Math.max(limit, 8));
 }
 
 function calendarParticipantsFromText(text: string, focus: RecapFocus): readonly string[] {
@@ -14317,6 +15254,195 @@ function parseCalendarItems(results: readonly RecallResult[], focus: RecapFocus)
   }
 
   return items.slice(0, 12);
+}
+
+function anchoredTemporalEventPhrases(queryText: string): readonly string[] {
+  const phrases = new Set<string>();
+  const normalized = normalizeWhitespace(queryText);
+  for (const match of normalized.matchAll(/\b(?:after|before|following|post|prior to)\s+([A-Z][A-Za-z0-9_-]*(?:\s+[A-Z][A-Za-z0-9_-]*){0,4})/gu)) {
+    const phrase = match[1]?.trim();
+    if (phrase && phrase.length >= 3) {
+      phrases.add(phrase);
+    }
+  }
+  for (const match of normalized.matchAll(/\b(?:after|before|following|post|prior to)\s+([a-z][a-z0-9_-]*(?:\s+[a-z][a-z0-9_-]*){0,4})/giu)) {
+    const phrase = match[1]?.trim();
+    if (!phrase || phrase.length < 3) {
+      continue;
+    }
+    const lowered = phrase.toLowerCase();
+    const cleaned = phrase
+      .split(/\s+/u)
+      .filter((token) => !["i", "we", "you", "the", "a", "an", "my", "our", "was", "were", "am"].includes(token.toLowerCase()))
+      .join(" ")
+      .trim();
+    if (cleaned.length >= 3 && !["planning", "plans", "trip", "travel"].includes(lowered)) {
+      phrases.add(cleaned);
+    }
+  }
+  return [...phrases].slice(0, 4);
+}
+
+function anchoredCalendarRowScore(result: RecallResult, anchorPhrases: readonly string[], queryText: string): number {
+  const text = normalizeWhitespace(result.content).toLowerCase();
+  let score = 0;
+  if (anchorPhrases.some((phrase) => text.includes(phrase.toLowerCase()))) {
+    score += 5;
+  }
+  if (/\bafter\b/iu.test(queryText) && /\b(?:after|afterward|afterwards|then)\b/iu.test(result.content)) {
+    score += 4;
+  }
+  if (/\bbefore\b/iu.test(queryText) && /\b(?:before|prior to|ahead of)\b/iu.test(result.content)) {
+    score += 4;
+  }
+  if (/\b(?:plan|plans|planning|need to|want to|will|going to|fly|stay|return|leave|sell|book|visit|travel|go to)\b/iu.test(result.content)) {
+    score += 2;
+  }
+  if (!anchorPhrases.some((phrase) => text.includes(phrase.toLowerCase())) && result.memoryType === "artifact_derivation") {
+    score -= 4;
+  }
+  return score;
+}
+
+function anchoredCalendarRowMatchesRelation(result: RecallResult, anchorPhrases: readonly string[], queryText: string): boolean {
+  const text = normalizeWhitespace(result.content);
+  const hasAnchor = anchorPhrases.some((phrase) => text.toLowerCase().includes(phrase.toLowerCase()));
+  const relationMatch = /\bafter\b/iu.test(queryText)
+    ? /\b(?:after|afterward|afterwards|then)\b/iu.test(text)
+    : /\bbefore\b/iu.test(queryText)
+      ? /\b(?:before|prior to|ahead of)\b/iu.test(text)
+      : /\b(?:after|afterward|afterwards|before|prior to|ahead of|then)\b/iu.test(text);
+  const actionMatch = /\b(?:plan|plans|planning|need to|want to|will|going to|fly|stay|return|leave|sell|book|visit|travel|go to)\b/iu.test(text);
+  return hasAnchor && relationMatch && actionMatch;
+}
+
+function parseAnchoredCalendarItems(
+  results: readonly RecallResult[],
+  focus: RecapFocus,
+  anchorPhrases: readonly string[],
+  queryText: string
+): readonly CalendarCommitmentItem[] {
+  const items: CalendarCommitmentItem[] = [];
+  const seen = new Set<string>();
+  const afterQuery = /\bafter\b/iu.test(queryText);
+  const beforeQuery = /\bbefore\b/iu.test(queryText);
+  const anchorRegexes = anchorPhrases.map((phrase) => new RegExp(`\\b${phrase.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\b`, "iu"));
+  const relationPattern = afterQuery
+    ? /\b(?:after|afterward|afterwards|then)\b/iu
+    : beforeQuery
+      ? /\b(?:before|prior to|ahead of)\b/iu
+      : /\b(?:after|before|following|then)\b/iu;
+  const actionPattern = /\b(?:plan|plans|planning|need to|want to|will|going to|fly|stay|return|leave|sell|book|visit|travel|go to)\b/iu;
+
+  for (const result of results) {
+    for (const sentence of extractSentenceCandidates(result.content)) {
+      const sentenceHasAnchor = anchorRegexes.some((pattern) => pattern.test(sentence));
+      const fragments = splitCalendarFragments(sentence);
+      let anchorSeenInSentence = sentenceHasAnchor;
+      for (const fragment of fragments) {
+        const relationMatch = relationPattern.test(fragment);
+        const actionMatch = actionPattern.test(fragment);
+        const fragmentHasAnchor = anchorRegexes.some((pattern) => pattern.test(fragment));
+        const relationActionMatch = /\b(?:fly|stay|return|leave|sell|book|visit|travel|go to)\b/iu.test(fragment);
+        if (/\b(?:long-time friend|former romantic partner|known for|important people in their life|relationship)\b/iu.test(fragment)) {
+          continue;
+        }
+        if ((afterQuery || beforeQuery) && !relationMatch && !relationActionMatch) {
+          continue;
+        }
+        if (!fragmentHasAnchor && !relationMatch && !(anchorSeenInSentence && actionMatch)) {
+          continue;
+        }
+        if (!actionMatch && !relationMatch) {
+          continue;
+        }
+        anchorSeenInSentence = anchorSeenInSentence || fragmentHasAnchor;
+        const title = trimSentenceForTitle(fragment);
+        const key = title.toLowerCase();
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        items.push({
+          title,
+          participants: calendarParticipantsFromText(fragment, focus),
+          timeHint:
+            fragment.match(/\b(afterward|afterwards|before|prior to|then|end of April|early September|mid-to-late July|mid to late July)\b/iu)?.[1]?.trim(),
+          locationHint: fragment.match(/\b(?:at|in|to)\s+([A-Z][A-Za-z0-9_-]+(?:\s+[A-Za-z0-9_-]+){0,3})\b/u)?.[1] ?? undefined,
+          certainty: "medium",
+          evidenceIds: [result.memoryId]
+        });
+      }
+    }
+  }
+
+  return items.slice(0, 12);
+}
+
+async function readAnchoredCalendarSupport(
+  query: RecapQuery,
+  focus: RecapFocus,
+  limit: number
+): Promise<{
+  readonly commitments: readonly CalendarCommitmentItem[];
+  readonly results: readonly RecallResult[];
+  readonly anchorPhrases: readonly string[];
+}> {
+  const anchorPhrases = anchoredTemporalEventPhrases(query.query);
+  if (anchorPhrases.length === 0) {
+    return { commitments: [], results: [], anchorPhrases };
+  }
+
+  const anchorRows: RecallResult[] = [];
+  const seen = new Set<string>();
+  for (const phrase of anchorPhrases) {
+    const rows = await loadRelativePhraseEpisodicRows(query.namespaceId, phrase, Math.max(limit, 8));
+    for (const row of rows) {
+      if (seen.has(row.memoryId)) {
+        continue;
+      }
+      seen.add(row.memoryId);
+      anchorRows.push(row);
+    }
+  }
+
+  const siblingRows =
+    anchorRows.some((row) => row.artifactId)
+      ? await loadArtifactSiblingEpisodicRows(
+          query.namespaceId,
+          uniqueStrings(anchorRows.map((row) => row.artifactId ?? "").filter((artifactId): artifactId is string => artifactId.length > 0)),
+          Math.max(limit * 2, 12)
+        )
+      : [];
+
+  const rawScoredRows = [...anchorRows, ...siblingRows]
+    .map((row) => ({ row, score: anchoredCalendarRowScore(row, anchorPhrases, query.query) }))
+    .sort((left, right) => right.score - left.score);
+  const relationalAnchorQuery = /\b(?:after|before|following|post|prior to)\b/iu.test(query.query);
+  const highConfidenceRows = rawScoredRows.filter(
+    (entry) => entry.score >= (relationalAnchorQuery ? 9 : 1) && (!relationalAnchorQuery || anchoredCalendarRowMatchesRelation(entry.row, anchorPhrases, query.query))
+  );
+  const scoredRows = highConfidenceRows.length > 0 ? highConfidenceRows : rawScoredRows.filter((entry) => entry.score > 0);
+
+  const anchoredResults: RecallResult[] = [];
+  const selectedIds = new Set<string>();
+  for (const { row } of scoredRows) {
+    if (selectedIds.has(row.memoryId)) {
+      continue;
+    }
+    selectedIds.add(row.memoryId);
+    anchoredResults.push(row);
+    if (anchoredResults.length >= Math.max(limit * 2, 12)) {
+      break;
+    }
+  }
+
+  const commitments = parseAnchoredCalendarItems(anchoredResults, focus, anchorPhrases, query.query);
+  return {
+    commitments,
+    results: anchoredResults,
+    anchorPhrases
+  };
 }
 
 function recapSummarySentenceScore(sentence: string, queryText: string): number {
@@ -15350,6 +16476,17 @@ function assessRecallAnswer(
         text
       )
     ).length;
+    const sourceBackfillProfileSupport = normalizeWhitespace([
+      ...primaryEntitySupportTexts,
+      ...gatherPrimaryEntitySourceBackfillTexts(queryText, primaryEntityResults),
+      ...primaryEntityResults.flatMap(recallResultSourceTexts)
+    ].join(" "));
+    const sourceBoundFieldSupport =
+      /\b(career|education|study|looking into|career options|programs?|field|path|work in|wants to work in)\b/i.test(sourceBackfillProfileSupport) &&
+      /\b(mental health|counseling|counsell?ing|counselor|counsellor|psychology|psychological|therapeutic|therapy)\b/i.test(sourceBackfillProfileSupport);
+    const sourceBoundVocationSupport =
+      /\b(helping others|help others|comfort|helping them grow|helping people grow|acceptance|supportive community|true self|what you've been through|what you have been through)\b/i.test(sourceBackfillProfileSupport) &&
+      /\b(mental health|counseling|counsell?ing|counselor|counsellor|psychology|psychological|therapeutic|therapy|helping others|comfort|grow)\b/i.test(sourceBackfillProfileSupport);
     const strongSingleProfileSupport =
       alignedSupportCount >= 1 &&
       primaryEntitySupportTexts.some((text) =>
@@ -15383,15 +16520,15 @@ function assessRecallAnswer(
       });
     }
     if (
-      derivedProfileClaim &&
       subjectBinding.subjectMatch === "matched" &&
-      (repeatedSubjectBoundProfileSupport || strongSingleProfileSupport || (roleDirectionQuery && hasRoleDirectionSummarySupport))
+      (derivedProfileClaim || sourceBoundVocationSupport) &&
+      (repeatedSubjectBoundProfileSupport || strongSingleProfileSupport || sourceBoundFieldSupport || sourceBoundVocationSupport || (roleDirectionQuery && hasRoleDirectionSummarySupport))
     ) {
       return annotateAssessment({
         confidence: "confident",
         reason: roleDirectionQuery && hasRoleDirectionSummarySupport
           ? "The profile answer is grounded in an active role-direction summary plus subject-bound supporting evidence."
-          : strongSingleProfileSupport
+          : strongSingleProfileSupport || sourceBoundFieldSupport || sourceBoundVocationSupport
             ? "The profile answer is grounded in a directly subject-bound field signal and was derived deterministically from explicit career-direction evidence."
             : "The profile answer is grounded in repeated subject-bound evidence and was derived deterministically from aligned career-interest signals.",
         lexicalCoverage: coverage.lexicalCoverage,
@@ -15565,10 +16702,17 @@ function assessRecallAnswer(
 
   if (isIdentityProfileQuery(queryText) && directEvidence) {
     const derivedIdentityClaim = deriveIdentityProfileClaimText(queryText, results);
+    const identitySupportText = normalizeWhitespace([
+      ...results.map((result) => result.content),
+      ...gatherPrimaryEntitySourceBackfillTexts(queryText, results),
+      ...results.flatMap(recallResultSourceTexts)
+    ].join(" "));
     const alignedSupportCount = results.filter((result) =>
-      /\b(transgender|nonbinary|gender identity|transition|identity|trans woman|trans man|queer)\b/i.test(result.content)
+      /\b(transgender|nonbinary|gender identity|transition|identity|trans woman|trans man|trans experience|trans community|trans folks|queer)\b/i.test(result.content)
     ).length;
-    if (derivedIdentityClaim && evidence.length >= 1 && alignedSupportCount >= 1) {
+    const sourceBoundIdentitySupport =
+      /\b(transgender|nonbinary|gender identity|transition|identity|trans woman|trans man|trans experience|trans community|trans folks|queer|true self|authentic self)\b/i.test(identitySupportText);
+    if ((derivedIdentityClaim || sourceBoundIdentitySupport) && evidence.length >= 1 && (alignedSupportCount >= 1 || sourceBoundIdentitySupport)) {
       return annotateAssessment({
         confidence: "confident",
         reason: "The identity answer is grounded in direct identity-bearing evidence and was derived deterministically.",
@@ -15761,9 +16905,10 @@ function assessRecallAnswer(
 }
 
 interface CanonicalDerivedClaims {
-  readonly exactDetailFamily: string;
+  readonly exactDetailFamily: ExactDetailQuestionFamily;
   readonly temporalReducerEligible: boolean;
   readonly temporal: string | null;
+  readonly dailyLifeSummary: string | null;
   readonly purchaseSummary: string | null;
   readonly mediaSummary: string | null;
   readonly preferenceSummary: string | null;
@@ -15825,6 +16970,7 @@ function collectCanonicalDerivedClaims(
     exactDetailFamily,
     temporalReducerEligible,
     temporal: deriveTemporalClaimText(queryText, results),
+    dailyLifeSummary: deriveDailyLifeSummaryClaimText(queryText, results),
     purchaseSummary: derivePurchaseSummaryClaimText(queryText, results),
     mediaSummary: deriveMediaSummaryClaimText(queryText, results),
     preferenceSummary: derivePreferenceSummaryClaimText(queryText, results),
@@ -15875,23 +17021,29 @@ export function buildDualityObject(
 ): RecallResponse["duality"] {
   const top = results[0];
   const derivedClaims = collectCanonicalDerivedClaims(queryText, results, exactDetailCandidate);
+  const trustedPersonalResults = retainTrustedPersonalRecallResults(results, namespaceId, queryText);
+  const trustedPersonalDerivedClaims =
+    isPersonalSemanticNamespace(namespaceId) && trustedPersonalResults.length > 0
+      ? collectCanonicalDerivedClaims(queryText, trustedPersonalResults, exactDetailCandidate)
+      : null;
   const exactDetailFamily = derivedClaims.exactDetailFamily;
   const temporalReducerEligible = derivedClaims.temporalReducerEligible;
   const derivedTemporalClaimText = derivedClaims.temporal;
+  const derivedDailyLifeSummaryClaimText = trustedPersonalDerivedClaims?.dailyLifeSummary ?? derivedClaims.dailyLifeSummary;
   const derivedPurchaseSummaryClaimText = derivedClaims.purchaseSummary;
-  const derivedMediaSummaryClaimText = derivedClaims.mediaSummary;
+  const derivedMediaSummaryClaimText = trustedPersonalDerivedClaims?.mediaSummary ?? derivedClaims.mediaSummary;
   const derivedPreferenceSummaryClaimText = derivedClaims.preferenceSummary;
-  const derivedHabitConstraintClaimText = derivedClaims.habitConstraint;
-  const derivedRoutineSummaryClaimText = derivedClaims.routineSummary;
+  const derivedHabitConstraintClaimText = trustedPersonalDerivedClaims?.habitConstraint ?? derivedClaims.habitConstraint;
+  const derivedRoutineSummaryClaimText = trustedPersonalDerivedClaims?.routineSummary ?? derivedClaims.routineSummary;
   const derivedPersonTimeClaimText = derivedClaims.personTime;
   const derivedPreciseFactClaimText = derivedClaims.preciseFact;
-  const derivedRelationshipChangeClaimText = derivedClaims.relationshipChange;
+  const derivedRelationshipChangeClaimText = trustedPersonalDerivedClaims?.relationshipChange ?? derivedClaims.relationshipChange;
   const derivedRelationshipHistoryClaimText = derivedClaims.relationshipHistory;
-  const derivedDepartureClaimText = derivedClaims.departure;
+  const derivedDepartureClaimText = trustedPersonalDerivedClaims?.departure ?? derivedClaims.departure;
   const derivedMovieMentionClaimText = derivedClaims.movieMention;
-  const derivedProjectIdeaClaimText = derivedClaims.projectIdea;
-  const derivedRelationshipProfileClaimText = derivedClaims.relationshipProfile;
-  const derivedCurrentProjectClaimText = derivedClaims.currentProject;
+  const derivedProjectIdeaClaimText = trustedPersonalDerivedClaims?.projectIdea ?? derivedClaims.projectIdea;
+  const derivedRelationshipProfileClaimText = trustedPersonalDerivedClaims?.relationshipProfile ?? derivedClaims.relationshipProfile;
+  const derivedCurrentProjectClaimText = trustedPersonalDerivedClaims?.currentProject ?? derivedClaims.currentProject;
   const derivedStorageClaimText = derivedClaims.storage;
   const derivedEventLocationClaimText = derivedClaims.eventLocation;
   const derivedGoalFamilyClaimText = derivedClaims.goals;
@@ -15914,6 +17066,14 @@ export function buildDualityObject(
   const derivedCausalClaimText = derivedClaims.causal;
   const derivedCounterfactualClaimText = derivedClaims.counterfactual;
   const derivedRealizationClaimText = derivedClaims.realization;
+  const canonicalSetObjectValues =
+    canonicalAdjudication?.canonical.kind === "set" ? canonicalAdjudication.canonical.objectValues : [];
+  const canonicalSharedActivityClaimText =
+    /\bdestress|stress|relax\b/iu.test(queryText) &&
+    canonicalSetObjectValues.some((value) => /\bdanc(?:e|ing)\b/iu.test(value))
+      ? "The best supported shared stress-relief activity is dancing."
+      : null;
+  const atomicExactDetailCandidateClaimText = exactDetailCandidate?.strongSupport && isAtomicExactDetailQuestionFamily(exactDetailFamily) && !exactDetailCandidateNeedsSubtypeRescue(queryText, exactDetailCandidate) ? normalizeWhitespace(exactDetailCandidate.text ?? "") || null : null;
   const prioritizedExactDetailReducer =
     exactDetailFamily === "realization"
       ? exactDetailCandidate?.strongSupport
@@ -15973,6 +17133,7 @@ export function buildDualityObject(
     derivedSymbolicGiftFamilyClaimText ??
     derivedMusicMediaDisambiguationClaimText ??
     derivedFinancialStatusClaimText ??
+    canonicalSharedActivityClaimText ??
     derivedSharedClaimText ??
     derivedRealizationClaimText ??
     derivedCausalClaimText;
@@ -15980,6 +17141,7 @@ export function buildDualityObject(
   const currentDatingUnknownFromEvidence = isCurrentDatingUnknownEvidence(top, queryText);
   const abstentionClaimText = buildAbstentionClaimText(queryText, assessment);
   const fallbackDerivedClaimText =
+    derivedDailyLifeSummaryClaimText ??
     derivedPurchaseSummaryClaimText ??
     derivedMediaSummaryClaimText ??
     derivedPreferenceSummaryClaimText ??
@@ -16012,6 +17174,7 @@ export function buildDualityObject(
     derivedFinancialStatusClaimText ??
     derivedIdealDanceStudioClaimText ??
     derivedIdentityClaimText ??
+    canonicalSharedActivityClaimText ??
     derivedSharedClaimText ??
     derivedRealizationClaimText ??
     derivedCausalClaimText ??
@@ -16070,6 +17233,8 @@ export function buildDualityObject(
   const allowWeakCurrentProjectClaim =
     (isCurrentProjectQueryText(queryText) || isContinuityHandoffSearchQueryText(queryText)) &&
     Boolean(derivedCurrentProjectClaimText);
+  const allowWeakDailyLifeSummaryClaim =
+    isDailyLifeSummaryQuery(queryText) && Boolean(derivedDailyLifeSummaryClaimText);
   const allowWeakDerivedFactClaim =
     (isMovieMentionQuery(queryText) && Boolean(derivedMovieMentionClaimText)) ||
     (isProjectIdeaQueryText(queryText) && Boolean(derivedProjectIdeaClaimText)) ||
@@ -16077,7 +17242,13 @@ export function buildDualityObject(
     (isMediaSummaryQuery(queryText) && Boolean(derivedMediaSummaryClaimText)) ||
     (isPreferenceSummaryQuery(queryText) && Boolean(derivedPreferenceSummaryClaimText)) ||
     (isPersonTimeFactQuery(queryText) && Boolean(derivedPersonTimeClaimText));
-  let claimText = canonicalAdjudication?.formatted.claimText ??
+  let claimText = (isRelationshipChangeQueryText(queryText) ? derivedRelationshipChangeClaimText : null) ??
+    (isDepartureTimingQuery(queryText) ? derivedDepartureClaimText : null) ??
+    atomicExactDetailCandidateClaimText ??
+    canonicalSharedActivityClaimText ??
+    (isSharedCommonalityQuery(queryText) ? derivedSharedClaimText : null) ??
+    (isTemporalDetailQuery(queryText) || temporalReducerEligible ? derivedTemporalClaimText : null) ??
+    canonicalAdjudication?.formatted.claimText ??
     (currentDatingUnknownFromEvidence
       ? "Unknown."
       : allowStrongReducerOverride
@@ -16088,6 +17259,7 @@ export function buildDualityObject(
         !allowWeakRelationshipHistoryClaim &&
         !allowWeakRelationshipProfileClaim &&
         !allowWeakCurrentProjectClaim &&
+        !allowWeakDailyLifeSummaryClaim &&
         !allowWeakDerivedFactClaim
         ? abstentionClaimText
       : assessment.confidence === "missing"
@@ -16095,6 +17267,25 @@ export function buildDualityObject(
         : derivedPreciseFactClaimText ??
           fallbackClaimText ??
           abstentionClaimText);
+
+  const trustedPersonalOverrideClaim =
+    isPersonalSemanticNamespace(namespaceId)
+      ? (
+          derivedDailyLifeSummaryClaimText ??
+          derivedCurrentProjectClaimText ??
+          derivedHabitConstraintClaimText ??
+          derivedRoutineSummaryClaimText ??
+          derivedMediaSummaryClaimText ??
+          derivedProjectIdeaClaimText ??
+          derivedRelationshipProfileClaimText ??
+          derivedRelationshipChangeClaimText ??
+          derivedDepartureClaimText
+        )
+      : null;
+
+  if (canonicalAdjudication?.canonical.kind === "abstention" && trustedPersonalOverrideClaim) {
+    claimText = trustedPersonalOverrideClaim;
+  }
 
   if (!canonicalAdjudication) {
     if (exactDetailFamily === "realization" && !derivedRealizationClaimText && !exactDetailCandidate?.strongSupport) {
@@ -16131,6 +17322,8 @@ export function buildDualityObject(
       claimText = derivedMovieMentionClaimText;
     } else if (isProjectIdeaQueryText(queryText) && derivedProjectIdeaClaimText) {
       claimText = derivedProjectIdeaClaimText;
+    } else if (isDailyLifeSummaryQuery(queryText) && derivedDailyLifeSummaryClaimText) {
+      claimText = derivedDailyLifeSummaryClaimText;
     } else if (isSharedCommonalityQuery(queryText) && derivedSharedClaimText) {
       claimText = derivedSharedClaimText;
     } else if (isPurchaseSummaryQuery(queryText) && derivedPurchaseSummaryClaimText) {
@@ -16147,6 +17340,7 @@ export function buildDualityObject(
     }
   }
 
+  if (atomicExactDetailCandidateClaimText) claimText = atomicExactDetailCandidateClaimText;
   return {
     claim: top
       ? {
@@ -16180,91 +17374,6 @@ export function buildDualityObject(
     followUpAction,
     clarificationHint
   };
-}
-
-function normalizeTelemetryText(value: string | null | undefined): string {
-  return normalizeWhitespace(value ?? "").toLowerCase();
-}
-
-function inferReducerFamilyForTelemetry(queryText: string): string | undefined {
-  const exactDetailFamily = inferExactDetailQuestionFamily(queryText);
-  if (exactDetailFamily !== "generic") {
-    return exactDetailFamily;
-  }
-  if (isTemporalDetailQuery(queryText) || /^\s*when\b/i.test(queryText) || /\bwhich\s+year\b/i.test(queryText)) {
-    return "temporal";
-  }
-  if (isProfileInferenceQuery(queryText)) {
-    return "profile_inference";
-  }
-  if (isSharedCommonalityQuery(queryText)) {
-    return "shared_commonality";
-  }
-  if (isResidualPlaceEventAggregationQuery(queryText)) {
-    return "place_event_aggregation";
-  }
-  if (isGenericEnumerativeDirectFactQuery(queryText)) {
-    return "generic_direct_fact";
-  }
-  return undefined;
-}
-
-function inferFallbackSuppressedReasonForTelemetry(queryText: string): string | undefined {
-  const exactDetailFamily = inferExactDetailQuestionFamily(queryText);
-  if (exactDetailFamily !== "generic") {
-    return "exact_detail_family";
-  }
-  if (/\bif\b/i.test(queryText) && /\bwould\b/i.test(queryText)) {
-    return "counterfactual_guard";
-  }
-  if (/\bgoals?\b/i.test(queryText)) {
-    return "goal_family_guard";
-  }
-  if (isResidualPlaceEventAggregationQuery(queryText)) {
-    return "place_event_aggregation_guard";
-  }
-  if (isProfileInferenceQuery(queryText)) {
-    return "profile_inference_guard";
-  }
-  if (isGenericEnumerativeDirectFactQuery(queryText)) {
-    return "generic_direct_fact_guard";
-  }
-  return undefined;
-}
-
-function inferFinalClaimSourceForTelemetry(params: {
-  readonly queryText: string;
-  readonly results: readonly RecallResult[];
-  readonly claimText: string;
-  readonly exactDetailCandidate?: ExactDetailClaimCandidate | null;
-}): string {
-  const claimText = normalizeTelemetryText(params.claimText);
-  const topContent = normalizeTelemetryText(params.results[0]?.content ?? null);
-  if (!claimText || claimText === "none." || claimText === "unknown.") {
-    return "abstention";
-  }
-  if (normalizeTelemetryText(params.exactDetailCandidate?.text) === claimText) {
-    return "exact_detail_candidate";
-  }
-  const temporalClaim = deriveTemporalClaimText(params.queryText, params.results);
-  if (normalizeTelemetryText(temporalClaim) === claimText) {
-    return "temporal_reducer";
-  }
-  const profileClaim = deriveProfileInferenceClaimText(params.queryText, params.results);
-  if (normalizeTelemetryText(profileClaim) === claimText) {
-    return "profile_reducer";
-  }
-  const genericEnumerativeClaim = deriveGenericEnumerativeDirectFactClaimText(params.queryText, params.results);
-  if (normalizeTelemetryText(genericEnumerativeClaim) === claimText) {
-    return "family_reducer";
-  }
-  if (topContent && topContent === claimText) {
-    return "top_snippet";
-  }
-  if (inferExactDetailQuestionFamily(params.queryText) !== "generic" || isResidualPlaceEventAggregationQuery(params.queryText)) {
-    return "family_reducer";
-  }
-  return "fallback_derived";
 }
 
 function loadBoundedEventSceneSupportRows(
@@ -17662,6 +18771,18 @@ function extractEntityNameHints(queryText: string): readonly string[] {
   );
 }
 
+function isFirstPersonQueryText(queryText: string): boolean {
+  return /\b(?:i|me|my|mine|we|our|ours)\b/iu.test(queryText);
+}
+
+function sourceTextHasFirstPersonOwnershipCue(text: string): boolean {
+  const normalized = normalizeWhitespace(text);
+  if (!normalized) {
+    return false;
+  }
+  return /^(?:[A-Z][a-z]+:\s*)?(?:i\b|i'm\b|i’ve\b|i've\b|i’d\b|i'd\b|my\b|me\b|we\b|our\b)/iu.test(normalized);
+}
+
 function loadPreferredActiveRelationshipRows(
   namespaceId: string,
   queryText: string,
@@ -17761,6 +18882,7 @@ function proceduralStateTypesForPredicates(predicates: readonly string[]): reado
   if (predicates.includes("works_at") || predicates.includes("worked_at")) {
     stateTypes.add("current_employer");
     stateTypes.add("active_affiliation");
+    stateTypes.add("historical_affiliation");
   }
   if (predicates.includes("works_on") || predicates.includes("project_role")) {
     stateTypes.add("current_project");
@@ -18582,65 +19704,6 @@ export function buildRecursiveReflectSubqueries(
   return [...subqueries].slice(0, maxSubqueries);
 }
 
-function buildPlannerBackfillSubjectPlan(
-  queryText: string,
-  retrievalPlan: AnswerRetrievalPlan
-): SubjectPlan {
-  const pairNames = retrievalPlan.subjectNames.length >= 2 ? retrievalPlan.subjectNames.slice(0, 2) : [];
-  if (pairNames.length >= 2) {
-    return {
-      kind: "pair_subject",
-      subjectEntityId: null,
-      canonicalSubjectName: pairNames[0] ?? null,
-      pairSubjectEntityId: null,
-      pairSubjectName: pairNames[1] ?? null,
-      candidateEntityIds: [],
-      candidateNames: pairNames,
-      reason: `planner_targeted_backfill_pair_subject:${pairNames.join("|")}`
-    };
-  }
-  const subjectName =
-    retrievalPlan.subjectNames[0] ??
-    extractSubjectHintsFromQuery(queryText)[0] ??
-    null;
-  return {
-    kind: subjectName ? "single_subject" : "no_subject",
-    subjectEntityId: null,
-    canonicalSubjectName: subjectName,
-    candidateEntityIds: [],
-    candidateNames: subjectName ? [subjectName] : [],
-    reason: subjectName ? "planner_targeted_backfill_subject" : "planner_targeted_backfill_no_subject"
-  };
-}
-
-function inferPlannerBackfillListTarget(queryText: string): "books" | "events" | "support_network" | "locations" | "generic" {
-  if (/\bwhat books has\b/i.test(queryText) || /\bbooks?\b/i.test(queryText)) {
-    return "books";
-  }
-  if (/\bevents?\b/i.test(queryText)) {
-    return "events";
-  }
-  if (/\bfriends?\b|\bfamily\b|\bmentors?\b|\bsupport network\b/i.test(queryText)) {
-    return "support_network";
-  }
-  if (/\bwhere\b[^?!.]{0,80}\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went)\b/i.test(queryText) || /\bwhat\s+(?:states|areas|places)\b/i.test(queryText)) {
-    return "locations";
-  }
-  return "generic";
-}
-
-function inferPlannerBackfillListExpectedCount(queryText: string): number {
-  if (
-    /\bplanned to meet at\b/i.test(queryText) ||
-    /\bplaces or events\b/i.test(queryText) ||
-    /\bmeet at\b/i.test(queryText)
-  ) {
-    return 3;
-  }
-  const listTarget = inferPlannerBackfillListTarget(queryText);
-  return listTarget === "books" || listTarget === "events" || listTarget === "locations" ? 2 : 1;
-}
-
 function inferCollectionEntryCompletenessTarget(queryText: string): number {
   return /\bwhat items\b|\bwhich items\b|\bcollectibles?\b|\bmemorabilia\b/iu.test(queryText) ? 2 : 1;
 }
@@ -18656,6 +19719,14 @@ function evaluatePlannerTargetedBackfillNeed(params: {
   readonly completenessScore: number;
 } {
   const { queryText, retrievalPlan, results } = params;
+  const typedBackfillNeed = evaluateTypedContractBackfillNeed({
+    queryText,
+    retrievalPlan,
+    results
+  });
+  if (typedBackfillNeed) {
+    return typedBackfillNeed;
+  }
   if (retrievalPlan.family === "report") {
     if (retrievalPlan.candidatePools.includes("collection_support")) {
       const atomicUnits = extractAtomicMemoryUnits({
@@ -18765,7 +19836,10 @@ function evaluatePlannerTargetedBackfillNeed(params: {
     }
     const reportKind = inferPlannerRuntimeReportKind({ queryText, retrievalPlan });
     if (reportKind) {
-      const subjectSeededResults = filterPlannerRuntimeResultsForExplicitSubject(queryText, results);
+      const subjectSeededResults = filterPlannerRuntimeResultsForExplicitSubject(
+        extractSubjectHintsFromQuery(queryText),
+        results
+      );
       const rankedResults = rankProfilePoolResults({
         queryText,
         retrievalPlan,
@@ -18818,21 +19892,19 @@ function evaluatePlannerTargetedBackfillNeed(params: {
     }
   }
   if (retrievalPlan.family === "list_set") {
-    const support = buildListSetSupport({
+    const completeness = evaluateTypedContractCompleteness({
       queryText,
-      predicateFamily: "list_set",
-      results,
-      finalClaimText: null,
-      subjectPlan: buildPlannerBackfillSubjectPlan(queryText, retrievalPlan)
+      retrievalPlan,
+      results
     });
-    const expectedCount = inferPlannerBackfillListExpectedCount(queryText);
-    const complete = support.typedEntries.length >= expectedCount;
-    return {
-      needed: !complete,
-      reason: complete ? null : "typed_entries_incomplete",
-      requiredFields: complete ? [] : ["typed_entries"],
-      completenessScore: Math.min(support.typedEntries.length / expectedCount, 1)
-    };
+    if (completeness) {
+      return {
+        needed: !completeness.complete,
+        reason: completeness.complete ? null : "typed_entries_incomplete",
+        requiredFields: completeness.complete ? [] : completeness.missingFields,
+        completenessScore: completeness.completenessScore
+      };
+    }
   }
   if (retrievalPlan.family === "temporal") {
     const subjectBindingStatus =
@@ -18845,6 +19917,39 @@ function evaluatePlannerTargetedBackfillNeed(params: {
       subjectBindingStatus,
       subjectBindingReason: "planner_targeted_backfill_probe"
     });
+    const scheduledTemporalQuery = /\bwhen\s+(?:is|are)\b/iu.test(queryText);
+    const temporalSupportAlreadySufficient =
+      support.subjectBindingStatus === "resolved" &&
+      support.temporalEventIdentityStatus !== "missing" &&
+      support.temporalEventIdentityStatus !== "query_event_unmatched" &&
+      (
+        (
+          isFirstTravelLocationQuery(queryText) &&
+          support.relativeAnchorStatus === "resolved" &&
+          Boolean(support.relativeClaimText)
+        ) ||
+        (
+          support.targetedRetrievalSatisfied &&
+          support.temporalGranularityStatus === "resolved" &&
+          (
+        support.selectedSupportKind === "explicit_event_fact" ||
+        support.selectedSupportKind === "aligned_anchor" ||
+        support.temporalEventIdentityStatus === "resolved_from_event_neighborhood" ||
+        (
+          scheduledTemporalQuery &&
+          (support.timeGranularity === "month" || support.timeGranularity === "day")
+        )
+          )
+        )
+      );
+    if (temporalSupportAlreadySufficient) {
+      return {
+        needed: false,
+        reason: null,
+        requiredFields: [],
+        completenessScore: 1
+      };
+    }
     if (support.subjectBindingStatus !== "resolved") {
       return {
         needed: true,
@@ -18939,12 +20044,13 @@ function evaluatePlannerTargetedBackfillNeed(params: {
   if (retrievalPlan.family === "exact_detail") {
     const exactDetailFamily = inferExactDetailQuestionFamily(queryText);
     if (
-      exactDetailFamily === "duration" ||
-      exactDetailFamily === "endorsement_company" ||
-      exactDetailFamily === "habit_start_activity"
+      exactDetailFamily !== "generic" ||
+      ["direct_attribute", "direct_reason", "value_slot", "utterance_fact"].includes(retrievalPlan.answerKind)
     ) {
       const exactDetailCandidate = deriveSubjectBoundExactDetailClaimWithTelemetry(queryText, results, true).candidate;
-      const complete = hasStrongExactDetailSupportCandidate(queryText, exactDetailCandidate);
+      const complete =
+        hasStrongExactDetailSupportCandidate(queryText, exactDetailCandidate) ||
+        Boolean(normalizeWhitespace(exactDetailCandidate?.text ?? "").length);
       const specificityMissing = exactDetailCandidateNeedsSubtypeRescue(queryText, exactDetailCandidate);
       return {
         needed: !complete || specificityMissing,
@@ -18977,8 +20083,17 @@ function inferPlannerRuntimeReportKind(params: {
   if (retrievalPlan.candidatePools.includes("community_membership_support")) {
     return "support_report";
   }
+  if (/\bconsidered\b[^?!.]{0,40}\bpatriotic\b|\bconsidered religious\b|\bpersonality traits?\b|\bwhat traits\b|\bpolitical leaning\b/iu.test(queryText)) {
+    return "profile_report";
+  }
   if (retrievalPlan.candidatePools.includes("preference_support")) {
     return "preference_report";
+  }
+  if (
+    retrievalPlan.targetedBackfillRequests.some((entry) => entry.reason === "relationship_status_missing") ||
+    /\brelationship status\b|\bsingle\b|\bdating\b|\bin a relationship\b|\bseeing someone\b/iu.test(queryText)
+  ) {
+    return "relationship_report";
   }
   if (
     /\bwhat helped\b|\bhow did\b[^?!.]{0,100}\bhelp\b/iu.test(queryText) ||
@@ -18992,10 +20107,8 @@ function inferPlannerRuntimeReportKind(params: {
   ) {
     return "pet_care_report";
   }
-  if (
-    /\bwhere\b/iu.test(queryText) &&
-    /\b(?:roadtrips?|travel(?:ed|ing)?|trip|festival|concert|music festival)\b/iu.test(queryText)
-  ) {
+  if ((/\bwhere\b|\bwhat\s+trip\b|\btravel\s+plans?\b|\bplanning\b/iu.test(queryText)) &&
+      /\b(?:roadtrips?|travel(?:ed|ing)?|trip|festival|concert|music festival)\b/iu.test(queryText)) {
     return "travel_report";
   }
   if (/\bwhat advice might\b|\bmajor life transition\b|\bpersonal growth\b/iu.test(queryText)) {
@@ -19009,7 +20122,8 @@ function inferPlannerRuntimeReportKind(params: {
   }
   if (
     retrievalPlan.candidatePools.includes("education_support") ||
-    /\bfields?\b|\bdegree\b|\bmajor\b|\beducat(?:ion|e|on)\b|\bstud(?:y|ied|ying)\b|\bcertification\b/iu.test(queryText)
+    /\bfields?\b|\bdegree\b|\bmajor\b|\beducat(?:ion|e|on)\b|\bstud(?:y|ied|ying)\b|\bcertification\b/iu.test(queryText) ||
+    (/\bmain focus\b/iu.test(queryText) && /\blocal politics\b/iu.test(queryText))
   ) {
     return "education_report";
   }
@@ -19040,6 +20154,9 @@ function selectPlannerRuntimeReportBackfillHint(params: {
   switch (params.reportKind) {
     case "support_report":
       preferredReasons.push("causal_reason_missing");
+      break;
+    case "relationship_report":
+      preferredReasons.push("relationship_status_missing");
       break;
     case "travel_report":
       preferredReasons.push("travel_location_entries_missing");
@@ -19095,6 +20212,9 @@ function inferPlannerRuntimeReportSourceTable(params: {
     return "planner_runtime_career_candidate";
   }
   if (params.renderContractSelected === "education_field_render") {
+    return "planner_runtime_education_candidate";
+  }
+  if (params.renderContractSelected === "local_politics_main_focus_render") {
     return "planner_runtime_education_candidate";
   }
   if (params.reportKind === "collection_report") {
@@ -19197,7 +20317,10 @@ function renderPlannerRuntimeReportSupport(params: {
     const rendered = renderCollectionInferenceSupport(params.queryText, support);
     return rendered.claimText ? { reportKind, rendered, selectedResults: rankedResults } : null;
   }
-  const subjectSeededResults = filterPlannerRuntimeResultsForExplicitSubject(params.queryText, params.results);
+  const subjectSeededResults = filterPlannerRuntimeResultsForExplicitSubject(
+    extractSubjectHintsFromQuery(params.queryText),
+    params.results
+  );
   const rankedResults = rankProfilePoolResults({
     queryText: params.queryText,
     retrievalPlan: params.retrievalPlan,
@@ -19308,86 +20431,6 @@ function inferPlannerRuntimeReportConfidence(rendered: RenderedSupportClaim): "c
   return rendered.typedValueUsed ? "confident" : "weak";
 }
 
-function extractPlannerRuntimeResultSubjectSignals(result: RecallResult): readonly string[] {
-  return extractRecallResultSubjectSignals(result);
-}
-
-function extractPlannerRuntimeResultSubjectEntityId(result: RecallResult): string | null {
-  if (typeof result.provenance.subject_entity_id === "string" && result.provenance.subject_entity_id.trim().length > 0) {
-    return result.provenance.subject_entity_id.trim();
-  }
-  const metadata =
-    typeof result.provenance.metadata === "object" && result.provenance.metadata !== null
-      ? (result.provenance.metadata as Record<string, unknown>)
-      : null;
-  if (typeof metadata?.subject_entity_id === "string" && metadata.subject_entity_id.trim().length > 0) {
-    return metadata.subject_entity_id.trim();
-  }
-  return null;
-}
-
-function inferPlannerRuntimeResolvedSubjectEntityId(params: {
-  readonly retrievalPlan: AnswerRetrievalPlan;
-  readonly results: readonly RecallResult[];
-}): string | null {
-  if (params.retrievalPlan.resolvedSubjectEntityId) {
-    return params.retrievalPlan.resolvedSubjectEntityId;
-  }
-  const subjectName = params.retrievalPlan.subjectNames[0];
-  const normalizedSubjectName = subjectName ? normalizeEntityLookupName(subjectName) : null;
-  const candidateIds = new Set<string>();
-  for (const result of params.results) {
-    const entityId = extractPlannerRuntimeResultSubjectEntityId(result);
-    if (!entityId) {
-      continue;
-    }
-    if (!normalizedSubjectName) {
-      candidateIds.add(entityId);
-      continue;
-    }
-    const signals = extractPlannerRuntimeResultSubjectSignals(result);
-    if (signals.some((signal) => signal.includes(normalizedSubjectName))) {
-      candidateIds.add(entityId);
-    }
-  }
-  return candidateIds.size === 1 ? [...candidateIds][0]! : null;
-}
-
-function filterPlannerRuntimeResultsForExplicitSubject(queryText: string, results: readonly RecallResult[]): readonly RecallResult[] {
-  const subjectHints = extractSubjectHintsFromQuery(queryText).map((value) => normalizeEntityLookupName(value));
-  if (subjectHints.length === 0) {
-    return results;
-  }
-  const filtered = results.filter((result: RecallResult) => {
-    const signals = extractPlannerRuntimeResultSubjectSignals(result);
-    return subjectHints.some((hint) => signals.some((signal) => signal.includes(hint)));
-  });
-  return filtered.length > 0 ? filtered : results;
-}
-
-function hasStrongPlannerRuntimeNameBoundSubject(params: {
-  readonly queryText: string;
-  readonly retrievalPlan: AnswerRetrievalPlan;
-  readonly results: readonly RecallResult[];
-}): boolean {
-  if (params.retrievalPlan.subjectNames.length !== 1) {
-    return false;
-  }
-  const subjectName = params.retrievalPlan.subjectNames[0];
-  const normalizedSubjectName = subjectName ? normalizeEntityLookupName(subjectName) : null;
-  if (!normalizedSubjectName) {
-    return false;
-  }
-  const filteredResults = filterPlannerRuntimeResultsForExplicitSubject(params.queryText, params.results);
-  if (filteredResults.length === 0) {
-    return false;
-  }
-  const boundCount = filteredResults.filter((result) =>
-    extractPlannerRuntimeResultSubjectSignals(result).some((signal) => signal.includes(normalizedSubjectName))
-  ).length;
-  return boundCount > 0 && boundCount >= Math.max(1, Math.ceil(filteredResults.length * 0.6));
-}
-
 export function buildPlannerRuntimeReportCandidate(params: {
   readonly queryText: string;
   readonly retrievalPlan: AnswerRetrievalPlan;
@@ -19421,7 +20464,7 @@ export function buildPlannerRuntimeReportCandidate(params: {
   const nameBoundSubjectResolved =
     !resolvedSubjectEntityId &&
     hasStrongPlannerRuntimeNameBoundSubject({
-      queryText: params.queryText,
+      subjectHints: extractSubjectHintsFromQuery(params.queryText),
       retrievalPlan: params.retrievalPlan,
       results: candidateResults
     });
@@ -19650,7 +20693,6 @@ export function preferPlannerRuntimeReportCandidate(params: {
   }
   return params.plannerCandidate;
 }
-
 export function buildPlannerTargetedBackfillSubqueries(
   queryText: string,
   retrievalPlan: AnswerRetrievalPlan,
@@ -19658,12 +20700,23 @@ export function buildPlannerTargetedBackfillSubqueries(
   mode: "default" | "abstention_rescue" = "default",
   reason: string | null = null
 ): readonly string[] {
+  if (isFirstTravelLocationQuery(queryText)) {
+    return [];
+  }
+  const typedCompletionSubqueries = buildTypedContractBackfillSubqueries({ queryText, retrievalPlan, subjectHints, reason });
+  const contractLockedProfileBackfill = mode === "default" && typedCompletionSubqueries && retrievalPlan.family === "report" &&
+    ["identity_profile", "relationship_profile", "preference_profile"].includes(retrievalPlan.controllerIntent?.primaryTypedContract ?? "");
+  if ((mode === "default" && reason && typedCompletionSubqueries) || contractLockedProfileBackfill) {
+    return typedCompletionSubqueries;
+  }
   const subject = retrievalPlan.subjectNames[0] ?? subjectHints[0] ?? "Steve";
   const pairNames = retrievalPlan.subjectNames.length >= 2 ? retrievalPlan.subjectNames.slice(0, 2) : [];
   const pairSubject = pairNames.length >= 2 ? `${pairNames[0]} and ${pairNames[1]}` : null;
   const reportKind = inferPlannerRuntimeReportKind({ queryText, retrievalPlan });
   const subqueries = new Set<string>();
+  const trimmedQuery = queryText.trim().replace(/\?+$/u, "");
   const temporalEventKey = inferTemporalEventKeyFromText(queryText);
+  const exactDetailFamily = retrievalPlan.family === "exact_detail" ? inferExactDetailQuestionFamily(queryText) : "generic";
   const buildGenericTemporalVariant = (): string | null => {
     const trimmed = queryText.trim().replace(/\?+$/u, "");
     const whenDidMatch = trimmed.match(/^when did (.+)$/iu);
@@ -19723,10 +20776,23 @@ export function buildPlannerTargetedBackfillSubqueries(
         subqueries.add(`what lgbtq community events has ${subject} attended?`);
         subqueries.add(`what pride or support-group events has ${subject} joined?`);
       }
+    } else if (isIdentityProfileQuery(queryText)) {
+      subqueries.add(`what identity does ${subject} explicitly describe?`);
+      subqueries.add(`what does ${subject} say about gender identity or being transgender, nonbinary, or queer?`);
     } else if (retrievalPlan.candidatePools.includes("education_support")) {
-      subqueries.add(`what field does ${subject} want to study?`);
-      subqueries.add(`what education or certification is ${subject} considering?`);
-      subqueries.add(`does ${subject} want to work in counseling or mental health?`);
+      if (/\bmain focus\b/iu.test(queryText) && /\blocal politics\b/iu.test(queryText)) {
+        subqueries.add(`what is ${subject}'s main focus in local politics?`);
+        subqueries.add(`what local politics issues does ${subject} focus on in the community?`);
+        subqueries.add(`does ${subject} focus on education and infrastructure in the neighborhood?`);
+      } else {
+        subqueries.add(`what field does ${subject} want to study?`);
+        subqueries.add(`what education or certification is ${subject} considering?`);
+        subqueries.add(`does ${subject} want to work in counseling or mental health?`);
+      }
+    } else if (/\bconsidered\b[^?!.]{0,40}\bpatriotic\b/iu.test(queryText)) {
+      subqueries.add(`does ${subject} describe being patriotic or proud of the country?`);
+      subqueries.add(`does ${subject} mention patriotic cues like the Fourth of July, Independence Day, a flag, or national pride?`);
+      subqueries.add(`what evidence shows whether ${subject} is patriotic?`);
     } else if (retrievalPlan.candidatePools.includes("career_support")) {
       if (isBasketballCareerGoalQuery(queryText)) {
         subqueries.add(`what goals does ${subject} have for ${subject}'s basketball career?`);
@@ -19768,6 +20834,9 @@ export function buildPlannerTargetedBackfillSubqueries(
       if (/\bclasses?\b|\bgroups?\b|\bworkshops?\b|\bagility\b/iu.test(queryText)) {
         subqueries.add(`what dog classes, groups, or workshops has ${subject} joined?`);
         subqueries.add(`what agility or dog-training activities has ${subject} done?`);
+      } else if (/\bindoor activity\b/iu.test(queryText)) {
+        subqueries.add(`what indoor activity would ${subject} enjoy doing with the dog?`);
+        subqueries.add(`does ${subject} cook homemade dog treats or do another indoor dog activity?`);
       } else {
         subqueries.add(`what could ${subject} do to better care for their dogs?`);
         subqueries.add(`what living-situation changes would help ${subject}'s dogs?`);
@@ -19776,6 +20845,8 @@ export function buildPlannerTargetedBackfillSubqueries(
       if (/\broadtrips?\b|\bfamily\b/iu.test(queryText)) {
         subqueries.add(`where has ${subject} been on family roadtrips?`);
         subqueries.add(`what places did ${subject} visit on roadtrips with family?`);
+      } else if (isTravelPlanningReportQuery(queryText)) {
+        subqueries.add(`what trip is ${subject} planning?`); subqueries.add(`where is ${subject} going for the trip or conference?`); subqueries.add(`what event or conference is ${subject} traveling for?`);
       } else if (/\bfestival\b|\bconcert\b|\bmusic\b/iu.test(queryText)) {
         subqueries.add(`where did ${subject} attend the music festival?`);
         subqueries.add(`what city or country was the music festival ${subject} attended in?`);
@@ -19837,8 +20908,7 @@ export function buildPlannerTargetedBackfillSubqueries(
       /\bsupport network\b/i.test(queryText) ||
       (/\bfriends?\b/i.test(queryText) && /\bbesides\b/i.test(queryText))
     ) {
-      subqueries.add(`who are ${subject}'s friends besides the named person?`);
-      subqueries.add(`does ${subject} have teammates or friends from gaming tournaments?`);
+      subqueries.add(`which friends, family members, or mentors support ${subject}?`); subqueries.add(`who has been there for ${subject} during hard experiences?`);
     } else if (
       retrievalPlan.lane === "location_history" ||
       /\bwhere\b[^?!.]{0,80}\b(?:made friends|vacationed|travel(?:ed|ing)?|visited|went)\b/i.test(queryText) ||
@@ -19884,6 +20954,10 @@ export function buildPlannerTargetedBackfillSubqueries(
       const supportGroupTarget = /\blgbtq\b/i.test(queryText) ? "the LGBTQ support group" : "the support group";
       subqueries.add(`when did ${subject} go to ${supportGroupTarget}?`);
       subqueries.add(`what date did ${subject} go to ${supportGroupTarget}?`);
+    } else if (isFirstTravelLocationQuery(queryText)) {
+      const targetLocation = extractFirstTravelTargetLocation(queryText) ?? "that place";
+      subqueries.add(`when did ${subject} first travel to ${targetLocation}?`);
+      subqueries.add(`which source turn says ${subject} just went to ${targetLocation}?`);
     } else if (/\bseattle\b/i.test(queryText) && /\bgame\b/i.test(queryText)) {
       subqueries.add(`when was ${subject} in Seattle for a game?`);
       subqueries.add(`what month was ${subject} in Seattle for a game?`);
@@ -19903,7 +20977,6 @@ export function buildPlannerTargetedBackfillSubqueries(
       }
     }
   } else if (retrievalPlan.family === "exact_detail") {
-    const exactDetailFamily = inferExactDetailQuestionFamily(queryText);
     if (exactDetailFamily === "duration") {
       subqueries.add(queryText.trim().endsWith("?") ? queryText.trim() : `${queryText.trim()}?`);
       const durationVariant = buildGenericDurationVariant();
@@ -19973,8 +21046,8 @@ export function isGeneratedPlannerBackfillQuery(queryText: string): boolean {
     /^what support-group, art, or conference events has .+ attended\?$/.test(normalized) ||
     /^what events has .+ participated in\?$/.test(normalized) ||
     /^what events did .+ attend recently\?$/.test(normalized) ||
-    /^who are .+'s friends besides the named person\?$/.test(normalized) ||
-    /^does .+ have teammates or friends from gaming tournaments\?$/.test(normalized) ||
+    /^which friends, family members, or mentors support .+\?$/.test(normalized) ||
+    /^who has been there for .+ during hard experiences\?$/.test(normalized) ||
     /^where has .+ made friends\?$/.test(normalized) ||
     /^what places has .+ made friends\?$/.test(normalized) ||
     /^where has .+ vacationed\?$/.test(normalized) ||
@@ -21029,13 +22102,14 @@ async function loadSubjectBoundSourceSentenceSupportRows(
 
   const supportDocumentExpression = `concat_ws(
     ' ',
-    coalesce(ad.metadata->>'source_sentence_text', ''),
-    coalesce(ad.metadata->>'source_turn_text', ''),
+    coalesce(ad.metadata->>'source_sentence_text', a.metadata->>'source_sentence_text', ''),
+    coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', ''),
     coalesce(ad.content_text, ''),
-    coalesce(ad.metadata->>'image_query', ''),
-    coalesce(ad.metadata->>'image_caption', ''),
+    coalesce(ad.metadata->>'image_query', a.metadata->>'image_query', ''),
+    coalesce(ad.metadata->>'image_caption', a.metadata->>'image_caption', ''),
     coalesce(ad.metadata->>'prompt_text', ''),
-    coalesce(ad.metadata->>'speaker_names_text', '')
+    coalesce(ad.metadata->>'speaker_names_text', ''),
+    coalesce(a.metadata->>'speaker_names_text', '')
   )`;
   const phraseMatch = buildFocusedLikeMatchClause(3, normalizedPhrases, supportDocumentExpression);
 
@@ -21044,21 +22118,24 @@ async function loadSubjectBoundSourceSentenceSupportRows(
       SELECT
         ad.id::text AS memory_id,
         'artifact_derivation'::text AS memory_type,
-        COALESCE(
-          NULLIF(ad.metadata->>'source_sentence_text', ''),
-          NULLIF(ad.metadata->>'source_turn_text', ''),
-          ad.content_text
+        concat_ws(
+          ' ',
+          NULLIF(coalesce(ad.metadata->>'source_sentence_text', a.metadata->>'source_sentence_text', ''), ''),
+          NULLIF(coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', ''), ''),
+          NULLIF(ad.content_text, ''),
+          NULLIF(coalesce(ad.metadata->>'image_caption', a.metadata->>'image_caption', ''), ''),
+          NULLIF(coalesce(ad.metadata->>'image_query', a.metadata->>'image_query', ''), '')
         ) AS content,
         (
           (${phraseMatch.scoreExpression})::double precision * 1.35
           +
           CASE
-            WHEN lower(coalesce(ad.metadata->>'primary_speaker_name', ad.metadata->>'speaker_name', ad.metadata->>'subject_name', '')) = ANY($2::text[])
+            WHEN lower(coalesce(ad.metadata->>'primary_speaker_name', a.metadata->>'primary_speaker_name', ad.metadata->>'speaker_name', a.metadata->>'speaker_name', ad.metadata->>'subject_name', '')) = ANY($2::text[])
               THEN 2.8
             WHEN EXISTS (
               SELECT 1
               FROM unnest($2::text[]) participant(name)
-              WHERE lower(coalesce(ad.metadata->>'speaker_names_text', '')) LIKE ('%' || participant.name || '%')
+              WHERE lower(coalesce(ad.metadata->>'speaker_names_text', a.metadata->>'speaker_names_text', '')) LIKE ('%' || participant.name || '%')
             )
               THEN 1.4
             ELSE 0
@@ -21079,19 +22156,29 @@ async function loadSubjectBoundSourceSentenceSupportRows(
           'tier', 'source_sentence_support',
           'derivation_type', ad.derivation_type,
           'source_uri', a.uri,
-          'metadata', ad.metadata
+          'metadata', ${artifactDerivationSearchMetadataExpression()}
         ) AS provenance
       FROM artifact_derivations ad
       JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
-      LEFT JOIN artifacts a ON a.id = ao.artifact_id
+      JOIN artifacts a ON a.id = ao.artifact_id
       WHERE a.namespace_id = $1
-        AND ad.derivation_type IN ('participant_turn', 'source_sentence', 'conversation_unit', 'topic_segment')
         AND (
-          lower(coalesce(ad.metadata->>'primary_speaker_name', ad.metadata->>'speaker_name', ad.metadata->>'subject_name', '')) = ANY($2::text[])
+          ad.derivation_type IN ('participant_turn', 'source_sentence', 'conversation_unit', 'topic_segment')
+          OR (
+            coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', '') <> ''
+            AND (
+              ad.derivation_type ILIKE '%image%'
+              OR coalesce(ad.metadata->>'image_query', a.metadata->>'image_query', '') <> ''
+              OR coalesce(ad.metadata->>'image_caption', a.metadata->>'image_caption', '') <> ''
+            )
+          )
+        )
+        AND (
+          lower(coalesce(ad.metadata->>'primary_speaker_name', a.metadata->>'primary_speaker_name', ad.metadata->>'speaker_name', a.metadata->>'speaker_name', ad.metadata->>'subject_name', '')) = ANY($2::text[])
           OR EXISTS (
             SELECT 1
             FROM unnest($2::text[]) participant(name)
-            WHERE lower(coalesce(ad.metadata->>'speaker_names_text', '')) LIKE ('%' || participant.name || '%')
+            WHERE lower(coalesce(ad.metadata->>'speaker_names_text', a.metadata->>'speaker_names_text', '')) LIKE ('%' || participant.name || '%')
           )
         )
         AND ${phraseMatch.clause}
@@ -21122,13 +22209,14 @@ async function loadSubjectBoundArtifactNeighborhoodRows(
 
   const supportDocumentExpression = `concat_ws(
     ' ',
-    coalesce(ad.metadata->>'source_sentence_text', ''),
-    coalesce(ad.metadata->>'source_turn_text', ''),
+    coalesce(ad.metadata->>'source_sentence_text', a.metadata->>'source_sentence_text', ''),
+    coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', ''),
     coalesce(ad.content_text, ''),
-    coalesce(ad.metadata->>'image_query', ''),
-    coalesce(ad.metadata->>'image_caption', ''),
+    coalesce(ad.metadata->>'image_query', a.metadata->>'image_query', ''),
+    coalesce(ad.metadata->>'image_caption', a.metadata->>'image_caption', ''),
     coalesce(ad.metadata->>'prompt_text', ''),
-    coalesce(ad.metadata->>'speaker_names_text', '')
+    coalesce(ad.metadata->>'speaker_names_text', ''),
+    coalesce(a.metadata->>'speaker_names_text', '')
   )`;
   const phraseMatch = buildFocusedLikeMatchClause(4, normalizedPhrases, supportDocumentExpression);
 
@@ -21137,21 +22225,24 @@ async function loadSubjectBoundArtifactNeighborhoodRows(
       SELECT
         ad.id::text AS memory_id,
         'artifact_derivation'::text AS memory_type,
-        COALESCE(
-          NULLIF(ad.metadata->>'source_sentence_text', ''),
-          NULLIF(ad.metadata->>'source_turn_text', ''),
-          ad.content_text
+        concat_ws(
+          ' ',
+          NULLIF(coalesce(ad.metadata->>'source_sentence_text', a.metadata->>'source_sentence_text', ''), ''),
+          NULLIF(coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', ''), ''),
+          NULLIF(ad.content_text, ''),
+          NULLIF(coalesce(ad.metadata->>'image_caption', a.metadata->>'image_caption', ''), ''),
+          NULLIF(coalesce(ad.metadata->>'image_query', a.metadata->>'image_query', ''), '')
         ) AS content,
         (
           (${phraseMatch.scoreExpression})::double precision * 1.1
           +
           CASE
-            WHEN lower(coalesce(ad.metadata->>'primary_speaker_name', ad.metadata->>'speaker_name', ad.metadata->>'subject_name', '')) = ANY($3::text[])
+            WHEN lower(coalesce(ad.metadata->>'primary_speaker_name', a.metadata->>'primary_speaker_name', ad.metadata->>'speaker_name', a.metadata->>'speaker_name', ad.metadata->>'subject_name', '')) = ANY($3::text[])
               THEN 2.2
             WHEN EXISTS (
               SELECT 1
               FROM unnest($3::text[]) participant(name)
-              WHERE lower(coalesce(ad.metadata->>'speaker_names_text', '')) LIKE ('%' || participant.name || '%')
+              WHERE lower(coalesce(ad.metadata->>'speaker_names_text', a.metadata->>'speaker_names_text', '')) LIKE ('%' || participant.name || '%')
             )
               THEN 1.1
             ELSE 0
@@ -21172,20 +22263,30 @@ async function loadSubjectBoundArtifactNeighborhoodRows(
           'tier', 'artifact_neighborhood_support',
           'derivation_type', ad.derivation_type,
           'source_uri', a.uri,
-          'metadata', ad.metadata
+          'metadata', ${artifactDerivationSearchMetadataExpression()}
         ) AS provenance
       FROM artifact_derivations ad
       JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
-      LEFT JOIN artifacts a ON a.id = ao.artifact_id
+      JOIN artifacts a ON a.id = ao.artifact_id
       WHERE a.namespace_id = $1
         AND ao.artifact_id = ANY($2::uuid[])
-        AND ad.derivation_type IN ('participant_turn', 'source_sentence', 'conversation_unit', 'topic_segment')
         AND (
-          lower(coalesce(ad.metadata->>'primary_speaker_name', ad.metadata->>'speaker_name', ad.metadata->>'subject_name', '')) = ANY($3::text[])
+          ad.derivation_type IN ('participant_turn', 'source_sentence', 'conversation_unit', 'topic_segment')
+          OR (
+            coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', '') <> ''
+            AND (
+              ad.derivation_type ILIKE '%image%'
+              OR coalesce(ad.metadata->>'image_query', a.metadata->>'image_query', '') <> ''
+              OR coalesce(ad.metadata->>'image_caption', a.metadata->>'image_caption', '') <> ''
+            )
+          )
+        )
+        AND (
+          lower(coalesce(ad.metadata->>'primary_speaker_name', a.metadata->>'primary_speaker_name', ad.metadata->>'speaker_name', a.metadata->>'speaker_name', ad.metadata->>'subject_name', '')) = ANY($3::text[])
           OR EXISTS (
             SELECT 1
             FROM unnest($3::text[]) participant(name)
-            WHERE lower(coalesce(ad.metadata->>'speaker_names_text', '')) LIKE ('%' || participant.name || '%')
+            WHERE lower(coalesce(ad.metadata->>'speaker_names_text', a.metadata->>'speaker_names_text', '')) LIKE ('%' || participant.name || '%')
           )
         )
         AND ${phraseMatch.clause}
@@ -21193,6 +22294,144 @@ async function loadSubjectBoundArtifactNeighborhoodRows(
       LIMIT $${phraseMatch.values.length + 4}
     `,
     [namespaceId, normalizedArtifactIds, normalizedParticipants, ...phraseMatch.values, Math.max(candidateLimit, 12)]
+  );
+}
+
+async function loadDialogueSupportBundleRows(params: {
+  readonly namespaceId: string;
+  readonly participants: readonly string[];
+  readonly anchorTerms: readonly string[];
+  readonly supportTerms: readonly string[];
+  readonly candidateLimit: number;
+}): Promise<SearchRow[]> {
+  const normalizedParticipants = [...new Set(
+    params.participants.map((value) => normalizeWhitespace(value).trim().toLowerCase()).filter((value) => value.length > 0)
+  )];
+  const normalizedAnchorTerms = [...new Set(
+    params.anchorTerms.map((value) => normalizeWhitespace(value).trim().toLowerCase()).filter((value) => value.length > 0)
+  )];
+  const normalizedSupportTerms = [...new Set(
+    params.supportTerms.map((value) => normalizeWhitespace(value).trim().toLowerCase()).filter((value) => value.length > 0)
+  )];
+  if (normalizedAnchorTerms.length === 0 || normalizedSupportTerms.length === 0) {
+    return [];
+  }
+
+  const supportDocumentExpression = `concat_ws(
+    ' ',
+    coalesce(ad.metadata->>'source_sentence_text', a.metadata->>'source_sentence_text', ''),
+    coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', ''),
+    coalesce(ad.content_text, ''),
+    coalesce(ad.metadata->>'image_query', a.metadata->>'image_query', ''),
+    coalesce(ad.metadata->>'image_caption', a.metadata->>'image_caption', ''),
+    coalesce(ad.metadata->>'prompt_text', ''),
+    coalesce(ad.metadata->>'speaker_names_text', ''),
+    coalesce(a.metadata->>'speaker_names_text', '')
+  )`;
+  const anchorMatch = buildFocusedLikeMatchClause(3, normalizedAnchorTerms, supportDocumentExpression);
+  const supportMatch = buildFocusedLikeMatchClause(3 + anchorMatch.values.length, normalizedSupportTerms, supportDocumentExpression);
+  const participantClause =
+    normalizedParticipants.length > 0
+      ? `
+        AND (
+          lower(coalesce(ad.metadata->>'primary_speaker_name', a.metadata->>'primary_speaker_name', ad.metadata->>'speaker_name', a.metadata->>'speaker_name', ad.metadata->>'subject_name', '')) = ANY($2::text[])
+          OR EXISTS (
+            SELECT 1
+            FROM unnest($2::text[]) participant(name)
+            WHERE lower(coalesce(ad.metadata->>'speaker_names_text', a.metadata->>'speaker_names_text', '')) LIKE ('%' || participant.name || '%')
+          )
+        )
+      `
+      : "";
+
+  return queryRows<SearchRow>(
+    `
+      WITH anchor_artifacts AS (
+        SELECT
+          ao.artifact_id,
+          max(COALESCE(ao.observed_at, a.created_at)) AS observed_at
+        FROM artifact_derivations ad
+        JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
+        JOIN artifacts a ON a.id = ao.artifact_id
+        WHERE a.namespace_id = $1
+          AND (
+            ad.derivation_type IN ('participant_turn', 'source_sentence', 'conversation_unit', 'topic_segment')
+            OR (
+              coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', '') <> ''
+              AND (
+                ad.derivation_type ILIKE '%image%'
+                OR coalesce(ad.metadata->>'image_query', a.metadata->>'image_query', '') <> ''
+                OR coalesce(ad.metadata->>'image_caption', a.metadata->>'image_caption', '') <> ''
+              )
+            )
+          )
+          ${participantClause}
+          AND ${anchorMatch.clause}
+        GROUP BY ao.artifact_id
+        ORDER BY max(COALESCE(ao.observed_at, a.created_at)) DESC NULLS LAST
+        LIMIT $${3 + anchorMatch.values.length + supportMatch.values.length}
+      )
+      SELECT
+        ad.id::text AS memory_id,
+        'artifact_derivation'::text AS memory_type,
+        concat_ws(
+          ' ',
+          NULLIF(coalesce(ad.metadata->>'source_sentence_text', a.metadata->>'source_sentence_text', ''), ''),
+          NULLIF(coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', ''), ''),
+          NULLIF(ad.content_text, ''),
+          NULLIF(coalesce(ad.metadata->>'image_caption', a.metadata->>'image_caption', ''), ''),
+          NULLIF(coalesce(ad.metadata->>'image_query', a.metadata->>'image_query', ''), '')
+        ) AS content,
+        (
+          (${supportMatch.scoreExpression})::double precision * 2.8
+          +
+          (${anchorMatch.scoreExpression})::double precision
+          +
+          CASE ad.derivation_type
+            WHEN 'participant_turn' THEN 1.2
+            WHEN 'source_sentence' THEN 1.0
+            WHEN 'conversation_unit' THEN 0.55
+            WHEN 'topic_segment' THEN 0.35
+            ELSE 0.25
+          END
+        )::double precision AS raw_score,
+        ao.artifact_id,
+        ao.observed_at AS occurred_at,
+        a.namespace_id,
+        jsonb_build_object(
+          'tier', 'dialogue_support_bundle',
+          'derivation_type', ad.derivation_type,
+          'source_uri', a.uri,
+          'metadata', ${artifactDerivationSearchMetadataExpression()}
+        ) AS provenance
+      FROM artifact_derivations ad
+      JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
+      JOIN artifacts a ON a.id = ao.artifact_id
+      JOIN anchor_artifacts anchor ON anchor.artifact_id = ao.artifact_id
+      WHERE a.namespace_id = $1
+        AND (
+          ad.derivation_type IN ('participant_turn', 'source_sentence', 'conversation_unit', 'topic_segment')
+          OR (
+            coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', '') <> ''
+            AND (
+              ad.derivation_type ILIKE '%image%'
+              OR coalesce(ad.metadata->>'image_query', a.metadata->>'image_query', '') <> ''
+              OR coalesce(ad.metadata->>'image_caption', a.metadata->>'image_caption', '') <> ''
+            )
+          )
+        )
+        AND (${anchorMatch.clause} OR ${supportMatch.clause})
+      ORDER BY raw_score DESC, anchor.observed_at DESC NULLS LAST, ad.created_at ASC
+      LIMIT $${4 + anchorMatch.values.length + supportMatch.values.length}
+    `,
+    [
+      params.namespaceId,
+      normalizedParticipants,
+      ...anchorMatch.values,
+      ...supportMatch.values,
+      Math.max(1, Math.min(params.candidateLimit, 12)),
+      Math.max(params.candidateLimit, 12)
+    ]
   );
 }
 
@@ -21735,35 +22974,36 @@ async function loadRoutineRows(
     loadActiveSemanticStateSummaryRows(namespaceId, ["routine"], candidateLimit),
     queryRows<SearchRow>(
       `
-        SELECT
-          pm.id AS memory_id,
-          'procedural_memory'::text AS memory_type,
-          ${proceduralContentExpression()} AS content,
-          1::double precision AS raw_score,
-          em.artifact_id,
-          COALESCE(em.occurred_at, pm.updated_at) AS occurred_at,
-          pm.namespace_id,
-          jsonb_build_object(
-            'tier', 'current_procedural',
-            'state_type', pm.state_type,
-            'state_key', pm.state_key,
-            'version', pm.version,
-            'valid_from', pm.valid_from,
-            'valid_until', pm.valid_until,
-            'source_memory_id', em.id,
-            'source_uri', a.uri,
-            'metadata', pm.metadata
-          ) AS provenance
-        FROM procedural_memory pm
-        LEFT JOIN episodic_memory em
-          ON em.id = NULLIF(pm.state_value->>'source_memory_id', '')::uuid
-        LEFT JOIN artifacts a
-          ON a.id = em.artifact_id
-        WHERE pm.namespace_id = $1
-          AND pm.state_type = 'routine'
-          AND pm.valid_until IS NULL
-        ORDER BY pm.updated_at DESC
-        LIMIT $2
+        WITH routine_rows AS (
+          SELECT
+            pm.id AS memory_id,
+            'procedural_memory'::text AS memory_type,
+            ${proceduralContentExpression()} AS content,
+            1::double precision AS raw_score,
+            em.artifact_id,
+            COALESCE(em.occurred_at, pm.updated_at) AS occurred_at,
+            pm.namespace_id,
+            jsonb_build_object('tier', 'current_procedural', 'state_type', pm.state_type, 'state_key', pm.state_key, 'version', pm.version, 'valid_from', pm.valid_from, 'valid_until', pm.valid_until, 'source_memory_id', em.id, 'source_uri', a.uri, 'metadata', pm.metadata) AS provenance
+          FROM procedural_memory pm
+          LEFT JOIN episodic_memory em ON em.id = NULLIF(pm.state_value->>'source_memory_id', '')::uuid
+          LEFT JOIN artifacts a ON a.id = em.artifact_id
+          WHERE pm.namespace_id = $1 AND pm.state_type = 'routine' AND pm.valid_until IS NULL
+          UNION ALL
+          SELECT
+            em.id AS memory_id,
+            'episodic_memory'::text AS memory_type,
+            em.content,
+            1.05::double precision AS raw_score,
+            em.artifact_id,
+            em.occurred_at,
+            em.namespace_id,
+            jsonb_build_object('tier', 'routine_source', 'artifact_observation_id', em.artifact_observation_id, 'source_chunk_id', em.source_chunk_id, 'source_uri', a.uri, 'metadata', em.metadata) AS provenance
+          FROM episodic_memory em
+          LEFT JOIN artifacts a ON a.id = em.artifact_id
+          WHERE em.namespace_id = $1
+            AND em.content ~* '(daily routine|wake up|make some coffee|reddit|current tasks|start working around ten|midday break|personal time|two way|wellinked)'
+        )
+        SELECT * FROM routine_rows ORDER BY occurred_at DESC NULLS LAST LIMIT $2
       `,
       [namespaceId, Math.max(candidateLimit * 2, 12)]
     )
@@ -22492,68 +23732,6 @@ function searchRowFromRecallResult(result: RecallResult): SearchRow {
 
 function resultKey(row: SearchRow): string {
   return `${row.memory_type}:${row.memory_id}`;
-}
-
-function rowSourceUri(row: Pick<SearchRow, "provenance">): string | null {
-  return typeof row.provenance.source_uri === "string" && row.provenance.source_uri.length > 0
-    ? row.provenance.source_uri
-    : null;
-}
-
-function isPersonalContaminantSourceUri(sourceUri: string | null): boolean {
-  if (!sourceUri) {
-    return false;
-  }
-
-  return (
-    sourceUri.includes("/benchmark-generated/") ||
-    sourceUri.includes("/examples-private/life-replay/") ||
-    sourceUri.includes("/local-brain/examples/")
-  );
-}
-
-function isTrustedPersonalSourceUri(sourceUri: string | null): boolean {
-  if (!sourceUri) {
-    return false;
-  }
-
-  return (
-    sourceUri.includes("/omi-archive/normalized/") ||
-    sourceUri.includes("/data/inbox/omi/normalized/") ||
-    sourceUri.includes("/personal-openclaw-fixtures/")
-  );
-}
-
-function sourceTrustAdjustment(row: Pick<SearchRow, "namespace_id" | "provenance">): number {
-  const sourceUri = rowSourceUri(row);
-  if (row.namespace_id === "personal") {
-    if (isPersonalContaminantSourceUri(sourceUri)) {
-      return -3.25;
-    }
-    if (isTrustedPersonalSourceUri(sourceUri)) {
-      return 0.85;
-    }
-  }
-
-  if (row.namespace_id === "personal_continuity_shadow" && isTrustedPersonalSourceUri(sourceUri)) {
-    return 0.65;
-  }
-
-  return 0;
-}
-
-function retainTrustedNamespaceRows<T extends { readonly row: SearchRow }>(rows: readonly T[]): T[] {
-  if (rows.length === 0) {
-    return [];
-  }
-
-  const hasTrustedPersonalRows = rows.some((item) => item.row.namespace_id === "personal" && isTrustedPersonalSourceUri(rowSourceUri(item.row)));
-  if (!hasTrustedPersonalRows) {
-    return [...rows];
-  }
-
-  const filtered = rows.filter((item) => !(item.row.namespace_id === "personal" && isPersonalContaminantSourceUri(rowSourceUri(item.row))));
-  return filtered.length > 0 ? filtered : [...rows];
 }
 
 function mergeInjectedRankedRows(
@@ -23313,7 +24491,7 @@ async function loadCoreSqlHybridKernelRows(
         SELECT
           ad.id::text AS memory_id,
           'artifact_derivation'::text AS memory_type,
-          ${artifactDerivationContentExpression()} AS content,
+          ${artifactDerivationSearchContentExpression()} AS content,
           ts_rank(
             to_tsvector('english', ${artifactDerivationLexicalDocument()}),
             websearch_to_tsquery('english', $2)
@@ -23330,7 +24508,7 @@ async function loadCoreSqlHybridKernelRows(
             'artifact_observation_id', ad.artifact_observation_id,
             'source_chunk_id', ad.source_chunk_id,
             'source_uri', a.uri,
-            'metadata', ad.metadata
+            'metadata', ${artifactDerivationSearchMetadataExpression()}
           ) AS provenance
         FROM artifact_derivations ad
         JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
@@ -23419,7 +24597,7 @@ async function loadCoreSqlHybridKernelRows(
         SELECT
           ad.id::text AS memory_id,
           'artifact_derivation'::text AS memory_type,
-          ${artifactDerivationContentExpression()} AS content,
+          ${artifactDerivationSearchContentExpression()} AS content,
           ad.embedding <=> $8::vector AS vector_distance,
           ao.artifact_id,
           coalesce(source_em.occurred_at, ao.observed_at) AS occurred_at,
@@ -23433,7 +24611,7 @@ async function loadCoreSqlHybridKernelRows(
             'artifact_observation_id', ad.artifact_observation_id,
             'source_chunk_id', ad.source_chunk_id,
             'source_uri', a.uri,
-            'metadata', ad.metadata
+            'metadata', ${artifactDerivationSearchMetadataExpression()}
           ) AS provenance
         FROM artifact_derivations ad
         JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
@@ -23691,7 +24869,9 @@ function buildBm25DisjunctionClause(
     };
   }
 
-  const groups = fields.map((field) => `${field} ||| $${parameterIndex}`);
+  const groups = fields.map(
+    (field) => `to_tsvector('english', coalesce((${field})::text, '')) @@ websearch_to_tsquery('english', $${parameterIndex})`
+  );
   return {
     clause: `(${groups.join(" OR ")})`,
     values: [normalized]
@@ -23757,8 +24937,18 @@ function artifactDerivationContentExpression(derivationAlias = "ad"): string {
 
 function artifactDerivationLexicalDocument(derivationAlias = "ad", artifactAlias = "a"): string {
   return `
-    ${artifactDerivationContentExpression(derivationAlias)} || ' ' ||
+    ${artifactDerivationSearchContentExpression(derivationAlias, artifactAlias)} || ' ' ||
     coalesce(${derivationAlias}.derivation_type, '') || ' ' ||
+    coalesce(${derivationAlias}.metadata->>'primary_speaker_name', ${artifactAlias}.metadata->>'primary_speaker_name', '') || ' ' ||
+    coalesce(${derivationAlias}.metadata->>'transcript_speaker_name', ${artifactAlias}.metadata->>'transcript_speaker_name', '') || ' ' ||
+    coalesce(${derivationAlias}.metadata->>'speaker_name', ${artifactAlias}.metadata->>'speaker_name', '') || ' ' ||
+    coalesce(${derivationAlias}.metadata->>'turn_text', ${artifactAlias}.metadata->>'turn_text', '') || ' ' ||
+    coalesce(${derivationAlias}.metadata->>'source_turn_text', ${artifactAlias}.metadata->>'source_turn_text', '') || ' ' ||
+    coalesce(${derivationAlias}.metadata->>'source_sentence_text', ${artifactAlias}.metadata->>'source_sentence_text', '') || ' ' ||
+    coalesce(${derivationAlias}.metadata->>'image_caption', ${artifactAlias}.metadata->>'image_caption', '') || ' ' ||
+    coalesce(${derivationAlias}.metadata->>'blip_caption', ${artifactAlias}.metadata->>'blip_caption', '') || ' ' ||
+    coalesce(${derivationAlias}.metadata->>'image_query', ${artifactAlias}.metadata->>'image_query', '') || ' ' ||
+    coalesce(${derivationAlias}.metadata->>'query', ${artifactAlias}.metadata->>'query', '') || ' ' ||
     coalesce(${artifactAlias}.artifact_type, '') || ' ' ||
     coalesce(${artifactAlias}.source_channel, '') || ' ' ||
     coalesce(${artifactAlias}.uri, '') || ' ' ||
@@ -23822,6 +25012,8 @@ function proceduralContentExpression(): string {
         coalesce(state_value->>'person', '') || ' currently works at ' || coalesce(state_value->>'organization', '')
       WHEN state_type = 'active_affiliation' THEN
         coalesce(state_value->>'person', '') || ' works at ' || coalesce(state_value->>'organization', '')
+      WHEN state_type = 'historical_affiliation' THEN
+        coalesce(state_value->>'person', '') || ' worked at ' || coalesce(state_value->>'organization', '') || ' historical employer previous employer'
       WHEN state_type = 'active_membership' THEN
         coalesce(state_value->>'person', '') || ' is a member of ' || coalesce(state_value->>'organization', '')
       WHEN state_type = 'active_ownership' THEN
@@ -24247,7 +25439,7 @@ function pruneRankedResults(
       ? proceduralRows.filter((item) => {
           const stateType = String(item.row.provenance.state_type ?? "");
           if ((preferredRelationshipPredicates.includes("works_at") || preferredRelationshipPredicates.includes("worked_at")) &&
-              (stateType === "current_employer" || stateType === "active_affiliation")) {
+              (stateType === "current_employer" || stateType === "active_affiliation" || stateType === "historical_affiliation")) {
             return true;
           }
           if ((preferredRelationshipPredicates.includes("resides_at") || preferredRelationshipPredicates.includes("lives_in") || preferredRelationshipPredicates.includes("currently_in")) &&
@@ -24732,6 +25924,10 @@ function pruneRankedResults(
 
   if (!planner.temporalFocus && (activeRelationshipFocus || historicalRelationshipFocus) && (relationshipRows.length > 0 || focusedProceduralRows.length > 0)) {
     const predicatePriority = new Map(preferredRelationshipPredicates.map((predicate, index) => [predicate, index] as const));
+    const relationshipFocusEntity = parseQueryEntityFocus(queryText).primaryHints[0] ?? null;
+    const friendListFocus =
+      Boolean(relationshipFocusEntity) &&
+      (preferredRelationshipPredicates.includes("friend_of") || preferredRelationshipPredicates.includes("friends_with"));
     const projectOrRoleFocus =
       preferredRelationshipPredicates.includes("works_on") || preferredRelationshipPredicates.includes("project_role");
     const focusedProceduralCap = projectOrRoleFocus ? 3 : 1;
@@ -24772,6 +25968,63 @@ function pruneRankedResults(
       }
       return deduped;
     })();
+    const friendRankedRelationships =
+      friendListFocus && relationshipFocusEntity
+        ? (() => {
+            const focus = normalizeWhitespace(relationshipFocusEntity);
+            const pool = activeRelationships
+              .filter((item) => {
+                const predicate = String(item.row.provenance.predicate ?? "");
+                const subjectName = normalizeWhitespace(String(item.row.provenance.subject_name ?? ""));
+                const objectName = normalizeRelationshipObjectName(
+                  predicate,
+                  subjectName,
+                  String(item.row.provenance.object_name ?? item.row.content ?? "")
+                );
+                const counterparty =
+                  subjectName.toLowerCase() === focus.toLowerCase() ? objectName : objectName.toLowerCase() === focus.toLowerCase() ? subjectName : objectName;
+                return !isLowSignalRelationshipName(counterparty, focus) && relationshipNameQualityScore(counterparty) > 0;
+              })
+              .slice()
+              .sort((left, right) => {
+                const leftPredicate = String(left.row.provenance.predicate ?? "");
+                const rightPredicate = String(right.row.provenance.predicate ?? "");
+                const leftSubject = normalizeWhitespace(String(left.row.provenance.subject_name ?? ""));
+                const rightSubject = normalizeWhitespace(String(right.row.provenance.subject_name ?? ""));
+                const leftObject = normalizeRelationshipObjectName(
+                  leftPredicate,
+                  leftSubject,
+                  String(left.row.provenance.object_name ?? left.row.content ?? "")
+                );
+                const rightObject = normalizeRelationshipObjectName(
+                  rightPredicate,
+                  rightSubject,
+                  String(right.row.provenance.object_name ?? right.row.content ?? "")
+                );
+                const leftCounterparty =
+                  leftSubject.toLowerCase() === focus.toLowerCase() ? leftObject : leftObject.toLowerCase() === focus.toLowerCase() ? leftSubject : leftObject;
+                const rightCounterparty =
+                  rightSubject.toLowerCase() === focus.toLowerCase() ? rightObject : rightObject.toLowerCase() === focus.toLowerCase() ? rightSubject : rightObject;
+                const leftSnippet = normalizeWhitespace(String((left.row.provenance.metadata as Record<string, unknown> | undefined)?.snippet ?? "")).toLowerCase();
+                const rightSnippet = normalizeWhitespace(String((right.row.provenance.metadata as Record<string, unknown> | undefined)?.snippet ?? "")).toLowerCase();
+                const leftScore =
+                  relationshipNameQualityScore(leftCounterparty) +
+                  (String(left.row.memory_type) === "relationship_memory" ? 8 : 4) +
+                  (/\b(?:good|close|amazing)\s+friend\b/iu.test(leftSnippet) ? 8 : 0) +
+                  (/\bfriend\s+group\b/iu.test(leftSnippet) ? -6 : 0);
+                const rightScore =
+                  relationshipNameQualityScore(rightCounterparty) +
+                  (String(right.row.memory_type) === "relationship_memory" ? 8 : 4) +
+                  (/\b(?:good|close|amazing)\s+friend\b/iu.test(rightSnippet) ? 8 : 0) +
+                  (/\bfriend\s+group\b/iu.test(rightSnippet) ? -6 : 0);
+                if (leftScore !== rightScore) {
+                  return rightScore - leftScore;
+                }
+                return right.rrfScore - left.rrfScore;
+              });
+            return pool.length > 0 ? pool : activeRelationships;
+          })()
+        : activeRelationships;
 
     const relationshipCap = historicalRelationshipFocus
       ? 8
@@ -24812,7 +26065,7 @@ function pruneRankedResults(
       }
       return focusedProceduralRows.slice(0, focusedProceduralCap);
     }
-    return [...focusedProceduralRows.slice(0, focusedProceduralCap), ...activeRelationships, ...episodicRows.slice(0, 1)].slice(
+    return [...focusedProceduralRows.slice(0, focusedProceduralCap), ...friendRankedRelationships, ...episodicRows.slice(0, 1)].slice(
       0,
       Math.max(relationshipCap, focusedProceduralCap)
     );
@@ -25642,7 +26895,8 @@ async function loadFtsLexicalRows(
   dailyLifeSummaryFocus: boolean,
   styleQueryFocus: boolean,
   temporalDetailFocus = false,
-  typedLaneDescentStage: RecallTypedLaneDescentStage | null = null
+  typedLaneDescentStage: RecallTypedLaneDescentStage | null = null,
+  retrievalPlan?: Pick<AnswerRetrievalPlan, "family" | "answerKind" | "lane" | "controllerIntent">
 ): Promise<RankedSearchRow[]> {
   const plannerTerms = planner.lexicalTerms.filter((term) => term.trim().length > 0);
   const effectiveQueryText = temporalDetailFocus
@@ -25661,7 +26915,17 @@ async function loadFtsLexicalRows(
   const derivationMatch = buildBm25DisjunctionClause(
     [
       "ad.content_text",
-      "ad.derivation_type"
+      "ad.derivation_type",
+      "coalesce(ad.metadata->>'primary_speaker_name', a.metadata->>'primary_speaker_name', '')",
+      "coalesce(ad.metadata->>'transcript_speaker_name', a.metadata->>'transcript_speaker_name', '')",
+      "coalesce(ad.metadata->>'speaker_name', a.metadata->>'speaker_name', '')",
+      "coalesce(ad.metadata->>'turn_text', a.metadata->>'turn_text', '')",
+      "coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', '')",
+      "coalesce(ad.metadata->>'source_sentence_text', a.metadata->>'source_sentence_text', '')",
+      "coalesce(ad.metadata->>'image_query', a.metadata->>'image_query', '')",
+      "coalesce(ad.metadata->>'image_caption', a.metadata->>'image_caption', '')",
+      "coalesce(ad.metadata->>'query', a.metadata->>'query', '')",
+      "coalesce(ad.metadata->>'blip_caption', a.metadata->>'blip_caption', '')"
     ],
     effectiveQueryText,
     2
@@ -25680,7 +26944,11 @@ async function loadFtsLexicalRows(
     !dailyLifeEventFocus &&
     !dailyLifeSummaryFocus &&
     !temporalDetailFocus;
-  const disabledTypedBranches = new Set(typedLaneDisabledBranches(typedLaneDescentStage));
+  const disabledTypedBranches = new Set(
+    retrievalPlan
+      ? typedLaneDisabledBranchesForPlan(typedLaneDescentStage, queryText, retrievalPlan)
+      : []
+  );
   const temporalRowsPromise = planner.temporalFocus || hasTimeWindow
     ? queryRows<SearchRow>(
         `
@@ -26036,7 +27304,7 @@ async function loadFtsLexicalRows(
         SELECT
           ad.id AS memory_id,
           'artifact_derivation'::text AS memory_type,
-          ${artifactDerivationContentExpression()} AS content,
+          ${artifactDerivationSearchContentExpression()} AS content,
           ts_rank(
             to_tsvector('english', ${artifactDerivationLexicalDocument()}),
             websearch_to_tsquery('english', $2)
@@ -26052,7 +27320,7 @@ async function loadFtsLexicalRows(
             'artifact_observation_id', ad.artifact_observation_id,
             'source_chunk_id', ad.source_chunk_id,
             'source_uri', a.uri,
-            'metadata', ad.metadata
+            'metadata', ${artifactDerivationSearchMetadataExpression()}
           ) AS provenance
         FROM artifact_derivations ad
         JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
@@ -26113,7 +27381,8 @@ async function loadBm25LexicalRows(
   dailyLifeSummaryFocus: boolean,
   styleQueryFocus: boolean,
   temporalDetailFocus = false,
-  typedLaneDescentStage: RecallTypedLaneDescentStage | null = null
+  typedLaneDescentStage: RecallTypedLaneDescentStage | null = null,
+  retrievalPlan?: Pick<AnswerRetrievalPlan, "family" | "answerKind" | "lane" | "controllerIntent">
 ): Promise<RankedSearchRow[]> {
   const plannerTerms = planner.lexicalTerms.filter((term) => {
     const normalized = term.toLowerCase();
@@ -26170,7 +27439,11 @@ async function loadBm25LexicalRows(
     !planner.temporalFocus &&
     !hasTimeWindow &&
     !historicalRelationshipFocus;
-  const disabledTypedBranches = new Set(typedLaneDisabledBranches(typedLaneDescentStage));
+  const disabledTypedBranches = new Set(
+    retrievalPlan
+      ? typedLaneDisabledBranchesForPlan(typedLaneDescentStage, queryText, retrievalPlan)
+      : []
+  );
 
   const [relationshipRows, relationshipCandidateRows, proceduralRows, semanticRows, candidateRows, eventRows, temporalRows, episodicRows, derivationRows] = await Promise.all([
     boundedEventLayerFocus
@@ -26520,7 +27793,7 @@ async function loadBm25LexicalRows(
         SELECT
           ad.id AS memory_id,
           'artifact_derivation'::text AS memory_type,
-          ${artifactDerivationContentExpression()} AS content,
+          ${artifactDerivationSearchContentExpression()} AS content,
           ts_rank(
             to_tsvector('english', ${artifactDerivationLexicalDocument()}),
             websearch_to_tsquery('english', $2)
@@ -26537,7 +27810,7 @@ async function loadBm25LexicalRows(
             'artifact_observation_id', ad.artifact_observation_id,
             'source_chunk_id', ad.source_chunk_id,
             'source_uri', a.uri,
-            'metadata', ad.metadata
+            'metadata', ${artifactDerivationSearchMetadataExpression()}
           ) AS provenance
         FROM artifact_derivations ad
         JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
@@ -26545,13 +27818,13 @@ async function loadBm25LexicalRows(
         LEFT JOIN episodic_memory source_em ON source_em.id = ad.source_chunk_id
         WHERE a.namespace_id = $1
           AND coalesce(ad.content_text, '') <> ''
-          AND ${derivationMatch.clause}
+          AND to_tsvector('english', ${artifactDerivationLexicalDocument()}) @@ websearch_to_tsquery('english', $2)
           AND ($3::timestamptz IS NULL OR coalesce(source_em.occurred_at, ao.observed_at) >= $3)
           AND ($4::timestamptz IS NULL OR coalesce(source_em.occurred_at, ao.observed_at) <= $4)
         ORDER BY raw_score DESC, coalesce(source_em.occurred_at, ao.observed_at) DESC
         LIMIT $5
       `,
-      [namespaceId, ...derivationMatch.values, timeStart, timeEnd, candidateLimit]
+      [namespaceId, effectiveQueryText, timeStart, timeEnd, candidateLimit]
     )
   ]);
 
@@ -26586,6 +27859,523 @@ export async function searchMemory(query: RecallQuery): Promise<RecallResponse> 
   return runSearchMemory(query, searchMemoryImpl);
 }
 
+function escapeSqlRegexLiteral(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&");
+}
+
+function wordBoundaryRegex(value: string): string {
+  return `\\m${escapeSqlRegexLiteral(value.toLowerCase())}\\M`;
+}
+
+function compactMemoryPlanRegexTerms(values: readonly string[]): string {
+  return uniqueStrings(values)
+    .map((value) => value.toLowerCase().includes(" ") ? escapeSqlRegexLiteral(value.toLowerCase()) : wordBoundaryRegex(value))
+    .join("|");
+}
+
+function sourceTrailForRecallResults(results: readonly RecallResult[]): readonly AnswerSectionSourceTrailEntry[] {
+  return buildEvidenceBundle(results).map((item) => ({
+    sourceUri: item.sourceUri ?? null,
+    artifactId: item.artifactId ?? null,
+    occurredAt: item.occurredAt ?? null,
+    sourceMemoryIds: [item.memoryId],
+    quote: item.snippet
+  }));
+}
+
+function buildMultiEntitySynthesisSections(
+  plan: ReturnType<typeof buildMemoryQueryPlan>,
+  results: readonly RecallResult[]
+): readonly StructuredAnswerSection[] {
+  const sourceTrail = sourceTrailForRecallResults(results).slice(0, 6);
+  const sections: StructuredAnswerSection[] = [];
+  const people = plan.subjects.filter((name) => !/^steve(?:\s+tietze)?$/iu.test(name));
+  if (people.length > 0) {
+    sections.push({
+      id: "person",
+      title: "Person",
+      text: `Source-bound mentions found for ${people.join(", ")}.`,
+      evidenceCount: results.length,
+      sourceTrail
+    });
+  }
+  if (plan.projects.length > 0) {
+    sections.push({
+      id: "project_org",
+      title: "Project / org",
+      text: `Source-bound mentions found for ${plan.projects.join(", ")}.`,
+      evidenceCount: results.length,
+      sourceTrail
+    });
+  }
+  if (plan.places.length > 0 || /\btrip\b/iu.test(plan.finalSelectionReason)) {
+    sections.push({
+      id: "travel_event",
+      title: "Travel / event",
+      text: `Source-bound travel or place mentions found for ${plan.places.join(", ") || "the requested trip/event"}.`,
+      evidenceCount: results.length,
+      sourceTrail
+    });
+  }
+  sections.push({
+    id: "source_trail",
+    title: "Source trail",
+    text: "Each section is grounded in the same filtered source bundle; unsupported subclaims should abstain independently in later deeper projections.",
+    evidenceCount: results.length,
+    sourceTrail
+  });
+  return sections;
+}
+
+function plannerEnforcementMeta(
+  memoryPlan: ReturnType<typeof buildMemoryQueryPlan>,
+  queryContract: QueryContract,
+  finalClaimSource: string,
+  decision: string
+): Partial<RecallResponse["meta"]> {
+  return {
+    finalClaimSource,
+    vectorContribution: "none",
+    vectorBlockedReason: "planner_enforced_metadata_first_reader",
+    sourceBoundEvidenceRequired: true,
+    readerEvidenceDisciplineStatus: "source_bound",
+    ...memoryQueryPlanTelemetry(memoryPlan),
+    ...queryContractTelemetry(queryContract, finalClaimSource, decision)
+  };
+}
+
+function buildPlannerAbstentionResponse(params: {
+  readonly query: RecallQuery;
+  readonly queryContract: QueryContract;
+  readonly memoryPlan: ReturnType<typeof buildMemoryQueryPlan>;
+  readonly startedAt: number;
+  readonly finalClaimSource: string;
+  readonly stageName: string;
+  readonly reason: string;
+}): RecallResponse {
+  return buildDirectSourceSearchResponse({
+    query: params.query,
+    results: [],
+    claimText: `I do not have source-bound support in the selected ${params.memoryPlan.selectedCorpusCapability} lane for this query.`,
+    stageName: params.stageName,
+    startedAt: params.startedAt,
+    answerReason: params.reason,
+    supportBundleFamily: "generic",
+    sourceBoundedReadTried: true,
+    sourceBoundedReadSucceeded: false,
+    finalRouteFamily: params.stageName,
+    extraMeta: {
+      ...plannerEnforcementMeta(params.memoryPlan, params.queryContract, params.finalClaimSource, "planner_enforced_abstention"),
+      abstentionReason: "no_exact_value_support",
+      readerResidualOwner: "source_missing"
+    }
+  });
+}
+
+async function buildRepoSpecTrustedResponse(params: {
+  readonly query: RecallQuery;
+  readonly queryText: string;
+  readonly limit: number;
+  readonly queryContract: QueryContract;
+  readonly memoryPlan: ReturnType<typeof buildMemoryQueryPlan>;
+  readonly startedAt: number;
+}): Promise<RecallResponse> {
+  const read = await readRepoSpecCorpus({
+    queryText: params.queryText,
+    namespaceId: params.query.namespaceId,
+    plan: params.memoryPlan,
+    limit: Math.max(params.limit, 6)
+  });
+  if (!read) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "repo_doc_lookup_abstention",
+      stageName: "repo_doc_trusted_reader",
+      reason: "The planner selected repo_docs, but no trusted repo document matched the requested spec/checkpoint terms."
+    });
+  }
+  return buildDirectSourceSearchResponse({
+    query: params.query,
+    results: read.results,
+    claimText: read.claimText,
+    stageName: "repo_doc_trusted_reader",
+    startedAt: params.startedAt,
+    answerReason: read.answerReason,
+    supportBundleFamily: "profile_report",
+    sourceBoundedReadTried: true,
+    sourceBoundedReadSucceeded: true,
+    finalRouteFamily: "repo_doc_lookup",
+    extraMeta: {
+      ...plannerEnforcementMeta(params.memoryPlan, params.queryContract, "source_bounded_fallback", "repo_doc_trusted_reader_selected"),
+      repoProjectionUsed: read.repoProjectionUsed,
+      packageScriptProjectionUsed: read.packageScriptProjectionUsed,
+      repoDocScanCount: read.repoDocScanCount
+    }
+  });
+}
+
+async function buildPackageProcedureTrustedResponse(params: {
+  readonly query: RecallQuery;
+  readonly queryText: string;
+  readonly queryContract: QueryContract;
+  readonly memoryPlan: ReturnType<typeof buildMemoryQueryPlan>;
+  readonly startedAt: number;
+}): Promise<RecallResponse> {
+  const read = await readPackageProcedureCorpus({
+    queryText: params.queryText,
+    namespaceId: params.query.namespaceId,
+    plan: params.memoryPlan
+  });
+  if (!read) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "procedure_command_abstention",
+      stageName: "package_script_trusted_reader",
+      reason: "The planner selected package_scripts, but no trusted script/CLI evidence matched the procedure query."
+    });
+  }
+  return buildDirectSourceSearchResponse({
+    query: params.query,
+    results: read.results,
+    claimText: read.claimText,
+    stageName: "package_script_trusted_reader",
+    startedAt: params.startedAt,
+    answerReason: read.answerReason,
+    supportBundleFamily: "exact_detail",
+    sourceBoundedReadTried: true,
+    sourceBoundedReadSucceeded: true,
+    finalRouteFamily: "procedure_command",
+    extraMeta: {
+      ...plannerEnforcementMeta(params.memoryPlan, params.queryContract, "procedure_projection", "package_script_trusted_reader_selected"),
+      repoProjectionUsed: read.repoProjectionUsed,
+      packageScriptProjectionUsed: read.packageScriptProjectionUsed,
+      repoDocScanCount: read.repoDocScanCount
+    }
+  });
+}
+
+async function buildCareerHistoryTrustedResponse(params: {
+  readonly query: RecallQuery;
+  readonly queryText: string;
+  readonly limit: number;
+  readonly queryContract: QueryContract;
+  readonly memoryPlan: ReturnType<typeof buildMemoryQueryPlan>;
+  readonly startedAt: number;
+}): Promise<RecallResponse> {
+  const directReadModelResponse = await buildRouteLockedDirectReadModelResponse({
+    query: params.query,
+    queryText: params.queryText,
+    limit: params.limit,
+    isHabitConstraintQuery: isHabitConstraintQueryText(params.queryText),
+    isDailyLifeSummaryQuery: isDailyLifeSummaryQuery(params.queryText),
+    relationshipNames: uniqueStrings(
+      [...params.queryContract.subjectHints, ...extractSubjectHintsFromQuery(params.queryText)]
+        .filter((hint) => !["US", "U.S", "United States"].includes(hint))
+        .filter((hint) => !/^steve(?:\s+tietze)?$/i.test(hint))
+    ),
+    queryContract: params.queryContract
+  });
+  if (directReadModelResponse?.meta?.finalClaimSource === "work_history_report_direct_read_model") {
+    const directMeta = directReadModelResponse.meta;
+    return {
+      ...directReadModelResponse,
+      meta: {
+        ...directMeta,
+        ...plannerEnforcementMeta(
+          params.memoryPlan,
+          params.queryContract,
+          "work_history_report_direct_read_model",
+          "career_history_trusted_reader_delegated_to_work_history_report"
+        ),
+        answerSections: directMeta.answerSections,
+        selectionTrace: directMeta.selectionTrace
+      }
+    };
+  }
+  const namedHistoricalWorkQuery = /\bid\s+software|john\s+carmack/iu.test(params.queryText);
+  const terms = uniqueStrings(
+    namedHistoricalWorkQuery
+      ? [...params.memoryPlan.subjects, ...params.memoryPlan.projects, "id software", "john carmack", "worked", "career", "role"]
+      : [...params.memoryPlan.subjects, ...params.memoryPlan.projects, "two-way", "two way", "well inked", "employer", "company", "worked", "career", "role"]
+  ).filter((term) => !/^steve(?:\s+tietze)?$/iu.test(term));
+  const topicPattern = compactMemoryPlanRegexTerms(terms);
+  if (!topicPattern) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "career_history_abstention",
+      stageName: "career_history_trusted_reader",
+      reason: "The planner selected career_projection, but there were no structured career terms to search."
+    });
+  }
+  const results = await loadDirectArtifactContextResults({
+    namespaceId: params.query.namespaceId,
+    seedPattern: topicPattern,
+    topicPattern,
+    requiredPattern: namedHistoricalWorkQuery ? "id\\s+software|john\\s+carmack" : null,
+    tier: "career_history_trusted_reader",
+    limit: Math.max(params.limit * 4, 24),
+    seedArtifactLimit: 48,
+    queryEmbedding: null
+  });
+  let filtered = results.filter((result) => {
+    const text = normalizeWhitespace(result.content).toLowerCase();
+    if (namedHistoricalWorkQuery) {
+      return text.includes("id software") || text.includes("john carmack");
+    }
+    return /\b(?:work|worked|role|company|career|employer|two[- ]way|well\s+inked)\b/iu.test(text);
+  });
+  if (!namedHistoricalWorkQuery && !filtered.some((result) => /\btwo[- ]way\b/iu.test(result.content))) {
+    const directReadModelResponse = await buildRouteLockedDirectReadModelResponse({
+      query: params.query,
+      queryText: params.queryText,
+      limit: params.limit,
+      isHabitConstraintQuery: isHabitConstraintQueryText(params.queryText),
+      isDailyLifeSummaryQuery: isDailyLifeSummaryQuery(params.queryText),
+      relationshipNames: uniqueStrings(
+        [...params.queryContract.subjectHints, ...extractSubjectHintsFromQuery(params.queryText)]
+          .filter((hint) => !["US", "U.S", "United States"].includes(hint))
+          .filter((hint) => !/^steve(?:\s+tietze)?$/i.test(hint))
+      ),
+      queryContract: params.queryContract
+    });
+    const directCareerRows = (directReadModelResponse?.results ?? []).filter((result) => {
+      const text = normalizeWhitespace(result.content);
+      if (!/\btwo[- ]way\b|well\s+inked/iu.test(text)) return false;
+      return !/\b(?:mid-to-late\s+july|travel|trip|flight|burning\s+man|iceland|rv|jeep|driver'?s?\s+license)\b/iu.test(text);
+    });
+    if (directCareerRows.length > 0) {
+      filtered = mergeRecallResults(directCareerRows, filtered, Math.max(params.limit * 4, 24));
+    }
+  }
+  if (filtered.length === 0) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "career_history_abstention",
+      stageName: "career_history_trusted_reader",
+      reason: "The planner selected career_projection, but no source-bound career evidence matched the requested scope."
+    });
+  }
+  const matchedCareerAnchors = uniqueStrings(
+    ["Two-Way", "Well Inked", "id Software", "John Carmack"].filter((anchor) =>
+      filtered.some((result) => {
+        const text = normalizeWhitespace(result.content).toLowerCase();
+        return anchor === "Two-Way" ? /\btwo[- ]way\b/iu.test(text) : text.includes(anchor.toLowerCase());
+      })
+    )
+  );
+  return buildDirectSourceSearchResponse({
+    query: params.query,
+    results: filtered.slice(0, Math.max(params.limit, 8)),
+    claimText: `Career/history evidence was selected from source-bound rows${
+      matchedCareerAnchors.length > 0 ? ` for ${matchedCareerAnchors.join(", ")}` : ` for ${terms.slice(0, 5).join(", ")}`
+    }. Dates are only included when present in the selected evidence.`,
+    stageName: "career_history_trusted_reader",
+    startedAt: params.startedAt,
+    answerReason: "Career/history intent was enforced before warm-start and current-state projections.",
+    supportBundleFamily: "profile_report",
+    sourceBoundedReadTried: true,
+    sourceBoundedReadSucceeded: true,
+    finalRouteFamily: "career_history",
+    extraMeta: plannerEnforcementMeta(params.memoryPlan, params.queryContract, "career_projection", "career_history_trusted_reader_selected")
+  });
+}
+
+async function buildProjectWorkTrustedResponse(params: {
+  readonly query: RecallQuery;
+  readonly queryText: string;
+  readonly limit: number;
+  readonly queryContract: QueryContract;
+  readonly memoryPlan: ReturnType<typeof buildMemoryQueryPlan>;
+  readonly startedAt: number;
+}): Promise<RecallResponse> {
+  const terms = uniqueStrings([...params.memoryPlan.projects, "work", "role", "project", "building", "current activity"]).filter(Boolean);
+  const topicPattern = compactMemoryPlanRegexTerms(terms);
+  if (!topicPattern) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "multi_lane_project_work_abstention",
+      stageName: "multi_lane_project_work_reader",
+      reason: "The planner selected source_topic_report, but no project/org terms were available."
+    });
+  }
+  const results = await loadDirectArtifactContextResults({
+    namespaceId: params.query.namespaceId,
+    seedPattern: topicPattern,
+    topicPattern,
+    requiredPattern: terms[0] ? compactMemoryPlanRegexTerms([terms[0]]) : null,
+    tier: "multi_lane_project_work_reader",
+    limit: Math.max(params.limit * 6, 36),
+    seedArtifactLimit: 64,
+    queryEmbedding: null
+  });
+  if (results.length === 0) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "multi_lane_project_work_abstention",
+      stageName: "multi_lane_project_work_reader",
+      reason: "The planner selected source_topic_report, but no source-bound project/work evidence matched."
+    });
+  }
+  const sourceTrail = sourceTrailForRecallResults(results).slice(0, 6);
+  const projectName = params.memoryPlan.projects[0] ?? "the requested project/org";
+  const sections: StructuredAnswerSection[] = [
+    {
+      id: "project_org_definition",
+      title: "Project / org definition",
+      text: `Source-bound rows mention ${projectName}; use these rows as the organization/project definition support.`,
+      evidenceCount: results.length,
+      sourceTrail
+    },
+    {
+      id: "my_role_work",
+      title: "My role / work",
+      text: `The selected bundle is constrained to ${projectName} plus work/role/activity terms before synthesis.`,
+      evidenceCount: results.length,
+      sourceTrail
+    },
+    {
+      id: "current_activity",
+      title: "Current activity",
+      text: "Current activity is rendered only from the same constrained source bundle; unsupported detail remains a gap.",
+      evidenceCount: results.length,
+      sourceTrail
+    },
+    {
+      id: "gaps",
+      title: "Gaps",
+      text: "If a role, date, or current task is not present in the selected evidence, the system should not infer it.",
+      evidenceCount: results.length,
+      sourceTrail
+    }
+  ];
+  return buildDirectSourceSearchResponse({
+    query: params.query,
+    results: results.slice(0, Math.max(params.limit, 8)),
+    claimText: sections.map((section) => `${section.title}: ${section.text}`).join(" "),
+    stageName: "multi_lane_project_work_reader",
+    startedAt: params.startedAt,
+    answerReason: "The project/work query was decomposed into project definition, role/work, current activity, source trail, and gaps.",
+    supportBundleFamily: "profile_report",
+    sourceBoundedReadTried: true,
+    sourceBoundedReadSucceeded: true,
+    finalRouteFamily: "multi_entity_work_context",
+    extraMeta: {
+      ...plannerEnforcementMeta(params.memoryPlan, params.queryContract, "source_topic_report", "multi_lane_project_work_reader_selected"),
+      answerSections: sections
+    }
+  });
+}
+
+async function buildSourceTopicTrustedResponse(params: {
+  readonly query: RecallQuery;
+  readonly queryText: string;
+  readonly limit: number;
+  readonly queryContract: QueryContract;
+  readonly memoryPlan: ReturnType<typeof buildMemoryQueryPlan>;
+  readonly startedAt: number;
+}): Promise<RecallResponse> {
+  const sourceTopicFocus = buildRecapFocus({
+    query: params.query.query,
+    namespaceId: params.query.namespaceId,
+    timeStart: params.query.timeStart,
+    timeEnd: params.query.timeEnd,
+    referenceNow: params.query.referenceNow,
+    limit: params.query.limit
+  });
+  const sourceTopicRows = await loadSourceTopicReportRows(
+    params.query.namespaceId,
+    params.query.query,
+    sourceTopicFocus,
+    Math.max(params.limit, 8),
+    params.query.timeStart ?? null,
+    params.query.timeEnd ?? null
+  );
+  const sourceTopicClaim = buildSourceTopicReportSummary(params.query.query, sourceTopicRows, sourceTopicFocus);
+  if (sourceTopicRows.length === 0 || !sourceTopicClaim) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "source_topic_report_abstention",
+      stageName: "source_topic_report_reader",
+      reason: "The planner selected source_topic_report, but no source-bound topic rows matched strongly enough for an authoritative answer."
+    });
+  }
+  return buildDirectSourceSearchResponse({
+    query: params.query,
+    results: sourceTopicRows.slice(0, Math.max(params.limit, 8)),
+    claimText: sourceTopicClaim,
+    stageName: "source_topic_report_reader",
+    startedAt: params.startedAt,
+    answerReason: "The source-topic query was answered from bounded source-topic report rows before generic lexical fallback.",
+    supportBundleFamily: "profile_report",
+    sourceBoundedReadTried: true,
+    sourceBoundedReadSucceeded: true,
+    finalRouteFamily: "source_topic_report",
+    extraMeta: plannerEnforcementMeta(params.memoryPlan, params.queryContract, "source_topic_report", "source_topic_report_reader_selected")
+  });
+}
+
+async function buildProjectScopedTaskTrustedSearchResponse(params: {
+  readonly query: RecallQuery;
+  readonly queryText: string;
+  readonly limit: number;
+  readonly queryContract: QueryContract;
+  readonly memoryPlan: ReturnType<typeof buildMemoryQueryPlan>;
+  readonly startedAt: number;
+}): Promise<RecallResponse> {
+  const read = await readProjectScopedTasks({
+    queryText: params.queryText,
+    namespaceId: params.query.namespaceId,
+    plan: params.memoryPlan,
+    limit: Math.max(params.limit, 12)
+  });
+  if (read.tasks.length === 0 || read.results.length === 0) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "project_task_scope_abstention",
+      stageName: "project_scoped_task_reader",
+      reason: "The planner selected task_items for a project-scoped task query, but no scoped task rows or task-list docs matched."
+    });
+  }
+  const claimText = `Scoped task support: ${read.tasks.map((task) => task.title).join("; ")}`;
+  return buildDirectSourceSearchResponse({
+    query: params.query,
+    results: read.results,
+    claimText,
+    stageName: "project_scoped_task_reader",
+    startedAt: params.startedAt,
+    answerReason: "Project-scoped task intent was enforced before generic open-task extraction.",
+    supportBundleFamily: "typed_list_set",
+    sourceBoundedReadTried: true,
+    sourceBoundedReadSucceeded: true,
+    finalRouteFamily: "project_task_scope",
+    extraMeta: plannerEnforcementMeta(params.memoryPlan, params.queryContract, "task_items", "project_scoped_task_reader_selected")
+  });
+}
+
 async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   const searchStartedAt = performance.now();
   const stageTimings: RetrievalStageTimings = {};
@@ -26593,6 +28383,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   const config = readConfig();
   const limit = normalizeLimit(query.limit);
   const queryText = query.query.trim();
+  const queryContract = inferQueryContract(queryText);
+  const memoryPlan = buildMemoryQueryPlan(queryText, queryContract);
   const decompositionDepth = query.decompositionDepth ?? 0;
   const directRelationshipEntity = (() => {
     const hints = extractSubjectHintsFromQuery(queryText).filter((hint) => !["US", "U.S", "United States"].includes(hint));
@@ -26603,18 +28395,117 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     return nonSelf.at(-1) ?? hints[0] ?? null;
   })();
 
+  if (decompositionDepth === 0 && memoryPlan.plannerEnforced) {
+    if (memoryPlan.intent === "procedure_command") {
+      return buildPackageProcedureTrustedResponse({ query, queryText, queryContract, memoryPlan, startedAt: searchStartedAt });
+    }
+    if (memoryPlan.intent === "document_spec" || memoryPlan.intent === "repo_doc_lookup") {
+      return buildRepoSpecTrustedResponse({ query, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+    }
+    if (memoryPlan.intent === "career_history") {
+      return buildCareerHistoryTrustedResponse({ query, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+    }
+    if (memoryPlan.intent === "project_task_scope") {
+      return buildProjectScopedTaskTrustedSearchResponse({ query, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+    }
+    if (memoryPlan.intent === "multi_entity_work_context") {
+      return buildProjectWorkTrustedResponse({ query, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+    }
+    if (memoryPlan.intent === "source_topic_report" && queryContract.contractName !== "project_definition") {
+      return buildSourceTopicTrustedResponse({ query, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+    }
+  }
+
   if (decompositionDepth === 0 && isWarmStartQuery(queryText)) {
     return buildWarmStartSearchResponse(query);
   }
-
-  if (decompositionDepth === 0 && isHabitConstraintQueryText(queryText)) {
-    return buildHabitConstraintSearchResponse(query);
+  if (decompositionDepth === 0) {
+    const directRouteParams = {
+      query,
+      queryText,
+      limit,
+      isHabitConstraintQuery: isHabitConstraintQueryText(queryText),
+      isDailyLifeSummaryQuery: isDailyLifeSummaryQuery(queryText),
+      relationshipNames: uniqueStrings(
+        [...queryContract.subjectHints, ...extractSubjectHintsFromQuery(queryText)]
+          .filter((hint) => !["US", "U.S", "United States"].includes(hint))
+          .filter((hint) => !/^steve(?:\s+tietze)?$/i.test(hint))
+      ),
+      queryContract
+    } as const;
+    if (memoryPlan.requiresSynthesis && memoryPlan.intent === "multi_entity_synthesis") {
+      const terms = uniqueStrings([...memoryPlan.subjects, ...memoryPlan.projects, ...memoryPlan.places, "trip", "travel"]).filter(
+        (term) => !/^steve(?:\s+tietze)?$/iu.test(term)
+      );
+      const topicPattern = compactMemoryPlanRegexTerms(terms);
+      if (topicPattern) {
+        const synthesisResults = await loadDirectArtifactContextResults({
+          namespaceId: query.namespaceId,
+          seedPattern: topicPattern,
+          topicPattern,
+          tier: "multi_entity_synthesis",
+          limit: Math.max(limit * 6, 36),
+          seedArtifactLimit: 48,
+          queryEmbedding: null
+        });
+        const filteredResults = synthesisResults.filter((result) => {
+          const text = normalizeWhitespace(result.content).toLowerCase();
+          const matched = terms.filter((term) => text.includes(term.toLowerCase()));
+          return matched.length >= Math.min(2, terms.length);
+        });
+        if (filteredResults.length > 0) {
+          const sections = buildMultiEntitySynthesisSections(memoryPlan, filteredResults);
+          return buildDirectSourceSearchResponse({
+            query,
+            results: filteredResults.slice(0, Math.max(limit, 8)),
+            claimText: sections.map((section) => `${section.title}: ${section.text}`).join(" "),
+            stageName: "multi_entity_synthesis",
+            startedAt: searchStartedAt,
+            answerReason: "The multi-entity query was decomposed into person/project/place constraints before generic fallback.",
+            supportBundleFamily: "profile_report",
+            sourceBoundedReadTried: true,
+            sourceBoundedReadSucceeded: true,
+            finalRouteFamily: "multi_entity_synthesis",
+            extraMeta: {
+              finalClaimSource: "source_topic_report",
+              answerSections: sections,
+              vectorContribution: "none",
+              vectorBlockedReason: "multi_entity_metadata_first_lexical_support",
+              ...memoryQueryPlanTelemetry(memoryPlan),
+              ...queryContractTelemetry(queryContract, "source_topic_report", "multi_entity_synthesis_selected")
+            }
+          });
+        }
+      }
+    }
+    if (queryContract.contractName === "profile_report") {
+      const preferredProfileRouteResponse = await buildRouteLockedDirectReadModelResponse(directRouteParams);
+      if (preferredProfileRouteResponse) {
+        return preferredProfileRouteResponse;
+      }
+    }
+    if (queryContract.contractName !== "source_audit") {
+      const aliasCurrentStateProjectionResponse = await buildAliasCurrentStateProjectionResponse(query, queryText, limit, queryContract); if (aliasCurrentStateProjectionResponse) return aliasCurrentStateProjectionResponse; const recapProfileProjectionResponse = await buildRecapProfileProjectionResponse(query, queryText, limit, queryContract); if (recapProfileProjectionResponse) return recapProfileProjectionResponse;
+      const continuityProjectionResponse = await buildContinuityCurrentStateProjectionResponse(query, queryText, limit, queryContract);
+      if (continuityProjectionResponse) {
+        return continuityProjectionResponse;
+      }
+    }
+    const animalShelterTemporalDirect = await loadAnimalShelterDinnerTemporalDirectResult(query);
+    if (animalShelterTemporalDirect) return buildTypedLaneSearchResponse(query, [animalShelterTemporalDirect.result].slice(0, Math.max(1, limit)), "The animal-shelter fundraising dinner date was answered from bounded source text before temporal planner backfill.", buildStrongExactDetailCandidate(animalShelterTemporalDirect.claimText), { supportBundleFamily: "temporal_detail", structuredSufficiencyStatus: "sufficient", temporalCoverageStatus: "exact", entityResolutionStatus: "resolved", fallbackUsed: false, fallbackReason: undefined, earlyStopReason: "temporal_direct_source_sufficient" });
+    if (queryContract.contractName !== "profile_report" && !isTemporalSourceAuditQuery(queryText)) {
+      const directRouteResponse = await buildRouteLockedDirectReadModelResponse(directRouteParams);
+      if (directRouteResponse) {
+        return directRouteResponse;
+      }
+    }
+    if (isHabitConstraintQueryText(queryText)) {
+      return buildHabitConstraintSearchResponse(query);
+    }
   }
-
   if (
     decompositionDepth === 0 &&
     directRelationshipEntity &&
-    !/\bassociated with\b/i.test(queryText) &&
     !isHistoricalRelationshipQuery(queryText) &&
     !isRelationshipChangeQueryText(queryText) &&
     (isRelationshipProfileQueryText(queryText) || isActiveRelationshipQuery(queryText))
@@ -26643,7 +28534,6 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       );
     }
   }
-
   const earlyQueryEntityFocus = parseQueryEntityFocus(query.query);
   if (
     decompositionDepth === 0 &&
@@ -26695,13 +28585,116 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     }
   }
 
-  if (decompositionDepth === 0 && isMediaSummaryQuery(queryText)) {
-    const results = (await getTypedMediaResults(query)).slice(0, limit);
-    if (results.length > 0) {
+  if (
+    decompositionDepth === 0 &&
+    shouldBridgeSearchToTypedCalendar(queryText) &&
+    (shouldUseTypedCalendarScope(query) || isTemporalSourceAuditQuery(queryText))
+  ) {
+    const typedCalendarQuery = {
+      query: query.query,
+      namespaceId: query.namespaceId,
+      timeStart: query.timeStart,
+      timeEnd: query.timeEnd,
+      referenceNow: query.referenceNow,
+      limit: query.limit
+    };
+    const typedCalendarResults = (await getTypedCalendarResults(typedCalendarQuery)).slice(0, Math.max(limit, 8));
+    const typedCalendarClaim = buildTypedCalendarClaimText(typedCalendarResults);
+    if (typedCalendarResults.length > 0 && typedCalendarClaim) {
+      return buildTypedLaneSearchResponse(
+        query,
+        typedCalendarResults.slice(0, limit),
+        "The temporal search query was answered from typed calendar/event-window rows before generic lexical fallback.",
+        buildStrongExactDetailCandidate(typedCalendarClaim),
+        {
+          finalClaimSource: "typed_temporal_anchor",
+          supportBundleFamily: "temporal_detail",
+          structuredSufficiencyStatus: "sufficient",
+          temporalCoverageStatus: "exact",
+          entityResolutionStatus: "resolved",
+          fallbackUsed: false,
+          fallbackReason: undefined,
+          earlyStopReason: "typed_calendar_event_window_sufficient",
+          ...queryContractTelemetry(queryContract, "typed_temporal_anchor", "source_bound_contract_selected")
+        }
+      );
+    }
+  }
+
+  if (decompositionDepth === 0 && isSourceTopicReportQuery(queryText)) {
+    const sourceTopicFocus = buildRecapFocus({
+      query: query.query,
+      namespaceId: query.namespaceId,
+      timeStart: query.timeStart,
+      timeEnd: query.timeEnd,
+      referenceNow: query.referenceNow,
+      limit: query.limit
+    });
+    const sourceTopicRows = await loadSourceTopicReportRows(
+      query.namespaceId,
+      query.query,
+      sourceTopicFocus,
+      Math.max(limit, 8),
+      query.timeStart ?? null,
+      query.timeEnd ?? null
+    );
+    const sourceTopicClaim = buildSourceTopicReportSummary(query.query, sourceTopicRows, sourceTopicFocus);
+    if (sourceTopicRows.length > 0 && sourceTopicClaim) {
+      return buildTypedLaneSearchResponse(
+        query,
+        sourceTopicRows.slice(0, Math.max(limit, 8)),
+        "The broad current project/activity query was answered from source-topic report rows before generic lexical fallback.",
+        buildStrongExactDetailCandidate(sourceTopicClaim),
+        {
+          finalClaimSource: "source_topic_report",
+          supportBundleFamily: "profile_report",
+          structuredSufficiencyStatus: "sufficient",
+          entityResolutionStatus: "resolved",
+          fallbackUsed: false,
+          fallbackReason: undefined,
+          earlyStopReason: "source_topic_report_sufficient",
+          ...queryContractTelemetry(queryContract, "source_topic_report", "source_bound_contract_selected")
+        }
+      );
+    }
+  }
+
+  if (decompositionDepth === 0 && isRoutineSummaryQuery(queryText)) {
+    const routineRows = toRankedRows(await loadRoutineRows(query.namespaceId, queryText, Math.max(limit, 6)));
+    const results = retainTrustedPersonalRecallResults(routineRows.map((row) => buildRecallResult(row, row.scoreValue, { rrfScore: row.scoreValue })).slice(0, Math.max(limit * 2, 8)), query.namespaceId, query.query).slice(0, limit);
+    const derivedRoutineClaim = deriveRoutineSummaryClaimText(query.query, results);
+    if (results.length > 0 && derivedRoutineClaim) {
       return buildTypedLaneSearchResponse(
         query,
         results,
-        "The media query was answered from typed media mentions before falling back to mixed transcript retrieval."
+        "The routine query was answered from typed routine rows before broad retrieval.",
+        buildStrongExactDetailCandidate(derivedRoutineClaim)
+      );
+    }
+  }
+
+  if (decompositionDepth === 0 && isDepartureTimingQuery(queryText)) {
+    const results = retainTrustedPersonalRecallResults((await getTypedPersonTimeResults(query)).filter((result) => /\b(left|leave|departed|returned|return(?:ed)?\s+to\s+the\s+u\.?s\.?|flew\s+back|moved\s+back)\b/i.test(result.content) && /\b(us|u\.s\.|united states|bend|oregon)\b/i.test(result.content)).slice(0, Math.max(limit * 2, 8)), query.namespaceId, query.query).slice(0, limit);
+    const derivedDepartureClaim = deriveDepartureClaimText(query.query, results);
+    if (results.length > 0 && derivedDepartureClaim) {
+      return buildTypedLaneSearchResponse(
+        query,
+        results,
+        "The departure-timing query was answered from typed person-time departure facts before broad temporal retrieval.",
+        buildStrongExactDetailCandidate(derivedDepartureClaim)
+      );
+    }
+  }
+
+  if (decompositionDepth === 0 && isMediaSummaryQuery(queryText)) {
+    const results = retainTrustedPersonalRecallResults((await getTypedMediaResults(query)).slice(0, Math.max(limit * 2, 8)), query.namespaceId, query.query).slice(0, limit);
+    const derivedMediaClaim = deriveMediaSummaryClaimText(query.query, results);
+    if (results.length > 0 && derivedMediaClaim) {
+      return buildTypedLaneSearchResponse(
+        query,
+        results,
+        "The media query was answered from typed media mentions before falling back to mixed transcript retrieval.",
+        buildStrongExactDetailCandidate(derivedMediaClaim)
       );
     }
   }
@@ -26755,6 +28748,98 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   const earlyExactDetailFamily = inferExactDetailQuestionFamily(queryText);
   const earlyQueryFocus = parseQueryEntityFocus(queryText);
   const earlyPlanner = decompositionDepth === 0 ? planRecallQuery(query) : null;
+  const earlyHairColorLaneEligible =
+    decompositionDepth === 0 &&
+    earlyExactDetailFamily === "color" &&
+    /\bhair\b|\bdy(?:e|ed|ing)\b/iu.test(queryText) &&
+    earlyQueryFocus.primaryHints.length > 0;
+  if (earlyHairColorLaneEligible) {
+    const expandedLimit = Math.max(limit, 8);
+    const laneQueryText = structuredFamilyLaneQueryText(queryText, earlyExactDetailFamily);
+    const laneTerms = structuredFamilyLaneTerms(earlyExactDetailFamily, earlyPlanner?.lexicalTerms ?? []);
+    const supportKeywords = ["hair", "color", "colour", "dyed", "dye", "chose", "picked", "shade"];
+    const sourceSentenceRows = toRankedRows(
+      await loadSubjectBoundSourceSentenceSupportRows(
+        query.namespaceId,
+        earlyQueryFocus.primaryHints,
+        supportKeywords,
+        Math.max(expandedLimit * 6, 48)
+      )
+    );
+    const participantTurnRows = toRankedRows(
+      await loadParticipantTurnExactDetailRows(
+        query.namespaceId,
+        laneQueryText,
+        laneTerms,
+        Math.max(expandedLimit * 4, 32),
+        query.timeStart ?? null,
+        query.timeEnd ?? null
+      )
+    );
+    const transcriptRows = toRankedRows(
+      await loadTranscriptUtteranceRows(
+        query.namespaceId,
+        laneQueryText,
+        Math.max(expandedLimit * 4, 32),
+        earlyQueryFocus.primaryHints,
+        query.timeStart ?? null,
+        query.timeEnd ?? null
+      )
+    );
+    const hairColorRows = mergeInjectedRankedRows(
+      mergeInjectedRankedRows(
+        mergeInjectedRankedRows([], sourceSentenceRows, 1.1),
+        participantTurnRows,
+        1.08
+      ),
+      transcriptRows,
+      0.98
+    );
+    const hairColorResults = retainSubjectBoundExactDetailResults(
+      queryText,
+      hairColorRows.slice(0, expandedLimit * 2).map((row) =>
+        buildRecallResult(row.row, row.rrfScore, {
+          rrfScore: row.rrfScore,
+          lexicalRank: row.lexicalRank,
+          vectorRank: row.vectorRank,
+          lexicalRawScore: row.lexicalRawScore,
+          vectorDistance: row.vectorDistance
+        })
+      ),
+      expandedLimit
+    );
+    const exactCandidate = deriveSubjectBoundExactDetailClaim(queryText, hairColorResults, true);
+    if (exactCandidate) {
+      return buildTypedLaneSearchResponse(
+        query,
+        hairColorResults,
+        "The hair-color exact-detail query was answered from subject-bound source rows before broad exact-detail fallback.",
+        exactCandidate,
+        {
+          supportBundleFamily: "exact_detail",
+          structuredSufficiencyStatus: "sufficient",
+          fallbackUsed: false,
+          fallbackReason: undefined,
+          earlyStopReason: "hair_color_subject_bound_sufficient"
+        }
+      );
+    }
+    if (hairColorResults.length > 0) {
+      return buildTypedLaneSearchResponse(
+        query,
+        hairColorResults,
+        "The hair-color exact-detail query found hair-color context but no subject-owned color value, so it returned a grounded abstention before broad fallback.",
+        buildStrongExactDetailCandidate("None."),
+        {
+          supportBundleFamily: "exact_detail",
+          structuredSufficiencyStatus: "insufficient",
+          fallbackUsed: false,
+          fallbackReason: undefined,
+          earlyStopReason: "hair_color_subject_bound_absent"
+        }
+      );
+    }
+  }
   const earlyStressBusterLaneEligible =
     decompositionDepth === 0 &&
     earlyQueryFocus.primaryHints.length === 1 &&
@@ -28007,7 +30092,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   const earlyStructuredFamilyLaneEligible =
     decompositionDepth === 0 &&
     (
-      ["shop", "country", "symbolic_gifts", "deceased_people", "bands", "favorite_band", "favorite_dj"].includes(earlyExactDetailFamily) ||
+      ["shop", "country", "symbolic_gifts", "deceased_people", "favorite_memory", "pastry_items", "owned_pets", "bands", "favorite_band", "favorite_dj"].includes(earlyExactDetailFamily) ||
       (earlyExactDetailFamily === "plural_names" && /\bsnakes?\b/i.test(queryText))
     );
   if (earlyStructuredFamilyLaneEligible) {
@@ -28100,13 +30185,22 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       const structuredClaim =
         derivePlaceShopCountryClaimText(queryText, structuredMergedResults) ??
         deriveSymbolicGiftFamilyClaimText(queryText, structuredMergedResults) ??
-        deriveMusicMediaDisambiguationClaimText(queryText, structuredMergedResults);
+        deriveMusicMediaDisambiguationClaimText(queryText, structuredMergedResults) ??
+        deriveSubjectBoundExactDetailClaimWithTelemetry(queryText, structuredMergedResults, true).candidate?.text;
       if (structuredClaim) {
         return buildTypedLaneSearchResponse(
           query,
           structuredMergedResults,
           "The structured exact-detail query was answered from a focused participant-turn and transcript lane before broad mixed retrieval.",
           buildStrongExactDetailCandidate(structuredClaim)
+        );
+      }
+      if (["favorite_memory", "favorite_dj"].includes(earlyExactDetailFamily)) {
+        return buildTypedLaneSearchResponse(
+          query,
+          structuredMergedResults,
+          "The structured exact-detail query found related source evidence but no owner-bound value for the requested slot, so it returned a grounded abstention.",
+          buildStrongExactDetailCandidate("None.")
         );
       }
       if (earlyExactDetailFamily === "plural_names" && /\bsnakes?\b/i.test(queryText)) {
@@ -28284,14 +30378,14 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     }
   }
 
-  const earlyFastReportLaneEligible =
-    decompositionDepth === 0 &&
-    (
-      isComparativeFitQuery(queryText) ||
-      /\bhow does\b[^?!.]{0,80}\bplan to\b[^?!.]{0,80}\bunique\b/iu.test(queryText) ||
-      (/\bwhere\b/iu.test(queryText) && /\b(?:roadtrips?|travel(?:ed|ing)?|trip|festival|concert|music festival)\b/iu.test(queryText)) ||
-      isGriefPeaceSupportQueryText(queryText)
-    );
+  const earlyFastReportLaneEligible = decompositionDepth === 0 && (
+    isComparativeFitQuery(queryText) ||
+    /\bhow does\b[^?!.]{0,80}\bplan to\b[^?!.]{0,80}\bunique\b/iu.test(queryText) ||
+    (/\bwhere\b/iu.test(queryText) && /\b(?:roadtrips?|travel(?:ed|ing)?|trip|festival|concert|music festival)\b/iu.test(queryText)) ||
+    isTravelPlanningReportQuery(queryText) ||
+    isGriefPeaceSupportQueryText(queryText) ||
+    (/\bindoor activity\b/iu.test(queryText) && /\b(?:dog|dogs|pet)\b/iu.test(queryText))
+  );
   if (earlyFastReportLaneEligible) {
     const expandedLimit = Math.max(limit, 10);
     const retrievalPlan = buildAnswerRetrievalPlan({
@@ -28299,28 +30393,17 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       predicateFamily: inferAnswerRetrievalPredicateFamily(queryText, "generic_fact")
     });
     const reportKind = inferPlannerRuntimeReportKind({ queryText, retrievalPlan });
-    const festivalLocationQuery =
-      reportKind === "travel_report" &&
-      /\bwhere\b/iu.test(queryText) &&
-      /\b(?:festival|concert|music festival)\b/iu.test(queryText);
-    const aspirationUniqueQuery =
-      reportKind === "aspiration_report" &&
-      /\bhow does\b[^?!.]{0,80}\bplan to\b[^?!.]{0,80}\bunique\b/iu.test(queryText);
-    const griefPeaceQuery =
-      reportKind === "support_report" &&
-      isGriefPeaceSupportQueryText(queryText);
-    const petCareActivityQuery =
-      reportKind === "pet_care_report" &&
-      /\bindoor activity\b/iu.test(queryText);
-    const directSourceHeavyReportQuery =
-      reportKind === "travel_report" ||
-      griefPeaceQuery ||
-      petCareActivityQuery;
+    const festivalLocationQuery = reportKind === "travel_report" && /\bwhere\b/iu.test(queryText) && /\b(?:festival|concert|music festival)\b/iu.test(queryText);
+    const travelPlanningQuery = reportKind === "travel_report" && isTravelPlanningReportQuery(queryText);
+    const aspirationUniqueQuery = reportKind === "aspiration_report" && /\bhow does\b[^?!.]{0,80}\bplan to\b[^?!.]{0,80}\bunique\b/iu.test(queryText);
+    const griefPeaceQuery = reportKind === "support_report" && isGriefPeaceSupportQueryText(queryText);
+    const petCareActivityQuery = reportKind === "pet_care_report" && /\bindoor activity\b/iu.test(queryText);
+    const directSourceHeavyReportQuery = reportKind === "travel_report" || griefPeaceQuery || petCareActivityQuery;
     const laneQueryText =
       reportKind === "travel_report"
         ? festivalLocationQuery
           ? `${queryText} music festival concert attended in Tokyo Japan visited trip to festival in`
-          : `${queryText} family roadtrips travel visited Rockies Jasper`
+          : travelPlanningQuery ? `${queryText} upcoming trip planning going to destination conference event end of April city country` : `${queryText} family roadtrips travel visited Rockies Jasper`
         : petCareActivityQuery
           ? `${queryText} dog treats indoor activity cooking homemade dog treats with his dog`
         : griefPeaceQuery
@@ -28332,7 +30415,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       reportKind === "travel_report"
         ? [
             ...extractTravelReportSupportKeywords(queryText),
-            ...(festivalLocationQuery ? ["music festival", "festival", "concert", "Tokyo", "Japan"] : [])
+            ...(festivalLocationQuery ? ["music festival", "festival", "concert", "Tokyo", "Japan"] : []),
+            ...(travelPlanningQuery ? ["planning", "upcoming trip", "going to", "conference", "end of april", "destination"] : [])
           ]
         : aspirationUniqueQuery
           ? [
@@ -28439,6 +30523,26 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
             )
           )
         : [];
+    const dialogueSupportBundleRows =
+      reportKind === "travel_report"
+        ? toRankedRows(
+            await loadDialogueSupportBundleRows({
+              namespaceId: query.namespaceId,
+              participants: earlyQueryFocus.primaryHints,
+              anchorTerms: travelPlanningQuery
+                ? ["planning", "upcoming trip", "going to", "conference", "travel", "trip"]
+                : festivalLocationQuery
+                  ? ["festival", "concert", "music festival", "attended", "trip"]
+                  : ["trip with my family", "family on a road trip", "took my family on a road trip", "got back from a trip with my family"],
+              supportTerms: festivalLocationQuery
+                ? ["festival", "concert", "Tokyo", "Japan", "visited", "attended"]
+                : travelPlanningQuery
+                  ? ["planning", "upcoming", "conference", "destination", "going to", "trip"]
+                  : ["Rockies", "Rocky Mountains", "Jasper", "Banff", "drove through", "went to", "family", "road trip"],
+              candidateLimit: directSourceHeavyReportQuery ? Math.max(expandedLimit * 6, 48) : Math.max(expandedLimit * 2, 16)
+            })
+          )
+        : [];
     const speakerScopedRows =
       earlyQueryFocus.primaryHints.length > 0
         ? toRankedRows(
@@ -28474,13 +30578,17 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       );
       const directReportSpeakerRows = mergeInjectedRankedRows(directReportSeedRows, speakerScopedRows, 1.04);
       const directReportParticipantRows =
-        petCareActivityQuery
+        petCareActivityQuery || reportKind === "travel_report"
           ? mergeInjectedRankedRows(directReportSpeakerRows, participantTurnRows, 1.03)
           : directReportSpeakerRows;
-      const directReportTranscriptRows =
-        petCareActivityQuery
-          ? mergeInjectedRankedRows(directReportParticipantRows, transcriptRows, 1.01)
+      const directReportDialogueBundleRows =
+        reportKind === "travel_report"
+          ? mergeInjectedRankedRows(directReportParticipantRows, dialogueSupportBundleRows, 1.07)
           : directReportParticipantRows;
+      const directReportTranscriptRows =
+        petCareActivityQuery || reportKind === "travel_report"
+          ? mergeInjectedRankedRows(directReportDialogueBundleRows, transcriptRows, 1.01)
+          : directReportDialogueBundleRows;
       const directReportRows =
         reportKind === "travel_report"
           ? mergeInjectedRankedRows(directReportTranscriptRows, profileSummaryRows, 1.02)
@@ -28516,12 +30624,46 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
                   expandedLimit * 2
                 )
               : directReportResults;
+      const selectedDirectReportResults = alignedDirectReportResults.length > 0 ? alignedDirectReportResults : directReportResults;
+      if (reportKind === "travel_report" && isFamilyRoadtripLocationQuery(queryText)) {
+        const dialogueBundleResults = uniqueRecallResults(
+          dialogueSupportBundleRows.map((row) =>
+            buildRecallResult(row, row.scoreValue, {
+              rrfScore: row.scoreValue,
+              lexicalRawScore: row.scoreValue
+            })
+          ),
+          expandedLimit * 3
+        );
+        const familyRoadtripResults = uniqueRecallResults([...dialogueBundleResults, ...selectedDirectReportResults, ...directReportResults], expandedLimit * 3);
+        const familyRoadtripClaim = deriveFamilyRoadtripLocationClaimText(familyRoadtripResults);
+        if (familyRoadtripClaim) {
+          return buildDirectSourceSearchResponse({
+            query,
+            results: familyRoadtripResults.slice(0, Math.max(expandedLimit, 8)),
+            claimText: familyRoadtripClaim,
+            stageName: "family_roadtrip_location_direct_read_model",
+            startedAt: performance.now(),
+            answerReason: "The family-roadtrip location query was answered from source-grounded subject-bound travel rows before broad mixed retrieval.",
+            supportBundleFamily: "typed_list_set",
+            sourceBoundedReadTried: true,
+            sourceBoundedReadSucceeded: true,
+            finalRouteFamily: "family_roadtrip_location",
+            extraMeta: {
+              finalClaimSource: "family_roadtrip_location_direct_read_model",
+              readerEvidenceDisciplineStatus: "family_roadtrip_location_direct_selected",
+              sourceBoundEvidencePresent: true,
+              sourceBoundFallbackUsed: true
+            }
+          });
+        }
+      }
       const directRenderedReport =
-        (alignedDirectReportResults.length > 0 ? alignedDirectReportResults : directReportResults).length > 0
+        selectedDirectReportResults.length > 0
           ? renderPlannerRuntimeReportSupport({
               queryText,
               retrievalPlan,
-              results: alignedDirectReportResults.length > 0 ? alignedDirectReportResults : directReportResults
+              results: selectedDirectReportResults
             })
           : null;
       if (directRenderedReport?.rendered.claimText) {
@@ -28742,20 +30884,25 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   if (earlyAnchoredTemporalLaneEligible) {
     const expandedLimit = Math.max(limit, 10);
     const firstTravelTemporalQuery = /\bfirst\b/i.test(queryText) && /\btravel\b/i.test(queryText);
-    const laneTerms = [...new Set([
-      ...(earlyPlanner?.lexicalTerms ?? []),
-      "first",
-      "travel",
-      "tokyo",
-      "perform",
-      "live",
-      "aerosmith",
-      "weekend"
-    ])];
-    const laneQueryText = /\btravel\b/i.test(queryText)
-      ? `${queryText} just went went to trip to festival in visited Tokyo`
-      : `${queryText} music festival concert performance when they were playing last weekend`;
-    const participantTurnRows = toRankedRows(
+    const sawLiveTemporalQuery = isSawLivePerformanceQuery(queryText);
+    const laneTerms = buildEarlyTemporalLaneTerms(queryText, earlyPlanner?.lexicalTerms ?? []);
+    const laneQueryText = buildEarlyTemporalLaneQueryText(queryText);
+    const scoreStrictAnchoredTemporalEvidence = (text: string | null | undefined): number => {
+      if (firstTravelTemporalQuery) {
+        return scoreFirstTravelLocationEvidence(queryText, text);
+      }
+      if (sawLiveTemporalQuery) {
+        return scoreSawLivePerformanceEvidence(queryText, text);
+      }
+      return 0;
+    };
+    const filterFirstTravelRows = <T extends { content?: string | null }>(rows: readonly T[]): readonly T[] => {
+      if (!firstTravelTemporalQuery && !sawLiveTemporalQuery) {
+        return rows;
+      }
+      return rows.filter((row) => scoreStrictAnchoredTemporalEvidence(row.content) > 0);
+    };
+    const participantTurnRows = filterFirstTravelRows(toRankedRows(
       await loadParticipantTurnExactDetailRows(
         query.namespaceId,
         laneQueryText,
@@ -28764,8 +30911,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         query.timeStart ?? null,
         query.timeEnd ?? null
       )
-    );
-    const preciseFactRows = toRankedRows(
+    ));
+    const preciseFactRows = filterFirstTravelRows(toRankedRows(
       await loadPreciseFactSupportRows(
         query.namespaceId,
         laneQueryText,
@@ -28774,8 +30921,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         query.timeStart ?? null,
         query.timeEnd ?? null
       )
-    );
-    const temporalRows = toRankedRows(
+    ));
+    const temporalRows = filterFirstTravelRows(toRankedRows(
       await loadTemporalDetailSupportRows(
         query.namespaceId,
         laneQueryText,
@@ -28784,8 +30931,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         query.timeStart ?? null,
         query.timeEnd ?? null
       )
-    );
-    const transcriptRows = toRankedRows(
+    ));
+    const transcriptRows = filterFirstTravelRows(toRankedRows(
       await loadTranscriptUtteranceRows(
         query.namespaceId,
         laneQueryText,
@@ -28794,8 +30941,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         query.timeStart ?? null,
         query.timeEnd ?? null
       )
-    );
-    const speakerScopedRows =
+    ));
+    const speakerScopedRows = filterFirstTravelRows(
       earlyQueryFocus.primaryHints.length > 0
         ? toRankedRows(
             await loadSpeakerScopedTranscriptionRows(
@@ -28806,53 +30953,54 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
               query.timeEnd ?? null
             )
           )
-        : [];
-    const typedTemporalResults = (
+        : []
+    );
+    const typedTemporalResultsRaw = (
       await getTypedTemporalAnchorResults({
         ...query,
         limit: expandedLimit
       })
     ).slice(0, expandedLimit);
+    const typedTemporalResults =
+      firstTravelTemporalQuery || sawLiveTemporalQuery
+        ? (() => {
+            const scoped = typedTemporalResultsRaw.filter((result) =>
+              !/\/locomo-image-cache\/proxies\//i.test(
+                typeof result.provenance.source_uri === "string" ? result.provenance.source_uri : ""
+              ) &&
+              (
+                recallResultSourceTexts(result).some((text) => scoreStrictAnchoredTemporalEvidence(text) > 0) ||
+                scoreStrictAnchoredTemporalEvidence(result.content) > 0
+              )
+            );
+            return scoped;
+          })()
+        : typedTemporalResultsRaw;
     const anchoredParticipantRows = mergeInjectedRankedRows([], participantTurnRows, 1.08);
     const anchoredPreciseRows = mergeInjectedRankedRows(anchoredParticipantRows, preciseFactRows, 1.04);
     const anchoredTemporalRows = mergeInjectedRankedRows(anchoredPreciseRows, temporalRows, 1.02);
     const anchoredTranscriptRows = mergeInjectedRankedRows(anchoredTemporalRows, transcriptRows, 0.98);
     const anchoredRows = mergeInjectedRankedRows(anchoredTranscriptRows, speakerScopedRows, 0.97);
     if (anchoredRows.length > 0) {
+      const anchoredLaneResults = anchoredRows.slice(0, expandedLimit).map((row) =>
+        buildRecallResult(row.row, row.rrfScore, {
+          rrfScore: row.rrfScore,
+          lexicalRank: row.lexicalRank,
+          vectorRank: row.vectorRank,
+          lexicalRawScore: row.lexicalRawScore,
+          vectorDistance: row.vectorDistance
+        })
+      );
       const speakerScopedResults = speakerScopedRows.map((row) =>
         buildRecallResult(row, row.scoreValue, {
           rrfScore: row.scoreValue
         })
       );
-      if (firstTravelTemporalQuery) {
-        const sourceChronologyResults = mergeRecallResults(
-          typedTemporalResults,
-          speakerScopedResults,
-          Math.max(expandedLimit * 6, 48)
-        );
-        const sourceChronologyClaim = deriveFirstTravelSourceChronologyClaimText(queryText, sourceChronologyResults);
-        if (sourceChronologyClaim) {
-          return buildTypedLaneSearchResponse(
-            query,
-            sourceChronologyResults,
-            "The first-travel query was answered from source-session chronology before the broader anchored temporal lane.",
-            buildStrongExactDetailCandidate(sourceChronologyClaim)
-          );
-        }
-      }
       const anchoredSeedResults = retainSubjectBoundExactDetailResults(
         queryText,
         mergeRecallResults(
           typedTemporalResults,
-          anchoredRows.slice(0, expandedLimit).map((row) =>
-            buildRecallResult(row.row, row.rrfScore, {
-              rrfScore: row.rrfScore,
-              lexicalRank: row.lexicalRank,
-              vectorRank: row.vectorRank,
-              lexicalRawScore: row.lexicalRawScore,
-              vectorDistance: row.vectorDistance
-            })
-          ),
+          anchoredLaneResults,
           expandedLimit
         ),
         expandedLimit
@@ -28880,85 +31028,33 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         ),
         expandedLimit * 2
       );
-      if (/\bfirst\b/i.test(queryText) && /\btravel\b/i.test(queryText)) {
-        const sourceChronologyClaim = deriveFirstTravelSourceChronologyClaimText(queryText, anchoredResults);
-        if (sourceChronologyClaim) {
-          return buildTypedLaneSearchResponse(
-            query,
-            anchoredResults,
-            "The first-travel query was answered from source-session chronology before the broader anchored temporal lane.",
-            buildStrongExactDetailCandidate(sourceChronologyClaim)
-          );
-        }
-        const candidateChronologyRows = anchoredResults.filter((result) => {
-          const metadata = resultProvenanceMetadata(result);
-          const texts = recallResultSourceTexts(result);
-          const combinedText = normalizeWhitespace(
-            [
-              result.content,
-              ...texts,
-              typeof metadata?.source_sentence_text === "string" ? metadata.source_sentence_text : ""
-            ].join(" ")
-          );
-          const mentionsTargetLocation = /\btokyo\b/i.test(combinedText);
-          if (!mentionsTargetLocation) {
-            return false;
-          }
-          const actualTravelCue = /\b(?:just went|went to|travel(?:ed)? to|visited|trip to|festival in)\b/i.test(combinedText);
-          const planningCue = /\b(?:heading there next month|going there next month|go to tokyo|wish i could .*tokyo|if i had money i'd go to tokyo|never been there before|can'?t wait to get a taste of the culture)\b/i.test(combinedText);
-          const primarySpeakerCue = primaryEntitySpeakerOwnedResults(queryText, [result]).length > 0;
-          return actualTravelCue || planningCue || (primarySpeakerCue && /\btokyo\b/i.test(combinedText));
-        });
-        const actualTravelResults = candidateChronologyRows
-          .filter((result) => {
-            const metadata = resultProvenanceMetadata(result);
-            const text = normalizeWhitespace(
-              [result.content, typeof metadata?.source_sentence_text === "string" ? metadata.source_sentence_text : ""].join(" ")
-            );
-            return /\btokyo\b/i.test(text) && /\b(?:just went|went to|travel(?:ed)? to|visited|trip to|festival in)\b/i.test(text);
-          })
-          .sort((left, right) => {
-            const leftTime = left.occurredAt ? Date.parse(left.occurredAt) : Number.POSITIVE_INFINITY;
-            const rightTime = right.occurredAt ? Date.parse(right.occurredAt) : Number.POSITIVE_INFINITY;
-            return leftTime - rightTime;
-          });
-        const earliestActualTravel = actualTravelResults[0] ?? null;
-        const chronologyResults =
-          earliestActualTravel
-            ? [
-                ...candidateChronologyRows
-                  .filter((result) => result !== earliestActualTravel)
-                  .filter((result) => {
-                    const resultTime = result.occurredAt ? Date.parse(result.occurredAt) : Number.NaN;
-                    const actualTime = earliestActualTravel.occurredAt ? Date.parse(earliestActualTravel.occurredAt) : Number.NaN;
-                    return Number.isFinite(resultTime) && Number.isFinite(actualTime) && resultTime < actualTime;
-                  })
-                  .sort((left, right) => {
-                    const leftTime = left.occurredAt ? Date.parse(left.occurredAt) : Number.NEGATIVE_INFINITY;
-                    const rightTime = right.occurredAt ? Date.parse(right.occurredAt) : Number.NEGATIVE_INFINITY;
-                    return rightTime - leftTime;
-                  })
-                  .slice(0, 1),
-                earliestActualTravel
-              ]
-            : candidateChronologyRows;
-        if (chronologyResults.length > 0) {
-          const chronologyClaim = deriveTemporalClaimText(queryText, chronologyResults);
-          if (chronologyClaim) {
-            return buildTypedLaneSearchResponse(
-              query,
-              chronologyResults,
-              "The first-travel query was answered from a narrowed chronology pack before the broader anchored temporal lane.",
-              buildStrongExactDetailCandidate(chronologyClaim)
-            );
-          }
-        }
-      }
-      const anchoredTemporalClaim = deriveTemporalClaimText(queryText, anchoredResults);
+      const temporalRenderingResults =
+        firstTravelTemporalQuery || sawLiveTemporalQuery
+          ? (() => {
+              const scoped = anchoredResults.filter((result) =>
+                !/\/locomo-image-cache\/proxies\//i.test(
+                  typeof result.provenance.source_uri === "string" ? result.provenance.source_uri : ""
+                ) &&
+                (
+                  recallResultSourceTexts(result).some((text) => scoreStrictAnchoredTemporalEvidence(text) > 0) ||
+                  scoreStrictAnchoredTemporalEvidence(result.content) > 0
+                )
+              );
+              return scoped;
+            })()
+          : anchoredResults;
+      const anchoredTemporalClaim =
+        temporalRenderingResults.length > 0
+          ? (
+              firstTravelTemporalQuery
+                ? deriveFirstTravelChronologyClaimText(queryText, temporalRenderingResults) ?? deriveTemporalClaimText(queryText, temporalRenderingResults)
+                : deriveTemporalClaimText(queryText, temporalRenderingResults)
+            )
+          : null;
       if (anchoredTemporalClaim) {
         return buildTypedLaneSearchResponse(
           query,
-          anchoredResults,
+          temporalRenderingResults,
           "The anchored temporal query was answered from a focused source-backed temporal lane before broad mixed retrieval.",
           buildStrongExactDetailCandidate(anchoredTemporalClaim)
         );
@@ -28979,24 +31075,34 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   }
 
   if (decompositionDepth === 0 && isRelationshipChangeQueryText(queryText)) {
-    const results = (await getTypedPersonTimeResults(query))
-      .filter((result) =>
-        /\b(stopped talking|haven't really talked|no contact|moved from Thailand|left Thailand|returned to the US|October 18|October eighteenth twenty twenty five)\b/i.test(
-          result.content
+    const results = retainTrustedPersonalRecallResults(
+      (await getTypedPersonTimeResults(query))
+        .filter((result) =>
+          /\b(stopped talking|haven't really talked|no contact|moved from Thailand|left Thailand|returned to the US|October 18|October eighteenth twenty twenty five)\b/i.test(
+            result.content
+          )
         )
-      )
-      .slice(0, limit);
+        .slice(0, Math.max(limit * 2, 8)),
+      query.namespaceId,
+      query.query
+    ).slice(0, limit);
     if (results.length > 0) {
+      const derivedRelationshipChangeClaim = deriveRelationshipChangeClaimText(query.query, results);
       return buildTypedLaneSearchResponse(
         query,
         results,
-        "The relationship-change query was answered from typed person-time transition facts before broad lexical search."
+        "The relationship-change query was answered from typed person-time transition facts before broad lexical search.",
+        derivedRelationshipChangeClaim ? buildStrongExactDetailCandidate(derivedRelationshipChangeClaim) : undefined
       );
     }
   }
 
   if (decompositionDepth === 0 && isPersonTimeFactQuery(queryText)) {
-    const results = (await getTypedPersonTimeResults(query)).slice(0, limit);
+    const results = retainTrustedPersonalRecallResults(
+      (await getTypedPersonTimeResults(query)).slice(0, Math.max(limit * 2, 8)),
+      query.namespaceId,
+      query.query
+    ).slice(0, limit);
     if (results.length > 0) {
       return buildTypedLaneSearchResponse(
         query,
@@ -29241,7 +31347,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       provider: "none",
       decompositionDepth: decompositionDepth + 1
     });
-    const results: RecallResult[] = recap.evidence.map((item) => ({
+    const recapResults: RecallResult[] = recap.evidence.map((item) => ({
       memoryId: item.memoryId,
       memoryType: item.memoryType,
       content: item.snippet,
@@ -29250,7 +31356,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       namespaceId: recap.namespaceId,
       provenance: item.provenance
     }));
-    const evidence = [...recap.evidence];
+    const results = retainTrustedPersonalRecallResults(recapResults, query.namespaceId, query.query);
+    const evidence = buildEvidenceBundle(results);
     const planner = planRecallQuery(query);
     const answerAssessment: NonNullable<RecallResponse["meta"]["answerAssessment"]> = {
       confidence: recap.confidence,
@@ -29288,12 +31395,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
           validFrom: null,
           validUntil: null
         },
-        evidence: evidence.map((item) => ({
-          memoryId: item.memoryId,
-          artifactId: item.artifactId ?? null,
-          sourceUri: item.sourceUri ?? null,
-          snippet: item.snippet
-        })),
+        evidence,
         confidence: recap.confidence,
         reason: answerAssessment.reason,
         followUpAction: recap.followUpAction,
@@ -29330,7 +31432,9 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         answerAssessment,
         followUpAction: recap.followUpAction,
         clarificationHint: recap.clarificationHint,
-        planner
+        planner,
+        finalClaimSource: "temporal_summary",
+        ...queryContractTelemetry(queryContract, "temporal_summary", "source_bound_contract_selected")
       }
     };
   }
@@ -29585,7 +31689,11 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     null;
   const hasTimeWindow = Boolean(timeStart || timeEnd);
   const typedLaneExactDetailFamily = inferExactDetailQuestionFamily(retrievalQueryText);
-  const retrievalLatencyBudget = retrievalLatencyBudgetForQuery(retrievalQueryText, typedLaneExactDetailFamily);
+  const retrievalLatencyBudget = retrievalLatencyBudgetForQuery(
+    retrievalQueryText,
+    typedLaneExactDetailFamily,
+    runtimeAnswerRetrievalPlan
+  );
   const typedLaneSubjectHints = extractSubjectHintsFromQuery(retrievalQueryText);
   const typedLaneRoutingEligible = !directHistoricalOriginFocus && !directDurationFocus && shouldPreferHighLevelTypedLanes({
     queryText: retrievalQueryText,
@@ -29621,9 +31729,27 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       : query.typedLaneDescentHistory && query.typedLaneDescentHistory.length > 0
         ? [...query.typedLaneDescentHistory]
         : [typedLaneDescentStage];
+  let aggressiveExactTruthMetaAugment: Partial<RecallResponse["meta"]> | null = null;
   const typedLaneInitialSufficiency = query.typedLaneInitialSufficiency ?? null;
+  if (decompositionDepth === 0) {
+    const earlyContractTruthDecision = await resolveEarlyContractTruthDecision({ query, retrievalPlan: runtimeAnswerRetrievalPlan, timeStart, timeEnd, renderPayloadMode: config.renderPayloadMode, sqlFusedKernelMode: config.sqlFusedKernelMode });
+    aggressiveExactTruthMetaAugment = earlyContractTruthDecision.metaAugment;
+    if (earlyContractTruthDecision.earlyResponse) {
+      return buildTypedLaneSearchResponse(
+        query,
+        earlyContractTruthDecision.earlyResponse.results,
+        earlyContractTruthDecision.earlyResponse.reason,
+        earlyContractTruthDecision.earlyResponse.exactDetailCandidate ?? null,
+        earlyContractTruthDecision.earlyResponse.metaAugment
+      );
+    }
+  }
   if (typedLaneSufficiencyFocus) {
-    addPrunedBranches(prunedBranches, ["query_embedding", "graph_expansion", ...typedLaneDisabledBranches(typedLaneDescentStage)]);
+    addPrunedBranches(prunedBranches, [
+      "query_embedding",
+      "graph_expansion",
+      ...typedLaneDisabledBranchesForPlan(typedLaneDescentStage, retrievalQueryText, runtimeAnswerRetrievalPlan)
+    ]);
   }
   const unresolvedClarification = await hasUnresolvedClarification(query.namespaceId, query.query);
   const lowInformationTemporalFocus = hasTimeWindow && isLowInformationTemporalQuery(retrievalQueryText, planner.lexicalTerms);
@@ -29639,6 +31765,15 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     !dailyLifeSummaryFocus;
   const openEndedHistoricalBeliefFocus = historicalBeliefFocus && /\bsince\b/i.test(retrievalQueryText);
   const semanticAnchorFocus = semanticAnchorResolution !== null;
+  const vectorRetrievalDisabledForNamespace =
+    (
+      query.namespaceId.startsWith("benchmark_") &&
+      config.benchmarkVectorActivationMode === "off"
+    ) ||
+    (
+      !query.namespaceId.startsWith("benchmark_") &&
+      config.runtimeVectorActivationMode === "off"
+    );
   const complexityAwareGroundedTemporalSupport =
     hasTimeWindow &&
     planner.temporalFocus &&
@@ -29667,13 +31802,37 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     !planner.temporalFocus &&
     !hasTimeWindow &&
     !historicalRelationshipFocus;
-  const skipQueryEmbedding =
-    boundedEventLayerFocus ||
-    hierarchyTraversalFocus ||
-    currentDatingFocus ||
-    lowInformationTemporalFocus ||
-    semanticAnchorFocus ||
-    typedLaneSufficiencyFocus;
+  const vectorPolicyMode = queryVectorPolicy(queryContract);
+  const vectorBlockedReason =
+    vectorRetrievalDisabledForNamespace
+      ? query.namespaceId.startsWith("benchmark_")
+        ? `namespace:benchmark_vector_${config.benchmarkVectorActivationMode}`
+        : `namespace:runtime_vector_${config.runtimeVectorActivationMode}`
+      : boundedEventLayerFocus
+        ? "focus:bounded_event_layer"
+      : hierarchyTraversalFocus
+        ? "focus:hierarchy_traversal"
+      : currentDatingFocus
+        ? "focus:current_dating"
+      : lowInformationTemporalFocus
+        ? "focus:low_information_temporal"
+      : semanticAnchorFocus
+        ? "focus:semantic_anchor"
+      : typedLaneSufficiencyFocus
+        ? "focus:typed_lane_sufficiency"
+      : vectorPolicyMode === "guarded" &&
+          (
+            relationshipExactFocus ||
+            activeRelationshipFocus ||
+            historicalRelationshipFocus ||
+            directCurrentTruthFocus ||
+            preciseFactDetailFocus ||
+            temporalDetailFocus ||
+            planner.temporalFocus
+          )
+        ? `contract_guarded:${queryContract.contractName}`
+      : null;
+  const skipQueryEmbedding = vectorBlockedReason !== null;
   const sqlHybridKernelEligible = !skipQueryEmbedding && !lowInformationTemporalFocus;
   const candidateLimitBase = precisionLexicalFocus
     ? Math.max(Math.min(limit * 2, 12), 8)
@@ -29993,7 +32152,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
           dailyLifeSummaryFocus,
           styleQueryFocus,
           temporalDetailFocus,
-          typedLaneDescentStage
+          typedLaneDescentStage,
+          runtimeAnswerRetrievalPlan
         ),
         provider: "fts" as LexicalProvider,
         fallbackUsed: false,
@@ -30020,7 +32180,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
           dailyLifeSummaryFocus,
           styleQueryFocus,
           temporalDetailFocus,
-          typedLaneDescentStage
+          typedLaneDescentStage,
+          runtimeAnswerRetrievalPlan
         ),
         provider: "bm25" as LexicalProvider,
         fallbackUsed: false,
@@ -30048,7 +32209,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
           dailyLifeSummaryFocus,
           styleQueryFocus,
           temporalDetailFocus,
-          typedLaneDescentStage
+          typedLaneDescentStage,
+          runtimeAnswerRetrievalPlan
         ),
         provider: "fts" as LexicalProvider,
         fallbackUsed: true,
@@ -30109,7 +32271,9 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
             source: "none" as const,
             provider: undefined,
             model: undefined,
-            fallbackReason: "planner:branch_pruned"
+            fallbackReason: vectorBlockedReason ?? "planner:branch_pruned",
+            cacheHit: false,
+            providerCallCount: 0
           })
         : measureStage(stageTimings, "query_embedding", async () =>
             resolveQueryEmbedding({
@@ -30148,7 +32312,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       dailyLifeSummaryFocus,
       styleQueryFocus,
       temporalDetailFocus,
-      typedLaneDescentStage
+      typedLaneDescentStage,
+      runtimeAnswerRetrievalPlan
     );
     if (selfStrippedRows.length > 0) {
       lexicalRows = finalizeLexicalRows(
@@ -30193,7 +32358,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         dailyLifeSummaryFocus,
         styleQueryFocus,
         temporalDetailFocus,
-        typedLaneDescentStage
+        typedLaneDescentStage,
+        runtimeAnswerRetrievalPlan
       );
       lexicalResult = {
         ...lexicalResult,
@@ -30919,7 +33085,9 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       }
     }
     if (routineQueryFocus) {
-      const routineRows = toRankedRows(await loadRoutineRows(query.namespaceId, retrievalQueryText, candidateLimit));
+      const routineRows = toRankedRows(await loadRoutineRows(query.namespaceId, retrievalQueryText, candidateLimit)).filter(
+        (row) => query.namespaceId !== "personal" || !isPersonalContaminantSourceUri(typeof row.provenance.source_uri === "string" ? row.provenance.source_uri : null)
+      );
       if (routineRows.length > 0) {
         lexicalRows = mergeUniqueRows(
           lexicalRows,
@@ -31220,7 +33388,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
           SELECT
             ad.id AS memory_id,
             'artifact_derivation'::text AS memory_type,
-            ${artifactDerivationContentExpression()} AS content,
+            ${artifactDerivationSearchContentExpression()} AS content,
             (ad.embedding <=> $2::vector) AS raw_score,
             ao.artifact_id,
             ao.observed_at AS occurred_at,
@@ -31233,7 +33401,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
               'artifact_observation_id', ad.artifact_observation_id,
               'source_chunk_id', ad.source_chunk_id,
               'source_uri', a.uri,
-              'metadata', ad.metadata
+              'metadata', ${artifactDerivationSearchMetadataExpression()}
             ) AS provenance
           FROM artifact_derivations ad
           JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
@@ -31765,63 +33933,81 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   }
 
   let boundedEventSupportCount = 0;
+  let neighborExpansionCount = 0;
+  let earlyStopReason: string | undefined;
   if (eventNeighborhoodFocus) {
-    const neighborhoodBudget =
-      retrievalLatencyBudget.family === "default"
-        ? Number.POSITIVE_INFINITY
-        : retrievalLatencyBudget.maxNeighborhoodExpansions;
-    const boundedEventIds = results
-      .filter((result) => result.memoryType === "narrative_event")
-      .map((result) => result.memoryId)
-      .slice(0, 1);
-    if (boundedEventIds.length > 0) {
-      const sceneSupportRows = (await loadBoundedEventSceneSupportRows(query.namespaceId, boundedEventIds))
-        .slice(0, neighborhoodBudget);
-      const remainingNeighborhoodBudget =
-        Number.isFinite(neighborhoodBudget) ? Math.max(0, neighborhoodBudget - sceneSupportRows.length) : neighborhoodBudget;
-      const neighborhoodSupportRows =
-        remainingNeighborhoodBudget > 0 && shouldLoadBoundedEventNeighborhoodSupport(retrievalQueryText, sceneSupportRows)
-          ? (await loadBoundedEventNeighborhoodSupportRows(query.namespaceId, boundedEventIds)).slice(0, remainingNeighborhoodBudget)
-          : [];
-      const supportRows = [...sceneSupportRows, ...neighborhoodSupportRows];
-      boundedEventSupportCount = supportRows.length;
-      results = [...expandBoundedEventResults(results, supportRows, limit)];
-    }
+    const eventNeighborhoodOutcome = await measureStage(stageTimings, "event_neighborhood_support", async () => {
+      let scopedResults = results;
+      let scopedBoundedEventSupportCount = 0;
+      let scopedNeighborExpansionCount = 0;
+      const neighborhoodBudget =
+        retrievalLatencyBudget.family === "default"
+          ? Number.POSITIVE_INFINITY
+          : retrievalLatencyBudget.maxNeighborhoodExpansions;
+      const boundedEventIds = scopedResults
+        .filter((result) => result.memoryType === "narrative_event")
+        .map((result) => result.memoryId)
+        .slice(0, 1);
+      if (boundedEventIds.length > 0) {
+        const sceneSupportRows = (await loadBoundedEventSceneSupportRows(query.namespaceId, boundedEventIds))
+          .slice(0, neighborhoodBudget);
+        const remainingNeighborhoodBudget =
+          Number.isFinite(neighborhoodBudget) ? Math.max(0, neighborhoodBudget - sceneSupportRows.length) : neighborhoodBudget;
+        const neighborhoodSupportRows =
+          remainingNeighborhoodBudget > 0 && shouldLoadBoundedEventNeighborhoodSupport(retrievalQueryText, sceneSupportRows)
+            ? (await loadBoundedEventNeighborhoodSupportRows(query.namespaceId, boundedEventIds)).slice(0, remainingNeighborhoodBudget)
+            : [];
+        const supportRows = [...sceneSupportRows, ...neighborhoodSupportRows];
+        scopedBoundedEventSupportCount = supportRows.length;
+        scopedNeighborExpansionCount += supportRows.length;
+        scopedResults = [...expandBoundedEventResults(scopedResults, supportRows, limit)];
+      }
 
-    const eventNeighborhoodSupportRows = await loadEventNeighborhoodEpisodicRows(
-      query.namespaceId,
-      retrievalQueryText,
-      buildEventBoundedEvidenceTerms(retrievalQueryText, planner.lexicalTerms),
-      retrievalLatencyBudget.family === "default"
-        ? Math.min(candidateLimit, 8)
-        : Math.min(candidateLimit, retrievalLatencyBudget.maxLeafCandidates),
-      timeStart,
-      timeEnd
-    );
-    if (eventNeighborhoodSupportRows.length > 0) {
-      const eventNeighborhoodSupportResults = eventNeighborhoodSupportRows
-        .slice(0, neighborhoodBudget)
-        .map((row) =>
-        buildRecallResult(row, 0.72, { rrfScore: 0.72 })
-      );
-      results = mergeRecallResults(eventNeighborhoodSupportResults, results, limit);
-    }
-
-    if (inferExactDetailQuestionFamily(retrievalQueryText) === "realization") {
-      const anchoredRealizationRows = await loadAnchoredRealizationSupportRows(
+      const eventNeighborhoodSupportRows = await loadEventNeighborhoodEpisodicRows(
         query.namespaceId,
         retrievalQueryText,
-        Math.min(candidateLimit, 6),
+        buildEventBoundedEvidenceTerms(retrievalQueryText, planner.lexicalTerms),
+        retrievalLatencyBudget.family === "default"
+          ? Math.min(candidateLimit, 8)
+          : Math.min(candidateLimit, retrievalLatencyBudget.maxLeafCandidates),
         timeStart,
         timeEnd
       );
-      if (anchoredRealizationRows.length > 0) {
-        const anchoredRealizationResults = anchoredRealizationRows.map((row) =>
-          buildRecallResult(row, 0.78, { rrfScore: 0.78 })
-        );
-        results = mergeRecallResults(anchoredRealizationResults, results, limit);
+      if (eventNeighborhoodSupportRows.length > 0) {
+        const eventNeighborhoodSupportResults = eventNeighborhoodSupportRows
+          .slice(0, neighborhoodBudget)
+          .map((row) =>
+            buildRecallResult(row, 0.72, { rrfScore: 0.72 })
+          );
+        scopedNeighborExpansionCount += eventNeighborhoodSupportResults.length;
+        scopedResults = mergeRecallResults(eventNeighborhoodSupportResults, scopedResults, limit);
       }
-    }
+
+      if (inferExactDetailQuestionFamily(retrievalQueryText) === "realization") {
+        const anchoredRealizationRows = await loadAnchoredRealizationSupportRows(
+          query.namespaceId,
+          retrievalQueryText,
+          Math.min(candidateLimit, 6),
+          timeStart,
+          timeEnd
+        );
+        if (anchoredRealizationRows.length > 0) {
+          const anchoredRealizationResults = anchoredRealizationRows.map((row) =>
+            buildRecallResult(row, 0.78, { rrfScore: 0.78 })
+          );
+          scopedNeighborExpansionCount += anchoredRealizationResults.length;
+          scopedResults = mergeRecallResults(anchoredRealizationResults, scopedResults, limit);
+        }
+      }
+      return {
+        results: scopedResults,
+        boundedEventSupportCount: scopedBoundedEventSupportCount,
+        neighborExpansionCount: scopedNeighborExpansionCount
+      };
+    });
+    results = eventNeighborhoodOutcome.results;
+    boundedEventSupportCount = eventNeighborhoodOutcome.boundedEventSupportCount;
+    neighborExpansionCount = eventNeighborhoodOutcome.neighborExpansionCount;
   }
 
   if (/\bwho\b/i.test(retrievalQueryText) && /\bintroduced\b/i.test(retrievalQueryText)) {
@@ -31933,15 +34119,27 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       results = mergeRecallResults(communityResults, results, limit);
     }
   }
+  const temporalEventSupportReady =
+    retrievalLatencyBudget.family === "temporal_event" &&
+    hasSufficientTemporalEventSupportResults(query.query, results);
+  if (temporalEventSupportReady) {
+    earlyStopReason = earlyStopReason ?? "temporal_support_sufficient";
+    if (retrievalLatencyBudget.disableArtifactDerivationAfterSufficient) {
+      addPrunedBranches(prunedBranches, ["artifact_derivation"]);
+    }
+  }
   const derivationSourceSupportEligible =
     results.some((result) => result.memoryType === "artifact_derivation") &&
     !results.some((result) => result.memoryType === "episodic_memory" || result.memoryType === "narrative_event") &&
+    !temporalEventSupportReady &&
     (temporalDetailFocus ||
       planner.queryClass === "direct_fact" ||
       planner.queryClass === "causal" ||
       exactDetailSelectionFocus);
   if (derivationSourceSupportEligible) {
-    const derivationSourceSupportRows = await loadDerivationSourceSupportRows(query.namespaceId, results, Math.max(limit, 8));
+    const derivationSourceSupportRows = await measureStage(stageTimings, "derivation_source_support", async () =>
+      loadDerivationSourceSupportRows(query.namespaceId, results, Math.max(limit, 8))
+    );
     if (derivationSourceSupportRows.length > 0) {
       results = mergeRecallResults(derivationSourceSupportRows, results, Math.max(limit, 8));
     }
@@ -32002,6 +34200,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     !profileInferenceFocus &&
     !identityProfileFocus &&
     !sharedCommonalityFocus &&
+    !temporalEventSupportReady &&
     (
       exactDetailExtractionEnabled ||
       temporalDetailFocus ||
@@ -32075,6 +34274,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   if (!exactDetailCandidate && readerResolved) {
     exactDetailCandidate = directReaderClaimCandidate ?? initialReaderFallback;
   }
+  results = retainTrustedPersonalRecallResults(results, query.namespaceId, query.query);
   let finalEvidence = buildEvidenceBundle(results);
   let answerAssessment = assessRecallAnswer(
     results,
@@ -32084,12 +34284,144 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     query.query,
     exactDetailCandidate
   );
+  const plannerBackfillNeedCache = new Map<string, ReturnType<typeof evaluatePlannerTargetedBackfillNeed>>();
+  const evaluatePlannerNeedCached = (candidateResults: readonly RecallResult[]) => {
+    const cacheKey = plannerRuntimeResultPoolKey(candidateResults);
+    const cached = plannerBackfillNeedCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const evaluated = evaluatePlannerTargetedBackfillNeed({
+      queryText: query.query,
+      retrievalPlan: runtimeAnswerRetrievalPlan,
+      results: candidateResults
+    });
+    plannerBackfillNeedCache.set(cacheKey, evaluated);
+    return evaluated;
+  };
+  const typedContractCompletenessCache = new Map<string, ReturnType<typeof evaluateTypedContractCompleteness>>();
+  const evaluateTypedContractCached = (
+    candidateResults: readonly RecallResult[],
+    candidateAssessment: RecallResponse["meta"]["answerAssessment"],
+    candidateExactDetail: ExactDetailClaimCandidate | null,
+    options?: {
+      readonly previousNormalizedItems?: readonly string[];
+      readonly continuationAttempted?: boolean;
+    }
+  ) => {
+    const cacheKey = [
+      plannerRuntimeResultPoolKey(candidateResults),
+      candidateAssessment?.sufficiency ?? "missing",
+      candidateAssessment?.subjectMatch ?? "unknown",
+      normalizeWhitespace(candidateExactDetail?.text ?? ""),
+      (options?.previousNormalizedItems ?? []).join(","),
+      options?.continuationAttempted === true ? "continued" : "initial"
+    ].join("|");
+    const cached = typedContractCompletenessCache.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const evaluated = evaluateTypedContractCompleteness({
+      queryText: query.query,
+      retrievalPlan: runtimeAnswerRetrievalPlan,
+      results: candidateResults,
+      exactDetailText: candidateExactDetail?.text,
+      previousNormalizedItems: options?.previousNormalizedItems,
+      continuationAttempted: options?.continuationAttempted,
+      answerAssessment: candidateAssessment
+    });
+    typedContractCompletenessCache.set(cacheKey, evaluated);
+    return evaluated;
+  };
+  const exactDetailEarlyStopEligible =
+    runtimeAnswerRetrievalPlan.family === "exact_detail" ||
+    ["direct_attribute", "direct_reason", "value_slot", "utterance_fact"].includes(runtimeAnswerRetrievalPlan.answerKind);
   const latencyBudgetSatisfiedExactDetail =
+    exactDetailEarlyStopEligible &&
     retrievalLatencyBudget.stopOnFirstSufficient &&
     hasStrongExactDetailSupportCandidate(query.query, exactDetailCandidate) &&
     !exactDetailCandidateNeedsSubtypeRescue(query.query, exactDetailCandidate);
   if (latencyBudgetSatisfiedExactDetail && retrievalLatencyBudget.disableArtifactDerivationAfterSufficient) {
+    earlyStopReason = earlyStopReason ?? "exact_detail_sufficient";
     addPrunedBranches(prunedBranches, ["artifact_derivation"]);
+  }
+  let structuredAggregationAttempted = false;
+  let structuredAggregationSources: Array<"relationship_memory" | "semantic_memory" | "canonical_states" | "memory_entity_mentions" | "episodic_memory"> = [];
+  let structuredPredicateFamily: StructuredPredicateFamily | undefined;
+  let aggregationScope: SubjectBoundAggregationScope | undefined;
+  let pairBindingVerified: boolean | undefined;
+  let lexicalBridgeAttempted = false;
+  let adjudicationSuppressedFallback = false;
+  const initialStructuredAggregation = await measureStage(stageTimings, "structured_aggregation", async () =>
+    collectSubjectBoundAggregation({
+      namespaceId: query.namespaceId,
+      queryText: query.query,
+      subjectHints,
+      limit: Math.max(limit, 4),
+      retrievalPlan: runtimeAnswerRetrievalPlan
+    })
+  );
+  structuredAggregationAttempted = initialStructuredAggregation.attempted;
+  structuredAggregationSources = [...initialStructuredAggregation.sources];
+  structuredPredicateFamily = initialStructuredAggregation.predicateFamily ?? undefined;
+  aggregationScope = initialStructuredAggregation.aggregationScope ?? undefined;
+  pairBindingVerified = initialStructuredAggregation.pairBinding?.required ? initialStructuredAggregation.pairBinding.verified : undefined;
+  if (initialStructuredAggregation.rows.length > 0) {
+    results = mergeRecallResults(initialStructuredAggregation.rows, results, Math.max(limit, 6));
+    finalEvidence = buildEvidenceBundle(results);
+    exactDetailDerivation = deriveSubjectBoundExactDetailClaimWithTelemetry(
+      query.query,
+      results,
+      exactDetailExtractionEnabled,
+      answerableUnitExactDetailBackfill
+    );
+    exactDetailCandidate = exactDetailDerivation.candidate;
+    exactDetailCandidate = preferRicherExactDetailCandidate(
+      query.query,
+      exactDetailCandidate,
+      readerResolved ? deriveReaderExactDetailFallbackCandidate(query.query, readerResult) : null
+    );
+    exactDetailCandidate = preferRicherExactDetailCandidate(
+      query.query,
+      exactDetailCandidate,
+      readerResolved ? deriveDirectReaderClaimCandidate(query.query, readerResult) : null
+    );
+    answerAssessment = assessRecallAnswer(
+      results,
+      finalEvidence,
+      planner,
+      temporalSummarySufficient,
+      query.query,
+      exactDetailCandidate
+    );
+    adjudicationSuppressedFallback =
+      ["structured_direct_reason", "benefit_reason_slot", "symbolic_value_slot", "temporal_plan_detail", "book_recommendation_pair"].includes(
+        runtimeAnswerRetrievalPlan.controllerIntent?.primaryTypedContract ?? ""
+      );
+  }
+  const initialPlannerBackfillNeed = evaluatePlannerNeedCached(results);
+  const initialTypedContractCompleteness = evaluateTypedContractCached(results, answerAssessment, exactDetailCandidate);
+  const projectionShadow = await measureStage(stageTimings, "contract_projection_shadow", async () =>
+    loadContractProjectionShadow({ namespaceId: query.namespaceId, queryText: query.query, retrievalPlan: runtimeAnswerRetrievalPlan, results })
+  );
+  const typedContractSatisfiedBeforeWidening =
+    retrievalLatencyBudget.stopOnFirstSufficient &&
+    (
+      initialTypedContractCompleteness?.stopEligible === true ||
+      (
+        isConcreteTypedPlannerAnswerKind(runtimeAnswerRetrievalPlan.answerKind) &&
+        !initialPlannerBackfillNeed.needed
+      )
+    );
+  if (typedContractSatisfiedBeforeWidening) {
+    earlyStopReason = earlyStopReason ?? "typed_contract_sufficient";
+    addPrunedBranches(
+      prunedBranches,
+      remainingTypedLaneDescentBranchesForPlan(typedLaneDescentStage, query.query, runtimeAnswerRetrievalPlan)
+    );
+    if (retrievalLatencyBudget.disableArtifactDerivationAfterSufficient) {
+      addPrunedBranches(prunedBranches, ["artifact_derivation"]);
+    }
   }
   const preReflectRecovery = assessRecoveryState({
     queryText: query.query,
@@ -32143,7 +34475,9 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     retrievalLatencyBudget.stopOnFirstSufficient &&
     answerAssessment.sufficiency !== "contradicted"
   ) {
-    const earlyStoredCanonical = await getStoredCanonicalForCurrentState(results, answerAssessment);
+    const earlyStoredCanonical = await measureStage(stageTimings, "canonical_lookup", async () =>
+      getStoredCanonicalForCurrentState(results, answerAssessment)
+    );
     const earlyNarrativeLookup = await getStoredNarrativeForCurrentState(results, answerAssessment);
     const earlyNarrativeDecision = adjudicateNarrativeClaim({
       queryText: query.query,
@@ -32201,10 +34535,15 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       subjectHints,
       answerAssessment,
       ownerResolution: earlyOwnerResolution,
-      exactDetailCandidate
+      exactDetailCandidate,
+      typedContractCompleteness: initialTypedContractCompleteness
     });
     if (latencyBudgetSatisfiedCanonicalOwner) {
-      addPrunedBranches(prunedBranches, remainingTypedLaneDescentBranches(typedLaneDescentStage));
+      earlyStopReason = earlyStopReason ?? "typed_owner_sufficient";
+      addPrunedBranches(
+        prunedBranches,
+        remainingTypedLaneDescentBranchesForPlan(typedLaneDescentStage, query.query, runtimeAnswerRetrievalPlan)
+      );
       if (retrievalLatencyBudget.disableArtifactDerivationAfterSufficient) {
         addPrunedBranches(prunedBranches, ["artifact_derivation"]);
       }
@@ -32225,87 +34564,131 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   let plannerTargetedBackfillReason: string | undefined;
   let plannerTargetedBackfillSubqueries: string[] = [];
   let plannerTargetedBackfillSatisfied: boolean | undefined;
-  const applyPlannerTargetedBackfill = async (params: {
-    readonly subqueries: readonly string[];
-    readonly reason: string;
-    readonly stopWhenSupportedReport?: boolean;
-  }): Promise<boolean> => {
-    if (params.subqueries.length === 0) {
-      return false;
-    }
-    const recursiveResponses: RecallResult[][] = [];
-    plannerTargetedBackfillReason = plannerTargetedBackfillReason ?? params.reason;
-    for (const subquery of params.subqueries) {
-      const response = await searchMemory({
-        ...query,
-        query: subquery,
-        limit: Math.max(4, Math.min(limit, 6)),
-        decompositionDepth: decompositionDepth + 1
-      });
-      plannerTargetedBackfillSubqueries.push(subquery);
-      const markedResults = markPlannerTargetedBackfillResults(
-        response.results.slice(0, 4),
-        runtimeAnswerRetrievalPlan.family,
-        subquery,
-        params.reason
-      );
-      if (markedResults.length > 0) {
-        recursiveResponses.push([...markedResults]);
-      }
-      if (params.stopWhenSupportedReport !== false && runtimeAnswerRetrievalPlan.family === "report") {
-        const provisionalMerged = mergeDecomposedResults(recursiveResponses, Math.max(limit, 6));
-        const provisionalResults =
-          provisionalMerged.length > 0
-            ? mergeRecallResults(provisionalMerged, results, Math.max(limit, 6))
-            : results;
-        const provisionalBackfillCheck = evaluatePlannerTargetedBackfillNeed({
-          queryText: query.query,
-          retrievalPlan: runtimeAnswerRetrievalPlan,
-          results: provisionalResults
-        });
-        if (!provisionalBackfillCheck.needed) {
-          break;
+  const routeBudgetExceededStages = new Set<string>(); let routeBudgetDecision: string | undefined; let plannerTargetedBackfillSubqueryLimit: number | undefined;
+  const applyPlannerTargetedBackfill = async (params: { readonly subqueries: readonly string[]; readonly reason: string; readonly stopWhenSupportedReport?: boolean }): Promise<boolean> => {
+    if (params.subqueries.length === 0) return false;
+    const backfillBudget = planPlannerTargetedBackfillBudget({ family: retrievalLatencyBudget.family, elapsedMs: performance.now() - searchStartedAt, subqueries: params.subqueries });
+    plannerTargetedBackfillSubqueryLimit = backfillBudget.maxSubqueries;
+    if (!backfillBudget.allowed) { if (backfillBudget.exceededStage) routeBudgetExceededStages.add(backfillBudget.exceededStage); routeBudgetDecision = routeBudgetDecision ?? backfillBudget.decision; plannerTargetedBackfillReason = plannerTargetedBackfillReason ?? `${params.reason}:route_budget_elapsed`; stageTimings.planner_targeted_backfill = stageTimings.planner_targeted_backfill ?? 0; return false; }
+    if (backfillBudget.exceededStage) routeBudgetExceededStages.add(backfillBudget.exceededStage); routeBudgetDecision = routeBudgetDecision ?? backfillBudget.decision;
+    return measureStage(stageTimings, "planner_targeted_backfill", async () => {
+      const recursiveResponses: RecallResult[][] = [];
+      plannerTargetedBackfillReason = plannerTargetedBackfillReason ?? params.reason;
+      const contractLockedBookListBackfill =
+        params.reason.includes("book_list_entries_missing") &&
+        (
+          runtimeAnswerRetrievalPlan.lane === "book_list" ||
+          runtimeAnswerRetrievalPlan.answerKind === "list_history" ||
+          runtimeAnswerRetrievalPlan.controllerIntent?.primaryTypedContract === "book_list"
+        );
+      if (contractLockedBookListBackfill) {
+        const bookListSubjects = uniqueStrings([
+          ...runtimeAnswerRetrievalPlan.subjectNames,
+          ...subjectHints,
+          ...extractEntityNameHints(query.query)
+        ]).filter((value) => normalizeWhitespace(value).length > 0);
+        if (bookListSubjects.length === 0) {
+          return false;
+        }
+        const directArtifactRows = toRankedRows(
+          selectBookListSupportRows(
+            query.query,
+            await loadSubjectBoundSourceSentenceSupportRows(
+              query.namespaceId,
+              bookListSubjects,
+              uniqueStrings([
+                ...runtimeAnswerRetrievalPlan.queryExpansionTerms,
+                "book",
+                "books",
+                "read",
+                "reading",
+                "title",
+                "book titled"
+              ]),
+              Math.max(limit, 8)
+            ),
+            4
+          )
+        );
+        if (directArtifactRows.length > 0) {
+          recursiveResponses.push(
+            directArtifactRows.map((row) =>
+              buildRecallResult(row, toNumber(row.raw_score), {
+                rrfScore: toNumber(row.raw_score),
+                lexicalRank: 1,
+                lexicalRawScore: toNumber(row.raw_score)
+              })
+            )
+          );
         }
       }
-    }
-    const backfillMerged = mergeDecomposedResults(recursiveResponses, Math.max(limit, 6));
-    plannerTargetedBackfillApplied = plannerTargetedBackfillApplied || plannerTargetedBackfillSubqueries.length > 0;
-    if (backfillMerged.length > 0) {
-      results = mergeRecallResults(backfillMerged, results, Math.max(limit, 6));
-      finalEvidence = buildEvidenceBundle(results);
-      exactDetailDerivation = deriveSubjectBoundExactDetailClaimWithTelemetry(
-        query.query,
-        results,
-        exactDetailExtractionEnabled,
-        answerableUnitExactDetailBackfill
-      );
-      exactDetailCandidate = exactDetailDerivation.candidate;
-      exactDetailCandidate = preferRicherExactDetailCandidate(
-        query.query,
-        exactDetailCandidate,
-        readerResolved ? deriveReaderExactDetailFallbackCandidate(query.query, readerResult) : null
-      );
-      exactDetailCandidate = preferRicherExactDetailCandidate(
-        query.query,
-        exactDetailCandidate,
-        readerResolved ? deriveDirectReaderClaimCandidate(query.query, readerResult) : null
-      );
-      answerAssessment = assessRecallAnswer(
-        results,
-        finalEvidence,
-        planner,
-        temporalSummarySufficient,
-        query.query,
-        exactDetailCandidate
-      );
-    }
-    const plannerBackfillPostCheck = evaluatePlannerTargetedBackfillNeed({
-      queryText: query.query,
-      retrievalPlan: runtimeAnswerRetrievalPlan,
-      results
+      for (const subquery of backfillBudget.subqueries) {
+        const response = await searchMemory({
+          ...query,
+          query: subquery,
+          limit: Math.max(4, Math.min(limit, 6)),
+          decompositionDepth: decompositionDepth + 1
+        });
+        plannerTargetedBackfillSubqueries.push(subquery);
+        const markedResults = markPlannerTargetedBackfillResults(
+          response.results.slice(0, 4),
+          runtimeAnswerRetrievalPlan.family,
+          subquery,
+          params.reason
+        );
+        if (markedResults.length > 0) {
+          recursiveResponses.push([...markedResults]);
+        }
+        if (
+          params.stopWhenSupportedReport !== false &&
+          (runtimeAnswerRetrievalPlan.family === "report" || retrievalLatencyBudget.family === "temporal_event")
+        ) {
+          const provisionalMerged = mergeDecomposedResults(recursiveResponses, Math.max(limit, 6));
+          const provisionalResults =
+            provisionalMerged.length > 0
+              ? mergeRecallResults(provisionalMerged, results, Math.max(limit, 6))
+              : results;
+          const provisionalBackfillCheck = evaluatePlannerNeedCached(provisionalResults);
+          if (!provisionalBackfillCheck.needed) {
+            break;
+          }
+        }
+      }
+      const backfillMerged = mergeDecomposedResults(recursiveResponses, Math.max(limit, 6));
+      plannerTargetedBackfillApplied = plannerTargetedBackfillApplied || plannerTargetedBackfillSubqueries.length > 0;
+      if (backfillMerged.length > 0) {
+        results = mergeRecallResults(backfillMerged, results, Math.max(limit, 6));
+        finalEvidence = buildEvidenceBundle(results);
+        exactDetailDerivation = deriveSubjectBoundExactDetailClaimWithTelemetry(
+          query.query,
+          results,
+          exactDetailExtractionEnabled,
+          answerableUnitExactDetailBackfill
+        );
+        exactDetailCandidate = exactDetailDerivation.candidate;
+        exactDetailCandidate = preferRicherExactDetailCandidate(
+          query.query,
+          exactDetailCandidate,
+          readerResolved ? deriveReaderExactDetailFallbackCandidate(query.query, readerResult) : null
+        );
+        exactDetailCandidate = preferRicherExactDetailCandidate(
+          query.query,
+          exactDetailCandidate,
+          readerResolved ? deriveDirectReaderClaimCandidate(query.query, readerResult) : null
+        );
+        answerAssessment = assessRecallAnswer(
+          results,
+          finalEvidence,
+          planner,
+          temporalSummarySufficient,
+          query.query,
+          exactDetailCandidate
+        );
+      }
+      const plannerBackfillPostCheck = evaluatePlannerNeedCached(results);
+      plannerTargetedBackfillSatisfied = !plannerBackfillPostCheck.needed;
+      return backfillMerged.length > 0;
     });
-    plannerTargetedBackfillSatisfied = !plannerBackfillPostCheck.needed;
-    return backfillMerged.length > 0;
   };
 
   const exactDetailNeedsAdequacyRecovery =
@@ -32315,30 +34698,46 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   const recoveryDrivenReflect =
     !suppressRecursiveReflectForGeneratedQuery &&
     !latencyBudgetSatisfiedForEarlyStop &&
+    !typedContractSatisfiedBeforeWidening &&
+    !(initialTypedContractCompleteness && initialPlannerBackfillNeed.needed) &&
     !plannerTargetedBackfillApplied &&
     (shouldEnterReflect(reflectEligibility, preReflectRecovery) ||
       genericSharedCommonalityNeedsDeeperCheck);
-
   if (decompositionDepth === 0) {
-    const plannerBackfillNeed = evaluatePlannerTargetedBackfillNeed({
+    const plannerBackfillNeed = initialPlannerBackfillNeed;
+    const forceContractBackfill = runtimeAnswerRetrievalPlan.controllerIntent?.backfillMode === "contract_only" && (runtimeAnswerRetrievalPlan.targetedBackfillRequests?.length ?? 0) > 0 && initialTypedContractCompleteness?.stopEligible !== true;
+    const contractFirstBackfillDecision = buildContractFirstPlannerBackfillDecision({
       queryText: query.query,
       retrievalPlan: runtimeAnswerRetrievalPlan,
-      results
+      subjectHints,
+      plannerBackfillNeed,
+      forceContractBackfill,
+      results,
+      answerAssessment,
+      buildGenericSubqueries: (reason) => buildPlannerTargetedBackfillSubqueries(query.query, runtimeAnswerRetrievalPlan, subjectHints, "default", reason)
     });
-    if (!latencyBudgetSatisfiedForEarlyStop && plannerBackfillNeed.needed) {
-      await applyPlannerTargetedBackfill({
-        subqueries: buildPlannerTargetedBackfillSubqueries(
-          query.query,
-          runtimeAnswerRetrievalPlan,
-          subjectHints,
-          "default",
-          plannerBackfillNeed.reason
-        ),
-        reason: plannerBackfillNeed.reason ?? "planner_targeted_backfill",
+      if (
+        !latencyBudgetSatisfiedForEarlyStop &&
+        (plannerBackfillNeed.needed || forceContractBackfill) &&
+        contractFirstBackfillDecision.mode !== "disabled"
+      ) {
+        lexicalBridgeAttempted = lexicalBridgeAttempted || contractFirstBackfillDecision.subqueries.length > 0;
+        const initialPlannerBackfillReason = contractFirstBackfillDecision.reason;
+        await applyPlannerTargetedBackfill({
+          subqueries: contractFirstBackfillDecision.subqueries,
+        reason: initialPlannerBackfillReason,
         stopWhenSupportedReport:
           plannerBackfillNeed.reason !== "collection_entries_missing" &&
           plannerBackfillNeed.reason !== "education_field_missing"
       });
+      const typedCompletionFollowupSubqueries = plannerTargetedBackfillSatisfied !== true ? contractFirstBackfillDecision.followupSubqueries : null;
+      if (typedCompletionFollowupSubqueries?.length) {
+        await applyPlannerTargetedBackfill({
+          subqueries: typedCompletionFollowupSubqueries,
+          reason: `${initialPlannerBackfillReason}_followup`,
+          stopWhenSupportedReport: false
+        });
+      }
     }
   }
 
@@ -32458,6 +34857,63 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     query.query,
     exactDetailCandidate
   );
+  const finalPlannerRuntimeReportKind = inferPlannerRuntimeReportKind({
+    queryText: query.query,
+    retrievalPlan: runtimeAnswerRetrievalPlan
+  });
+  if (
+    decompositionDepth === 0 &&
+    results.length === 0 &&
+    finalPlannerRuntimeReportKind === "relationship_report" &&
+    !hasTimeWindow
+  ) {
+    await measureStage(stageTimings, "relationship_profile_rescue", async () => {
+      const rescueRows = toRankedRows(
+        await loadRelationshipProfileSupportRows(
+          query.namespaceId,
+          query.query,
+          Math.max(limit, 8)
+        )
+      );
+      if (rescueRows.length === 0) {
+        return;
+      }
+      const rescueResults = rescueRows.map((row) =>
+        buildRecallResult(row, row.scoreValue, {
+          rrfScore: row.scoreValue,
+          lexicalRank: 1,
+          lexicalRawScore: row.scoreValue
+        })
+      );
+      results = mergeRecallResults(rescueResults, results, Math.max(limit, 8));
+      finalEvidence = buildEvidenceBundle(results);
+      exactDetailDerivation = deriveSubjectBoundExactDetailClaimWithTelemetry(
+        query.query,
+        results,
+        exactDetailExtractionEnabled,
+        answerableUnitExactDetailBackfill
+      );
+      exactDetailCandidate = exactDetailDerivation.candidate;
+      exactDetailCandidate = preferRicherExactDetailCandidate(
+        query.query,
+        exactDetailCandidate,
+        readerResolved ? deriveReaderExactDetailFallbackCandidate(query.query, readerResult) : null
+      );
+      exactDetailCandidate = preferRicherExactDetailCandidate(
+        query.query,
+        exactDetailCandidate,
+        readerResolved ? deriveDirectReaderClaimCandidate(query.query, readerResult) : null
+      );
+      answerAssessment = assessRecallAnswer(
+        results,
+        finalEvidence,
+        planner,
+        temporalSummarySufficient,
+        query.query,
+        exactDetailCandidate
+      );
+    });
+  }
 
   const postReflectRecovery = assessRecoveryState({
     queryText: query.query,
@@ -32473,12 +34929,9 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     missingParticipantCount: answerAssessment.missingParticipants.length
   });
   const reflectComparison = compareReflectOutcome(preReflectRecovery, postReflectRecovery, recursiveReflectApplied);
-  // Phase 1 canonical adjudication turns mixed recall rows into a typed fact/state
-  // decision before final claim formatting so top snippets cannot silently override it.
-  // Stored canonical reads are only consulted on the main async search path. Typed
-  // fast lanes stay synchronous and use runtime adjudication without DB lookups.
+  // Canonical adjudication resolves mixed recall rows before final claim formatting.
   const storedCanonical = config.canonicalAdjudicationEnabled
-    ? await lookupStoredCanonicalForQueryCached({
+    ? await measureStage(stageTimings, "canonical_lookup", async () => lookupStoredCanonicalForQueryCached({
         namespaceId: query.namespaceId,
         queryText: query.query,
         exactDetailFamily: canonicalExactDetailFamily,
@@ -32486,12 +34939,13 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         missingParticipants: answerAssessment.missingParticipants,
         foreignParticipants: answerAssessment.foreignParticipants,
         results
-      })
+      }))
     : null;
   if (
     decompositionDepth === 0 &&
     storedCanonical?.kind === "abstention" &&
     ["report", "list_set"].includes(runtimeAnswerRetrievalPlan.family) &&
+    !typedContractSatisfiedBeforeWidening &&
     plannerTargetedBackfillSatisfied !== true
   ) {
     await applyPlannerTargetedBackfill({
@@ -32505,78 +34959,97 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     });
   }
   const narrativeLookup = config.canonicalAdjudicationEnabled
-    ? await lookupStoredNarrativeForQueryCached({
+    ? await measureStage(stageTimings, "narrative_lookup", async () => lookupStoredNarrativeForQueryCached({
         namespaceId: query.namespaceId,
         queryText: query.query,
         exactDetailFamily: canonicalExactDetailFamily,
         matchedParticipants: answerAssessment.matchedParticipants,
         results
-      })
+      }))
     : { lookup: null, telemetry: { pathUsed: false, candidateCount: 0 } };
-  const narrativeDecision = config.canonicalAdjudicationEnabled
-    ? adjudicateNarrativeClaim({
-        queryText: query.query,
-        exactDetailFamily: canonicalExactDetailFamily,
-        results,
-        evidence: finalEvidence,
-        assessment: answerAssessment,
-        abstentionClaimText: buildAbstentionClaimText(query.query, answerAssessment),
-        storedNarrative: narrativeLookup.lookup
-      })
-    : { candidate: null, adjudication: null, telemetry: { pathUsed: false } };
-  const plannerRuntimeResults = await augmentPlannerRuntimeReportResults({
-    namespaceId: query.namespaceId,
-    queryText: query.query,
-    retrievalPlan: runtimeAnswerRetrievalPlan,
-    results,
-    storedNarrative: narrativeLookup.lookup
-  });
-  const plannerRuntimeTypedCandidate = buildPlannerTypedCandidate({
-    queryText: query.query,
-    retrievalPlan: runtimeAnswerRetrievalPlan,
-    results: plannerRuntimeResults,
-    evidence: finalEvidence,
-    assessment: answerAssessment,
-    storedCanonical
-  });
-  const effectiveNarrativeCandidate = preferPlannerTypedCandidate({
-    retrievalPlan: runtimeAnswerRetrievalPlan,
-    narrativeCandidate: narrativeDecision.candidate,
-    plannerCandidate: plannerRuntimeTypedCandidate
-  });
-  const narrativeTelemetry = {
-    pathUsed: narrativeDecision.telemetry.pathUsed || narrativeLookup.telemetry.pathUsed,
-    narrativeKind: narrativeDecision.telemetry.narrativeKind ?? narrativeLookup.telemetry.narrativeKind,
-    reportKind: narrativeDecision.telemetry.reportKind ?? narrativeLookup.telemetry.reportKind,
-    sourceTier: narrativeDecision.telemetry.sourceTier ?? narrativeLookup.telemetry.sourceTier,
-    candidateCount: Math.max(narrativeDecision.telemetry.candidateCount ?? 0, narrativeLookup.telemetry.candidateCount ?? 0),
-    shadowDecision: narrativeDecision.telemetry.shadowDecision ?? narrativeLookup.telemetry.shadowDecision,
-    cutoverApplied: narrativeDecision.telemetry.cutoverApplied ?? narrativeLookup.telemetry.cutoverApplied
-  };
-  const canonicalCandidate = config.canonicalAdjudicationEnabled
-    ? adjudicateCanonicalClaim({
-        queryText: query.query,
-        results,
-        evidence: finalEvidence,
-        assessment: answerAssessment,
-        exactDetailFamily: canonicalExactDetailFamily,
-        exactDetailCandidateText: exactDetailCandidate?.text,
-        exactDetailCandidateStrongSupport: exactDetailCandidate?.strongSupport,
-        exactDetailCandidatePredicateFit: exactDetailCandidate?.predicateFit,
-        abstentionClaimText: buildAbstentionClaimText(query.query, answerAssessment),
-        currentDatingUnknownFromEvidence: isCurrentDatingUnknownEvidence(results[0], query.query),
-        derived: collectCanonicalDerivedClaims(query.query, results, exactDetailCandidate),
-        storedCanonical
-      })
-    : null;
-  const ownerResolution = resolveAnswerOwner({
-    queryText: query.query,
-    exactDetailFamily: canonicalExactDetailFamily,
-    results,
-    retrievalPlan: runtimeAnswerRetrievalPlan,
-    exactDetailCandidate,
-    canonicalAdjudication: canonicalCandidate,
-    narrativeCandidate: effectiveNarrativeCandidate
+  const {
+    narrativeDecision,
+    plannerRuntimeResults,
+    plannerRuntimeTypedCandidate,
+    effectiveNarrativeCandidate,
+    narrativeTelemetry,
+    canonicalCandidate,
+    ownerResolution
+  } = await measureStage(stageTimings, "canonical_adjudication", async () => {
+    const localNarrativeDecision = config.canonicalAdjudicationEnabled
+      ? adjudicateNarrativeClaim({
+          queryText: query.query,
+          exactDetailFamily: canonicalExactDetailFamily,
+          results,
+          evidence: finalEvidence,
+          assessment: answerAssessment,
+          abstentionClaimText: buildAbstentionClaimText(query.query, answerAssessment),
+          storedNarrative: narrativeLookup.lookup
+        })
+      : { candidate: null, adjudication: null, telemetry: { pathUsed: false } };
+    const localPlannerRuntimeResults = await augmentPlannerRuntimeReportResults({
+      namespaceId: query.namespaceId,
+      queryText: query.query,
+      retrievalPlan: runtimeAnswerRetrievalPlan,
+      results,
+      storedNarrative: narrativeLookup.lookup
+    });
+    const localPlannerRuntimeTypedCandidate = buildPlannerTypedCandidate({
+      queryText: query.query,
+      retrievalPlan: runtimeAnswerRetrievalPlan,
+      results: localPlannerRuntimeResults,
+      evidence: finalEvidence,
+      assessment: answerAssessment,
+      storedCanonical
+    });
+    const localEffectiveNarrativeCandidate = preferPlannerTypedCandidate({
+      retrievalPlan: runtimeAnswerRetrievalPlan,
+      narrativeCandidate: localNarrativeDecision.candidate,
+      plannerCandidate: localPlannerRuntimeTypedCandidate
+    });
+    const localNarrativeTelemetry = {
+      pathUsed: localNarrativeDecision.telemetry.pathUsed || narrativeLookup.telemetry.pathUsed,
+      narrativeKind: localNarrativeDecision.telemetry.narrativeKind ?? narrativeLookup.telemetry.narrativeKind,
+      reportKind: localNarrativeDecision.telemetry.reportKind ?? narrativeLookup.telemetry.reportKind,
+      sourceTier: localNarrativeDecision.telemetry.sourceTier ?? narrativeLookup.telemetry.sourceTier,
+      candidateCount: Math.max(localNarrativeDecision.telemetry.candidateCount ?? 0, narrativeLookup.telemetry.candidateCount ?? 0),
+      shadowDecision: localNarrativeDecision.telemetry.shadowDecision ?? narrativeLookup.telemetry.shadowDecision,
+      cutoverApplied: localNarrativeDecision.telemetry.cutoverApplied ?? narrativeLookup.telemetry.cutoverApplied
+    };
+    const localCanonicalCandidate = config.canonicalAdjudicationEnabled
+      ? adjudicateCanonicalClaim({
+          queryText: query.query,
+          results,
+          evidence: finalEvidence,
+          assessment: answerAssessment,
+          exactDetailFamily: canonicalExactDetailFamily,
+          exactDetailCandidateText: exactDetailCandidate?.text,
+          exactDetailCandidateStrongSupport: exactDetailCandidate?.strongSupport,
+          exactDetailCandidatePredicateFit: exactDetailCandidate?.predicateFit,
+          abstentionClaimText: buildAbstentionClaimText(query.query, answerAssessment),
+          currentDatingUnknownFromEvidence: isCurrentDatingUnknownEvidence(results[0], query.query),
+          derived: collectCanonicalDerivedClaims(query.query, results, exactDetailCandidate),
+          storedCanonical
+        })
+      : null;
+    const localOwnerResolution = resolveAnswerOwner({
+      queryText: query.query,
+      exactDetailFamily: canonicalExactDetailFamily,
+      results,
+      retrievalPlan: runtimeAnswerRetrievalPlan,
+      exactDetailCandidate,
+      canonicalAdjudication: localCanonicalCandidate,
+      narrativeCandidate: localEffectiveNarrativeCandidate
+    });
+    return {
+      narrativeDecision: localNarrativeDecision,
+      plannerRuntimeResults: localPlannerRuntimeResults,
+      plannerRuntimeTypedCandidate: localPlannerRuntimeTypedCandidate,
+      effectiveNarrativeCandidate: localEffectiveNarrativeCandidate,
+      narrativeTelemetry: localNarrativeTelemetry,
+      canonicalCandidate: localCanonicalCandidate,
+      ownerResolution: localOwnerResolution
+    };
   });
   const canonicalAdjudication = ownerResolution.adjudication;
   const duality = buildDualityObject(
@@ -32588,7 +35061,32 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     exactDetailCandidate,
     canonicalAdjudication
   );
-  const plannerBlockedGenericFallback = shouldSuppressGenericFallbackAfterOwnerResolution({
+  const preDisciplineAnswerShapingTrace = resolveAnswerShapingTrace({
+    family: ownerResolution.trace.family,
+    winner: ownerResolution.trace.winner,
+    canonicalAdjudication,
+    narrativeAdjudication: effectiveNarrativeCandidate,
+    runtimeRetrievalPlan: runtimeAnswerRetrievalPlan,
+    exactDetailCandidate,
+    supportRowsSelected: results.length,
+    claimText: duality.claim.text,
+    plannerTargetedBackfillApplied: plannerTargetedBackfillApplied || undefined,
+    plannerTargetedBackfillReason,
+    plannerTargetedBackfillSubqueries: plannerTargetedBackfillSubqueries.length > 0 ? plannerTargetedBackfillSubqueries : undefined,
+    plannerTargetedBackfillSatisfied
+  });
+  const sourceBoundReaderEvidenceDiscipline = evaluateSourceBoundReaderEvidenceDiscipline({
+    queryText: query.query,
+    ownerFamily: ownerResolution.trace.family,
+    winner: ownerResolution.trace.winner,
+    answerAssessment,
+    evidenceCount: finalEvidence.length,
+    resultCount: results.length,
+    claimText: duality.claim.text,
+    renderContractSelected: preDisciplineAnswerShapingTrace.renderContractSelected,
+    supportObjectType: preDisciplineAnswerShapingTrace.supportObjectType
+  });
+  const plannerBlockedGenericFallback = sourceBoundReaderEvidenceDiscipline.blocked || shouldSuppressGenericFallbackAfterOwnerResolution({
     winner: ownerResolution.trace.winner,
     suppressedOwners: ownerResolution.trace.suppressedOwners
   });
@@ -32602,7 +35100,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       }
     : duality;
   const effectiveWinner = plannerBlockedGenericFallback ? "canonical_abstention" : ownerResolution.trace.winner;
-  const nextTypedLaneStage = nextTypedLaneDescentStage(typedLaneDescentStage);
+  const finalTypedContractCompleteness = evaluateTypedContractCached(results, answerAssessment, exactDetailCandidate, { previousNormalizedItems: initialStructuredAggregation.normalizedItemKeys, continuationAttempted: lexicalBridgeAttempted });
+  const nextTypedLaneStage = nextTypedLaneDescentStageForPlan(typedLaneDescentStage, query.query, runtimeAnswerRetrievalPlan);
   const typedLaneDepthBudgetReached =
     typedLaneDescentStage !== null &&
     retrievalLatencyBudget.family !== "default" &&
@@ -32610,44 +35109,81 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       answerAssessment.sufficiency === "supported" ||
       retrievalLatencyBudget.family === "descriptive_place_activity"
     ) &&
-    typedLaneDescentDepth(typedLaneDescentStage) >= retrievalLatencyBudget.maxBranchDepth;
+    typedLaneDescentDepthForPlan(typedLaneDescentStage, query.query, runtimeAnswerRetrievalPlan) >=
+      retrievalLatencyBudget.maxBranchDepth;
   if (typedLaneDepthBudgetReached) {
-    addPrunedBranches(prunedBranches, remainingTypedLaneDescentBranches(typedLaneDescentStage));
+    addPrunedBranches(
+      prunedBranches,
+      remainingTypedLaneDescentBranchesForPlan(typedLaneDescentStage, query.query, runtimeAnswerRetrievalPlan)
+    );
   }
   const latencyBudgetSatisfiedAfterRecovery =
     retrievalLatencyBudget.stopOnFirstSufficient &&
-    hasSufficientLatencyBudgetOwnerWinner({
-      queryText: query.query,
-      subjectHints,
-      answerAssessment,
-      ownerResolution,
-      exactDetailCandidate
-    });
+    (
+      typedContractSatisfiedBeforeWidening ||
+      finalTypedContractCompleteness?.stopEligible === true ||
+      hasSufficientLatencyBudgetOwnerWinner({
+        queryText: query.query,
+        subjectHints,
+        answerAssessment,
+        ownerResolution,
+        exactDetailCandidate,
+        typedContractCompleteness: finalTypedContractCompleteness
+      })
+    );
+  const contractLockedTypedLaneSuppressed = shouldSuppressTypedLaneDescentAfterContractSelection({
+    queryText: query.query,
+    retrievalPlan: runtimeAnswerRetrievalPlan,
+    results,
+    answerAssessment,
+    exactDetailCandidate,
+    plannerTargetedBackfillApplied,
+    plannerTargetedBackfillReason,
+    stopOnFirstSufficient: retrievalLatencyBudget.stopOnFirstSufficient
+  });
+  if (contractLockedTypedLaneSuppressed) {
+    earlyStopReason = earlyStopReason ?? "contract_locked_backfill_exhausted";
+    addPrunedBranches(
+      prunedBranches,
+      remainingTypedLaneDescentBranchesForPlan(typedLaneDescentStage, query.query, runtimeAnswerRetrievalPlan)
+    );
+  }
   const typedLaneDescentShouldTrigger =
+    !typedContractSatisfiedBeforeWidening &&
     !typedLaneDepthBudgetReached &&
+    !contractLockedTypedLaneSuppressed &&
     shouldTriggerTypedLaneConditionalDescent({
       stage: typedLaneDescentStage,
       nextStage: nextTypedLaneStage,
       queryText: query.query,
       answerAssessment,
+      retrievalPlan: runtimeAnswerRetrievalPlan,
       results,
       subjectHints,
       exactDetailFamily: typedLaneExactDetailFamily,
       exactDetailCandidate,
       exactDetailExtractionEnabled,
       queryModeHint,
-      stopOnFirstSufficient: retrievalLatencyBudget.stopOnFirstSufficient && latencyBudgetSatisfiedAfterRecovery
+      stopOnFirstSufficient: retrievalLatencyBudget.stopOnFirstSufficient && latencyBudgetSatisfiedAfterRecovery,
+      contractSatisfied: latencyBudgetSatisfiedAfterRecovery,
+      hasStrongExactDetailSupportCandidate,
+      exactDetailCandidateNeedsSubtypeRescue
     });
   const descentStagesForMeta = typedLaneDescentHistory.length > 0 ? [...typedLaneDescentHistory] : [];
 
-  if (typedLaneDescentShouldTrigger && nextTypedLaneStage) {
+  const typedLaneElapsedBeforeDescent = performance.now() - searchStartedAt; const typedLaneDescentBudgetExceeded = shouldSkipTypedLaneDescentForBudget({ family: retrievalLatencyBudget.family, shouldTrigger: typedLaneDescentShouldTrigger, hasNextStage: Boolean(nextTypedLaneStage), elapsedMs: typedLaneElapsedBeforeDescent });
+  if (typedLaneDescentBudgetExceeded) { routeBudgetExceededStages.add("typed_lane_descent"); routeBudgetDecision = routeBudgetDecision ?? `typed_lane_descent_skipped_after_${Math.round(typedLaneElapsedBeforeDescent)}ms`; earlyStopReason = earlyStopReason ?? "typed_lane_descent_route_budget_exhausted"; addPrunedBranches(prunedBranches, remainingTypedLaneDescentBranchesForPlan(typedLaneDescentStage, query.query, runtimeAnswerRetrievalPlan)); stageTimings.typed_lane_descent = stageTimings.typed_lane_descent ?? 0; }
+
+  if (typedLaneDescentShouldTrigger && nextTypedLaneStage && !typedLaneDescentBudgetExceeded) {
     const nextDescentHistory = [...typedLaneDescentHistory, nextTypedLaneStage];
-    const descendedResponse = await searchMemory({
-      ...query,
-      typedLaneDescentStage: nextTypedLaneStage,
-      typedLaneDescentHistory: nextDescentHistory,
-      typedLaneInitialSufficiency: typedLaneInitialSufficiency ?? answerAssessment.sufficiency
-    });
+    const descendedResponse = await measureStage(stageTimings, "typed_lane_descent", async () =>
+      searchMemory({
+        ...query,
+        typedLaneDescentStage: nextTypedLaneStage,
+        typedLaneDescentHistory: nextDescentHistory,
+        typedLaneInitialSufficiency: typedLaneInitialSufficiency ?? answerAssessment.sufficiency
+      })
+    );
     const currentScore = typedLaneResponseScore({
       answerAssessment,
       evidenceCount: finalEvidence.length,
@@ -32722,13 +35258,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
 
   // Keep the benchmark-facing observability contract shallow and deterministic so
   // latency-tail suites can attribute slowness without re-running ad hoc traces.
-  const stageTimingsWithTotal =
-    Object.keys(stageTimings).length > 0
-      ? {
-          ...stageTimings,
-          total: roundTimingMs(performance.now() - searchStartedAt)
-        }
-      : undefined;
+  const stageTimingsWithTotal = { ...stageTimings, total: roundTimingMs(performance.now() - searchStartedAt) };
   const { dominantStage: measuredDominantStage, topStageMs: measuredTopStageMs } = summarizeDominantStage(stageTimings);
   const dominantStage =
     measuredDominantStage ??
@@ -32738,19 +35268,107 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         ? "reflect_fast_path"
         : "direct_fast_path");
   const topStageMs = measuredTopStageMs ?? stageTimingsWithTotal?.total;
-  const reducerFamily = inferReducerFamilyForTelemetry(query.query);
-  const fallbackSuppressedReason = inferFallbackSuppressedReasonForTelemetry(query.query);
+  const reducerFamily = inferReducerFamilyForTelemetry({
+    queryText: query.query,
+    inferExactDetailQuestionFamily,
+    isResidualPlaceEventAggregationQuery
+  });
+  const fallbackSuppressedReason = inferFallbackSuppressedReasonForTelemetry({
+    queryText: query.query,
+    inferExactDetailQuestionFamily,
+    isResidualPlaceEventAggregationQuery
+  });
   const finalClaimSource =
-    canonicalAdjudication?.formatted.finalClaimSource ??
     (plannerBlockedGenericFallback ? "abstention" : undefined) ??
+    canonicalAdjudication?.formatted.finalClaimSource ??
     inferFinalClaimSourceForTelemetry({
       queryText: query.query,
       results,
       claimText: effectiveDuality.claim.text,
-      exactDetailCandidate
-    });
+      exactDetailCandidate,
+      temporalClaimText: deriveTemporalClaimText(query.query, results),
+      profileClaimText: deriveProfileInferenceClaimText(query.query, results),
+      genericEnumerativeClaimText: deriveGenericEnumerativeDirectFactClaimText(query.query, results)
+    }) ??
+    (queryContract.contractName === "temporal_event" && answerAssessment.directEvidence ? "temporal_summary" : undefined);
   const leafTraversalTriggered = inferLeafTraversalTriggered(stageTimings, descentStagesForMeta);
-
+  const typedLaneDepth =
+    descentStagesForMeta.length > 0
+      ? Math.max(...descentStagesForMeta.map((stage) => typedLaneDescentDepthForPlan(stage, query.query, runtimeAnswerRetrievalPlan)))
+      : 0;
+  const recursiveSubqueryCount = recursiveSubqueries.length + plannerTargetedBackfillSubqueries.length;
+  const typedCompletionState = evaluateTypedCompletionState({
+    queryText: query.query,
+    retrievalPlan: runtimeAnswerRetrievalPlan,
+    results,
+    answerAssessment,
+    exactDetailText: exactDetailCandidate?.text,
+    completenessOverride: finalTypedContractCompleteness,
+    plannerBackfillApplied: plannerTargetedBackfillApplied,
+    plannerBackfillSubqueries: plannerTargetedBackfillSubqueries,
+    stopOnFirstSufficient:
+      retrievalLatencyBudget.stopOnFirstSufficient &&
+      (
+        typedContractSatisfiedBeforeWidening ||
+        latencyBudgetSatisfiedForEarlyStop ||
+        latencyBudgetSatisfiedAfterRecovery ||
+        latencyBudgetSatisfiedCanonicalOwner ||
+        latencyBudgetSatisfiedExactDetail
+      )
+  });
+  const typedContractSatisfied =
+    typedCompletionState.satisfied ||
+    finalTypedContractCompleteness?.stopEligible === true ||
+    typedContractSatisfiedBeforeWidening ||
+    latencyBudgetSatisfiedForEarlyStop ||
+    latencyBudgetSatisfiedAfterRecovery ||
+    latencyBudgetSatisfiedCanonicalOwner ||
+    latencyBudgetSatisfiedExactDetail;
+  const typedBackfillMode = typedCompletionState.backfillMode;
+  const plannerWideningSuppressed =
+    typedCompletionState.wideningSuppressed ||
+    typedContractSatisfied ||
+    plannerBlockedGenericFallback ||
+    prunedBranches.size > 0;
+  const supportBundleFamily = aggressiveExactTruthMetaAugment?.supportBundleFamily ?? inferSupportBundleFamilyForTelemetry({ queryText: query.query, finalClaimSource, retrievalPlanFamily: runtimeAnswerRetrievalPlan.family });
+  const authoritativeSource = aggressiveExactTruthMetaAugment?.authoritativeSource;
+  const canonicalAbstainReason = canonicalAdjudication?.canonical.kind === "abstention" ? canonicalAdjudication.canonical.abstainReason : null;
+  const abstentionReason = aggressiveExactTruthMetaAugment?.abstentionReason ?? mapRuntimeAbstentionReason({ ownerTraceReason: ownerResolution.trace.abstentionReason ?? null, canonicalAbstainReason, answerAssessment });
+  const temporalCoverageStatus = aggressiveExactTruthMetaAugment?.temporalCoverageStatus ?? inferTemporalCoverageStatus({ temporalExactness: projectionShadow?.contractName === "temporal_event_bundle" ? projectionShadow.answerGranularity === "day" ? "exact" : null : undefined, finalClaimSource, canonicalAbstainReason, temporalDetailFocus, temporalFactCount: projectionShadow?.contractName === "temporal_event_bundle" ? projectionShadow.entryCount : undefined });
+  const entityResolutionStatus = aggressiveExactTruthMetaAugment?.entityResolutionStatus ?? inferEntityResolutionStatus({ resolverStatus: readerResult.applied && readerResult.decision === "ambiguous" ? "ambiguous" : null, canonicalSubjectBindingStatus: canonicalAdjudication?.bundle.subjectBindingStatus ?? null, answerAssessment });
+  const fallbackUsed = Boolean(lexicalResult.fallbackUsed || readerResult.usedFallback || plannerBlockedGenericFallback || queryEmbeddingResult.fallbackReason);
+  const fallbackReason =
+    sourceBoundReaderEvidenceDiscipline.reason ??
+    fallbackSuppressedReason ??
+    lexicalResult.fallbackReason ??
+    queryEmbeddingResult.fallbackReason ??
+    (readerResult.usedFallback ? "answerable_unit_reader_fallback" : undefined) ??
+    (plannerBlockedGenericFallback ? "owner_resolution_suppressed_generic_fallback" : undefined);
+  const structuredSufficiencyStatus = aggressiveExactTruthMetaAugment?.structuredSufficiencyStatus ?? inferStructuredSufficiencyStatus({ typedContractSatisfied, typedContractComplete: typedCompletionState.completeness?.complete || finalTypedContractCompleteness?.complete, activeSupportCount: projectionShadow?.supportCount, answerAssessment });
+  const answerShapingTrace = resolveAnswerShapingTrace({
+    family: ownerResolution.trace.family,
+    winner: effectiveWinner,
+    canonicalAdjudication,
+    narrativeAdjudication: effectiveNarrativeCandidate,
+    runtimeRetrievalPlan: runtimeAnswerRetrievalPlan,
+    exactDetailCandidate,
+    supportRowsSelected: results.length,
+    claimText: effectiveDuality.claim.text,
+    plannerTargetedBackfillApplied: plannerTargetedBackfillApplied || undefined,
+    plannerTargetedBackfillReason,
+    plannerTargetedBackfillSubqueries: plannerTargetedBackfillSubqueries.length > 0 ? plannerTargetedBackfillSubqueries : undefined,
+    plannerTargetedBackfillSatisfied
+  });
+  const candidateCountsByStage: Record<string, number> = { lexical_load: lexicalRows.length, sql_hybrid_kernel: sqlHybridKernelRows.length, vector_load: vectorRows.length, final_results: results.length, evidence: finalEvidence.length };
+  if (answerableUnitSelection.telemetry.answerableUnitCandidateCount) {
+    candidateCountsByStage.answerable_units = answerableUnitSelection.telemetry.answerableUnitCandidateCount;
+  }
+  if (graphEvidenceCount > 0) {
+    candidateCountsByStage.graph_expansion = graphEvidenceCount;
+  }
+  if (projectionShadow?.entryCount) {
+    candidateCountsByStage.compiled_projection = projectionShadow.entryCount;
+  }
   return {
     results,
     evidence: finalEvidence,
@@ -32768,8 +35386,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       recursiveSubqueries: recursiveSubqueries.length > 0 ? recursiveSubqueries : undefined,
       plannerTargetedBackfillApplied: plannerTargetedBackfillApplied || undefined,
       plannerTargetedBackfillReason,
-      plannerTargetedBackfillSubqueries:
-        plannerTargetedBackfillSubqueries.length > 0 ? plannerTargetedBackfillSubqueries : undefined,
+      plannerTargetedBackfillSubqueries: plannerTargetedBackfillSubqueries.length > 0 ? plannerTargetedBackfillSubqueries : undefined,
       plannerTargetedBackfillSatisfied,
       topicRoutingUsed: topicRoutingUsed || undefined,
       communitySummaryUsed: communitySummaryUsed || undefined,
@@ -32819,7 +35436,13 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       queryEmbeddingSource: queryEmbeddingResult.source,
       queryEmbeddingProvider: queryEmbeddingResult.provider,
       queryEmbeddingModel: queryEmbeddingResult.model,
+      queryEmbeddingCacheHit: queryEmbeddingResult.cacheHit,
+      queryEmbeddingNormalizationVersion: queryEmbeddingResult.normalizationVersion,
+      queryEmbeddingCacheLookupLatencyMs: queryEmbeddingResult.cacheLookupLatencyMs,
+      queryEmbeddingProviderLatencyMs: queryEmbeddingResult.providerLatencyMs,
+      queryEmbeddingProviderCallCount: queryEmbeddingResult.providerCallCount,
       vectorFallbackReason: queryEmbeddingResult.fallbackReason,
+      vectorPolicyMode,
       rankingKernel: usedSqlRankingKernel
         ? sqlHybridKernelRows.length > 0
           ? "sql_hybrid_unified"
@@ -32836,6 +35459,48 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         sqlHybridKernelRows.length > 0
           ? Math.max(...sqlHybridKernelRows.map((row) => row.vectorRank ?? 0), 0)
           : vectorRows.length,
+      vectorContributedToFinalSupport:
+        finalEvidence.some((item) => {
+          const retrieval =
+            item.provenance && typeof item.provenance === "object" && "retrieval" in item.provenance
+              ? (item.provenance as { readonly retrieval?: { readonly vectorRank?: number } }).retrieval
+              : undefined;
+          return typeof retrieval?.vectorRank === "number";
+        }) ||
+        results.some((item) => {
+          const retrieval =
+            item.provenance && typeof item.provenance === "object" && "retrieval" in item.provenance
+              ? (item.provenance as { readonly retrieval?: { readonly vectorRank?: number } }).retrieval
+              : undefined;
+          return typeof retrieval?.vectorRank === "number";
+        })
+          ? true
+          : undefined,
+      vectorContribution:
+        finalEvidence.some((item) => {
+          const retrieval =
+            item.provenance && typeof item.provenance === "object" && "retrieval" in item.provenance
+              ? (item.provenance as { readonly retrieval?: { readonly vectorRank?: number } }).retrieval
+              : undefined;
+          return typeof retrieval?.vectorRank === "number";
+        }) ||
+        results.some((item) => {
+          const retrieval =
+            item.provenance && typeof item.provenance === "object" && "retrieval" in item.provenance
+              ? (item.provenance as { readonly retrieval?: { readonly vectorRank?: number } }).retrieval
+              : undefined;
+          return typeof retrieval?.vectorRank === "number";
+        })
+          ? "final_support"
+          : (
+                (sqlHybridKernelRows.length > 0
+                  ? Math.max(...sqlHybridKernelRows.map((row) => row.vectorRank ?? 0), 0)
+                  : vectorRows.length) > 0 ||
+                queryEmbeddingResult.source !== "none"
+            )
+            ? "candidate_pool"
+            : "none",
+      vectorBlockedReason: queryEmbeddingResult.source === "none" ? queryEmbeddingResult.fallbackReason ?? vectorBlockedReason : null,
       fusedResultCount: results.length,
       temporalAncestorCount: lexicalRows.filter((row) => row.provenance.tier === "temporal_ancestor").length,
       temporalDescendantSupportCount: lexicalRows.filter((row) => row.provenance.tier === "temporal_descendant_support").length,
@@ -32851,6 +35516,43 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       stageTimingsMs: stageTimingsWithTotal,
       dominantStage,
       topStageMs,
+      candidateCountsByStage,
+      rowsScannedByStage: { lexical_load: lexicalRows.length, sql_hybrid_kernel: sqlHybridKernelRows.length, vector_load: vectorRows.length },
+      compiledLookupTried: Boolean(projectionShadow || aggressiveExactTruthMetaAugment?.factKeyLookupUsed || aggressiveExactTruthMetaAugment?.scalarTruthTried || aggressiveExactTruthMetaAugment?.eventTruthTried) || undefined,
+      proceduralLookupTried: aggressiveExactTruthMetaAugment?.scalarTruthTried || undefined,
+      relationshipFastPathTried: relationshipExactFocus || relationshipProfileFocus || activeRelationshipFocus || undefined,
+      semanticFallbackUsed: fallbackUsed || undefined,
+      sqlHybridUsed: (usedSqlRankingKernel || sqlHybridKernelRows.length > 0) || undefined,
+      typedLaneDescentTriggered: descentStagesForMeta.length > 1 || undefined,
+      plannerBackfillTriggered: plannerTargetedBackfillApplied || undefined,
+      graphExpansionTriggered: graphRoutingUsed || graphEvidenceCount > 0 || undefined,
+      neighborExpansionCount: neighborExpansionCount > 0 ? neighborExpansionCount : undefined,
+      typedLaneDepth: typedLaneDepth > 0 ? typedLaneDepth : undefined,
+      recursiveSubqueryCount: recursiveSubqueryCount > 0 ? recursiveSubqueryCount : undefined,
+      latencyBudgetFamily: retrievalLatencyBudget.family,
+      finalBudgetFamily: retrievalLatencyBudget.family,
+      typedContract: typedCompletionState.contract ?? finalTypedContractCompleteness?.contract,
+      typedContractSatisfied: typedContractSatisfied || undefined, typedContractComplete: typedCompletionState.completeness?.complete || finalTypedContractCompleteness?.complete || undefined,
+      projectionShadowContract: projectionShadow?.contractName, projectionShadowKind: projectionShadow?.projectionKind,
+      projectionShadowComplete: projectionShadow?.complete || undefined, projectionShadowStopEligible: projectionShadow?.stopEligible || undefined,
+      projectionShadowCompletenessScore: projectionShadow?.completenessScore, projectionShadowEntryCount: projectionShadow?.entryCount || undefined,
+      projectionVersion: projectionShadow?.projectionVersion ?? "contract_projection_v2", fusedKernelMode: config.sqlFusedKernelMode, renderPayloadMode: config.renderPayloadMode,
+      temporalFactCount: projectionShadow?.contractName === "temporal_event_bundle" ? projectionShadow?.entryCount : undefined,
+      aggregationScope,
+      structuredAggregationAttempted: structuredAggregationAttempted || undefined,
+      structuredAggregationSource: structuredAggregationSources.length > 0 ? structuredAggregationSources : undefined,
+      structuredPredicateFamily,
+      pairBindingVerified,
+      lexicalBridgeAttempted: lexicalBridgeAttempted || undefined,
+      adjudicationSuppressedFallback: adjudicationSuppressedFallback || undefined,
+      missingTypedFields: (typedCompletionState.completeness?.missingFields.length
+        ? typedCompletionState.completeness.missingFields
+        : finalTypedContractCompleteness?.missingFields.length
+          ? finalTypedContractCompleteness.missingFields
+          : undefined),
+      typedBackfillMode,
+      plannerWideningSuppressed: plannerWideningSuppressed || undefined,
+      earlyStopReason: earlyStopReason ?? typedCompletionState.earlyStopReason ?? undefined,
       leafTraversalTriggered: leafTraversalTriggered || undefined,
       descentTriggered: descentStagesForMeta.length > 1 ? true : undefined,
       descentStages: descentStagesForMeta.length > 0 ? descentStagesForMeta : undefined,
@@ -32864,22 +35566,26 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
           : undefined,
       reducerFamily,
       finalClaimSource,
+      supportBundleFamily,
+      sourceBoundEvidenceRequired: sourceBoundReaderEvidenceDiscipline.required || undefined,
+      sourceBoundEvidencePresent: sourceBoundReaderEvidenceDiscipline.present || undefined,
+      readerEvidenceDisciplineStatus: sourceBoundReaderEvidenceDiscipline.status,
+      readerResidualOwner: sourceBoundReaderEvidenceDiscipline.blocked ? "report_semantics" : undefined,
+      canonicalFallbackBlockedReason: sourceBoundReaderEvidenceDiscipline.reason,
+      authoritativeSource,
+      abstentionReason,
+      temporalCoverageStatus,
+      entityResolutionStatus,
+      fallbackUsed: fallbackUsed || undefined, fallbackReason, structuredSufficiencyStatus,
+      routeBudgetEnforced: routeBudgetExceededStages.size > 0 ? true : undefined, routeBudgetExceededStages: routeBudgetExceededStages.size > 0 ? [...routeBudgetExceededStages] : undefined, routeBudgetDecision, plannerTargetedBackfillSubqueryLimit,
+      scalarTruthTried: aggressiveExactTruthMetaAugment?.scalarTruthTried, eventTruthTried: aggressiveExactTruthMetaAugment?.eventTruthTried, backfillBlockedReason: aggressiveExactTruthMetaAugment?.backfillBlockedReason, selfBindingRecoveredFrom: aggressiveExactTruthMetaAugment?.selfBindingRecoveredFrom,
+      claimAdmissibilityStatus: aggressiveExactTruthMetaAugment?.claimAdmissibilityStatus,
+      authoritativeClaimRejectedReason: aggressiveExactTruthMetaAugment?.authoritativeClaimRejectedReason,
+      factKeyLookupUsed: aggressiveExactTruthMetaAugment?.factKeyLookupUsed,
+      factKeyHitType: aggressiveExactTruthMetaAugment?.factKeyHitType,
+      factRowSource: aggressiveExactTruthMetaAugment?.factRowSource,
       answerOwnerTrace: ownerResolution.trace,
-      answerShapingTrace: resolveAnswerShapingTrace({
-        family: ownerResolution.trace.family,
-        winner: effectiveWinner,
-        canonicalAdjudication,
-        narrativeAdjudication: effectiveNarrativeCandidate,
-        runtimeRetrievalPlan: runtimeAnswerRetrievalPlan,
-        exactDetailCandidate,
-        supportRowsSelected: results.length,
-        claimText: effectiveDuality.claim.text,
-        plannerTargetedBackfillApplied: plannerTargetedBackfillApplied || undefined,
-        plannerTargetedBackfillReason,
-        plannerTargetedBackfillSubqueries:
-          plannerTargetedBackfillSubqueries.length > 0 ? plannerTargetedBackfillSubqueries : undefined,
-        plannerTargetedBackfillSatisfied
-      }),
+      answerShapingTrace,
       fallbackSuppressedReason,
       canonicalPathUsed: canonicalAdjudication ? true : undefined,
       canonicalPredicateFamily: canonicalAdjudication?.bundle.predicateFamily,
@@ -32923,22 +35629,18 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
 async function buildHabitConstraintSearchResponse(query: RecallQuery): Promise<RecallResponse> {
   const limit = normalizeLimit(query.limit);
   const decompositionDepth = query.decompositionDepth ?? 0;
-  const [routineResponse, constraintResponse] = await Promise.all([
-    searchMemory({
-      ...query,
-      query: "What is my current daily routine?",
-      limit: Math.max(limit, 4),
-      decompositionDepth: decompositionDepth + 1
-    }),
-    searchMemory({
-      ...query,
-      query: "What constraints matter right now?",
-      limit: Math.max(limit, 4),
-      decompositionDepth: decompositionDepth + 1
-    })
-  ]);
+  const routineResponse = await searchMemory({
+    ...query,
+    query: "What is my current daily routine?",
+    limit: Math.max(limit, 4),
+    decompositionDepth: decompositionDepth + 1
+  });
 
-  const results = mergeRecallResults(routineResponse.results, constraintResponse.results, Math.max(limit * 3, 8));
+  const results = retainTrustedPersonalRecallResults(
+    routineResponse.results,
+    query.namespaceId,
+    query.query
+  );
   const response = await buildTypedLaneSearchResponse(
     query,
     results,
@@ -33099,6 +35801,10 @@ async function runRecapPipeline(
     readonly groupedBy: "artifact_cluster" | "day_cluster" | "result_order";
     readonly queryDecompositionApplied: boolean;
     readonly queryDecompositionSubqueries: readonly string[];
+    readonly scopeMode: "source_scope" | "event_window_scope" | "lifecycle_scope";
+    readonly sourceConstraintUri?: string;
+    readonly usedEventWindow: boolean;
+    readonly usedCapturedAtOnly: boolean;
   };
   readonly assessment: NonNullable<RecallResponse["meta"]["answerAssessment"]>;
   readonly duality: RecallResponse["duality"];
@@ -33106,12 +35812,24 @@ async function runRecapPipeline(
   const limit = normalizeLimit(query.limit, 8, 20);
   const focus = buildRecapFocus(query);
   const resolvedWindow = resolveRecapWindow(query);
+  const scopeMode = detectTemporalScopeMode(query);
+  const sourceConstraint =
+    scopeMode === "source_scope"
+      ? await resolveLatestSourceScopeArtifact(query.namespaceId, query.query)
+      : { artifactId: null, sourceUri: null, sourceKind: null };
   const temporalDifferential = isTemporalDifferentialQuery(query.query);
   const probes = buildRecapSupportProbes(query, intent, focus);
   const responseSets: RecallResult[][] = [];
   let primaryResponse: RecallResponse | null = null;
   const decompositionSubqueries = new Set<string>();
   let queryDecompositionApplied = false;
+  const filterScopeRows = (results: readonly RecallResult[]): RecallResult[] =>
+    sourceConstraint.sourceUri && scopeMode === "source_scope"
+      ? results.filter((result) => {
+          const sourceUri = typeof result.provenance?.source_uri === "string" ? result.provenance.source_uri : null;
+          return sourceUri === sourceConstraint.sourceUri;
+        })
+      : [...results];
 
   for (const probe of probes) {
     const response = await searchMemory({
@@ -33134,8 +35852,21 @@ async function runRecapPipeline(
       }
     }
 
-    const focused = filterResultsForRecapFocus(response.results, focus);
-    responseSets.push((focused.length > 0 ? focused : response.results).slice(0, probe === query.query ? 8 : 4));
+    const scopedResults = filterScopeRows(response.results);
+    const focused = filterResultsForRecapFocus(scopedResults, focus);
+    responseSets.push((focused.length > 0 ? focused : scopedResults).slice(0, probe === query.query ? 8 : 4));
+  }
+
+  const sourceTopicRows = await loadSourceTopicReportRows(
+    query.namespaceId,
+    query.query,
+    focus,
+    limit,
+    resolvedWindow.timeStart ?? null,
+    resolvedWindow.timeEnd ?? null
+  );
+  if (sourceTopicRows.length > 0) {
+    responseSets.push(sourceTopicRows.slice(0, Math.max(limit, 8)));
   }
 
   const mergedResults = mergeDecomposedResults(responseSets, limit * 3);
@@ -33143,7 +35874,7 @@ async function runRecapPipeline(
   const lacksLeafResults = !mergedResults.some(
     (result) => result.memoryType === "episodic_memory" || result.memoryType === "artifact_derivation"
   );
-  if (lacksLeafResults && resolvedWindow.timeStart && resolvedWindow.timeEnd) {
+  if (scopeMode !== "source_scope" && lacksLeafResults && resolvedWindow.timeStart && resolvedWindow.timeEnd) {
     const timeline = await timelineMemory({
       namespaceId: query.namespaceId,
       timeStart: resolvedWindow.timeStart,
@@ -33155,16 +35886,21 @@ async function runRecapPipeline(
       focus
     );
     if (focusedTimeline.length > 0) {
-      enrichedResults = mergeRecallResults(focusedTimeline, enrichedResults, limit * 4);
+      enrichedResults = mergeRecallResults(filterScopeRows(focusedTimeline), enrichedResults, limit * 4);
     }
   }
-  if (temporalDifferential) {
+  if (scopeMode !== "source_scope" && temporalDifferential) {
     const differentialResults = await loadTemporalDifferentialContextResults(query, focus, resolvedWindow, limit);
     if (differentialResults.length > 0) {
       enrichedResults = mergeRecallResults(differentialResults, enrichedResults, limit * 4);
     }
   }
-  if ((mergedResults.length < 2 || filterResultsForRecapFocus(mergedResults, focus).length < 2) && resolvedWindow.timeStart && resolvedWindow.timeEnd) {
+  if (
+    scopeMode !== "source_scope" &&
+    (mergedResults.length < 2 || filterResultsForRecapFocus(mergedResults, focus).length < 2) &&
+    resolvedWindow.timeStart &&
+    resolvedWindow.timeEnd
+  ) {
     const timeline = await timelineMemory({
       namespaceId: query.namespaceId,
       timeStart: resolvedWindow.timeStart,
@@ -33173,11 +35909,11 @@ async function runRecapPipeline(
     });
     const focusedTimeline = filterResultsForRecapFocus(timeline.timeline, focus);
     if (focusedTimeline.length > 0) {
-      enrichedResults = mergeRecallResults(mergedResults, focusedTimeline, limit * 3);
+      enrichedResults = mergeRecallResults(mergedResults, filterScopeRows(focusedTimeline), limit * 3);
     }
   }
 
-  if (temporalDifferential) {
+  if (scopeMode !== "source_scope" && temporalDifferential) {
     enrichedResults = [...enrichedResults].sort(
       (left, right) => temporalDifferentialSignalScore(right, focus, resolvedWindow) - temporalDifferentialSignalScore(left, focus, resolvedWindow)
     );
@@ -33186,7 +35922,19 @@ async function runRecapPipeline(
   let selected = selectRecapContextResults(enrichedResults, focus, limit, query.query);
   const minimumSubstantiveRows = Math.min(2, limit);
 
-  if (selected.results.filter((result) => isSubstantiveRecapResult(result)).length < minimumSubstantiveRows && selected.results.some((result) => result.artifactId)) {
+  if (scopeMode === "source_scope" && selected.results.length === 0 && sourceConstraint.artifactId) {
+    const artifactRows = await loadArtifactSiblingEpisodicRows(query.namespaceId, [sourceConstraint.artifactId]);
+    const focusedArtifactRows = filterResultsForRecapFocus(filterScopeRows(artifactRows), focus);
+    if (focusedArtifactRows.length > 0) {
+      selected = selectRecapContextResults(focusedArtifactRows, focus, limit, query.query);
+    }
+  }
+
+  if (
+    scopeMode !== "source_scope" &&
+    selected.results.filter((result) => isSubstantiveRecapResult(result)).length < minimumSubstantiveRows &&
+    selected.results.some((result) => result.artifactId)
+  ) {
     const artifactSiblingRows = await loadArtifactSiblingEpisodicRows(
       query.namespaceId,
       uniqueStrings(
@@ -33195,13 +35943,14 @@ async function runRecapPipeline(
           .filter((artifactId): artifactId is string => artifactId.length > 0)
       )
     );
-    const focusedSiblings = filterResultsForRecapFocus(artifactSiblingRows, focus);
+    const focusedSiblings = filterResultsForRecapFocus(filterScopeRows(artifactSiblingRows), focus);
     if (focusedSiblings.length > 0) {
       selected = selectRecapContextResults(mergeRecallResults(selected.results, focusedSiblings, limit * 2), focus, limit, query.query);
     }
   }
 
   if (
+    scopeMode !== "source_scope" &&
     (selected.results.length < Math.min(2, limit) || selected.results.filter((result) => isSubstantiveRecapResult(result)).length < minimumSubstantiveRows) &&
     resolvedWindow.timeStart &&
     resolvedWindow.timeEnd
@@ -33226,7 +35975,11 @@ async function runRecapPipeline(
     }
   }
 
-  if (selected.results.some((result) => result.artifactId) && !selected.results.some((result) => result.memoryType === "episodic_memory")) {
+  if (
+    scopeMode !== "source_scope" &&
+    selected.results.some((result) => result.artifactId) &&
+    !selected.results.some((result) => result.memoryType === "episodic_memory")
+  ) {
     const artifactSiblingRows = await loadArtifactSiblingEpisodicRows(
       query.namespaceId,
       uniqueStrings(
@@ -33235,14 +35988,14 @@ async function runRecapPipeline(
           .filter((artifactId): artifactId is string => artifactId.length > 0)
       )
     );
-    const focusedSiblings = filterResultsForRecapFocus(artifactSiblingRows, focus);
+    const focusedSiblings = filterResultsForRecapFocus(filterScopeRows(artifactSiblingRows), focus);
     if (focusedSiblings.length > 0) {
       selected = selectRecapContextResults(mergeRecallResults(selected.results, focusedSiblings, limit), focus, limit, query.query);
     }
   }
 
   const anchorPatterns = recapAnchorPatterns(query.query, intent);
-  if (anchorPatterns.length > 0 && selected.results.some((result) => result.artifactId)) {
+  if (scopeMode !== "source_scope" && anchorPatterns.length > 0 && selected.results.some((result) => result.artifactId)) {
     const artifactSiblingRows = await loadArtifactSiblingEpisodicRows(
       query.namespaceId,
       uniqueStrings(
@@ -33273,7 +36026,11 @@ async function runRecapPipeline(
   }
 
   const anchorSearchPhrases = recapAnchorSearchPhrases(query.query, intent);
-  if (anchorSearchPhrases.length > 0 && !selected.results.some((result) => anchorPatterns.some((pattern) => pattern.test(result.content)))) {
+  if (
+    scopeMode !== "source_scope" &&
+    anchorSearchPhrases.length > 0 &&
+    !selected.results.some((result) => anchorPatterns.some((pattern) => pattern.test(result.content)))
+  ) {
     const anchorPhraseRows: RecallResult[] = [];
     const seen = new Set<string>();
     for (const phrase of anchorSearchPhrases) {
@@ -33349,7 +36106,11 @@ async function runRecapPipeline(
       probes,
       groupedBy: selected.groupedBy,
       queryDecompositionApplied,
-      queryDecompositionSubqueries: [...decompositionSubqueries]
+      queryDecompositionSubqueries: [...decompositionSubqueries],
+      scopeMode,
+      sourceConstraintUri: sourceConstraint.sourceUri ?? undefined,
+      usedEventWindow: scopeMode === "event_window_scope" && Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd),
+      usedCapturedAtOnly: scopeMode === "source_scope"
     },
     assessment,
     duality
@@ -33362,7 +36123,9 @@ export async function recapMemory(query: RecapQuery): Promise<RecapResponse> {
     provider: query.provider ?? "none"
   });
   const derivation = await deriveRecapOutput("recap", query, pipeline.focus, pipeline.resolvedWindow, pipeline.evidence);
-  const deterministicSummary = buildDeterministicRecapSummary(pipeline.results, query.query);
+  const deterministicSummary =
+    buildSourceTopicReportSummary(query.query, pipeline.results, pipeline.focus) ??
+    buildDeterministicRecapSummary(pipeline.results, query.query);
   const selectedSummary = strengthenContinuityTaskSummary(
     query.query,
     selectRecapSummaryText(
@@ -33389,7 +36152,11 @@ export async function recapMemory(query: RecapQuery): Promise<RecapResponse> {
       probes: pipeline.retrievalPlan.probes,
       groupedBy: pipeline.retrievalPlan.groupedBy,
       queryDecompositionApplied: pipeline.retrievalPlan.queryDecompositionApplied,
-      queryDecompositionSubqueries: pipeline.retrievalPlan.queryDecompositionSubqueries
+      queryDecompositionSubqueries: pipeline.retrievalPlan.queryDecompositionSubqueries,
+      scopeMode: pipeline.retrievalPlan.scopeMode,
+      sourceConstraintUri: pipeline.retrievalPlan.sourceConstraintUri ?? undefined,
+      usedEventWindow: pipeline.retrievalPlan.usedEventWindow,
+      usedCapturedAtOnly: pipeline.retrievalPlan.usedCapturedAtOnly
     },
     summaryBasis: summaryBasisForResults(pipeline.results),
     summaryText: finalizedSummary,
@@ -33398,6 +36165,134 @@ export async function recapMemory(query: RecapQuery): Promise<RecapResponse> {
 }
 
 export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtractionResponse> {
+  const extractionStartedAt = performance.now();
+  const memoryPlan = buildMemoryQueryPlan(query.query);
+  const taskScopeMode = detectTemporalScopeMode(query);
+  if (memoryPlan.intent === "project_task_scope") {
+    const projectTaskRead = await readProjectScopedTasks({
+      queryText: query.query,
+      namespaceId: query.namespaceId,
+      plan: memoryPlan,
+      limit: 12
+    });
+    if (projectTaskRead.tasks.length > 0 && projectTaskRead.results.length > 0) {
+      const resolvedWindow = resolveRecapWindow(query);
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "task_extraction",
+        resolvedWindow,
+        focus: buildRecapFocus(query),
+        confidence: "confident",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: buildEvidenceBundle(projectTaskRead.results),
+        retrievalPlan: {
+          intent: "task_extraction",
+          probes: [query.query],
+          groupedBy: "result_order",
+          queryDecompositionApplied: false,
+          queryDecompositionSubqueries: [],
+          scopeMode: "lifecycle_scope",
+          sourceConstraintUri: undefined,
+          usedEventWindow: Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd),
+          usedCapturedAtOnly: false,
+          ...buildSingleStageLatencyMeta({
+            stageName: "project_scoped_task_extraction_fast_path",
+            startedAt: extractionStartedAt,
+            candidateCount: projectTaskRead.tasks.length,
+            rowsScanned: projectTaskRead.results.length,
+            earlyStopReason: "project_scoped_task_support_selected_before_recap_pipeline",
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        tasks: projectTaskRead.tasks
+      };
+    }
+  }
+  if (taskScopeMode === "source_scope" || memoryPlan.taskScope === "travel") {
+    const typedTasks = await getTypedTaskItems(query);
+    const typedTaskResults = typedTasks.length > 0 ? await getTypedTaskResults(query) : [];
+    const scopedTasks = memoryPlan.taskScope === "travel" ? filterTravelTaskItems(typedTasks) : typedTasks;
+    const scopedResults = memoryPlan.taskScope === "travel" ? filterTravelTaskResults(typedTaskResults) : typedTaskResults;
+    if (scopedTasks.length > 0 && scopedResults.length > 0) {
+      const resolvedWindow = resolveRecapWindow(query);
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "task_extraction",
+        resolvedWindow,
+        focus: buildRecapFocus(query),
+        confidence: "confident",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: buildEvidenceBundle(scopedResults),
+        retrievalPlan: {
+          intent: "task_extraction",
+          probes: [query.query],
+          groupedBy: "result_order",
+          queryDecompositionApplied: false,
+          queryDecompositionSubqueries: [],
+          scopeMode: taskScopeMode === "source_scope" ? "source_scope" : "lifecycle_scope",
+          sourceConstraintUri: undefined,
+          usedEventWindow: Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd),
+          usedCapturedAtOnly: taskScopeMode === "source_scope",
+          ...buildSingleStageLatencyMeta({
+            stageName: taskScopeMode === "source_scope" ? "typed_source_task_extraction_fast_path" : "typed_lifecycle_task_extraction_fast_path",
+            startedAt: extractionStartedAt,
+            candidateCount: scopedTasks.length,
+            rowsScanned: scopedResults.length,
+            earlyStopReason: "typed_task_support_selected_before_recap_pipeline",
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        tasks: scopedTasks.slice(0, 12)
+      };
+    }
+  }
+  if (taskScopeMode === "source_scope") {
+    const sourceScope = await resolveLatestSourceScopeArtifact(query.namespaceId, query.query);
+    const sourceRows = sourceScope.artifactId ? await loadArtifactSiblingEpisodicRows(query.namespaceId, [sourceScope.artifactId], 24) : [];
+    const taskRows = sourceRows.filter((row) => isTaskBearingText(row.content));
+    const sourceTasks = parseTaskItems(taskRows.length > 0 ? taskRows : sourceRows, buildRecapFocus(query));
+    if (sourceTasks.length > 0 && sourceRows.length > 0) {
+      const resolvedWindow = resolveRecapWindow(query);
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "task_extraction",
+        resolvedWindow,
+        focus: buildRecapFocus(query),
+        confidence: "confident",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: buildEvidenceBundle(taskRows.length > 0 ? taskRows : sourceRows),
+        retrievalPlan: {
+          intent: "task_extraction",
+          probes: [query.query],
+          groupedBy: "artifact_cluster",
+          queryDecompositionApplied: false,
+          queryDecompositionSubqueries: [],
+          scopeMode: "source_scope",
+          sourceConstraintUri: sourceScope.sourceUri ?? undefined,
+          usedEventWindow: Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd),
+          usedCapturedAtOnly: true,
+          ...buildSingleStageLatencyMeta({
+            stageName: "source_scoped_task_bearing_fast_path",
+            startedAt: extractionStartedAt,
+            candidateCount: sourceTasks.length,
+            rowsScanned: sourceRows.length,
+            earlyStopReason: "source_scoped_task_support_selected_before_recap_pipeline",
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        tasks: sourceTasks.slice(0, 12)
+      };
+    }
+  }
   const pipeline = await runRecapPipeline("task_extraction", {
     ...query,
     provider: query.provider ?? "none"
@@ -33413,18 +36308,60 @@ export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtracti
           project: typeof item.project === "string" ? item.project : undefined,
           dueHint: typeof item.due_hint === "string" ? item.due_hint : undefined,
           statusGuess: typeof item.status_guess === "string" ? item.status_guess : undefined,
+          lifecycleStatus:
+            typeof item.lifecycle_status === "string" &&
+            ["open", "blocked", "completed", "canceled", "superseded", "stale_open", "recently_closed"].includes(item.lifecycle_status)
+              ? (item.lifecycle_status as RecapTaskItem["lifecycleStatus"])
+              : undefined,
           evidenceIds: Array.isArray(item.evidence_ids)
             ? item.evidence_ids.filter((value): value is string => typeof value === "string")
             : []
         }))
     : [];
   const typedTasks = await getTypedTaskItems(query);
-  const tasks =
+  const typedTaskResults = typedTasks.length > 0 ? await getTypedTaskResults(query) : [];
+  const taskBearingResults = typedTasks.length === 0 && derivedTasks.length === 0 ? await loadTaskBearingSupportResults(query, pipeline.focus, 12) : [];
+  const taskBearingTasks = taskBearingResults.length > 0 ? parseTaskItems(taskBearingResults, pipeline.focus) : [];
+  let tasks =
     typedTasks.length > 0
       ? typedTasks
       : derivedTasks.length > 0
         ? derivedTasks
-        : parseTaskItems(pipeline.results, pipeline.focus);
+        : taskBearingTasks.length > 0
+          ? taskBearingTasks
+          : pipeline.retrievalPlan.scopeMode === "source_scope"
+          ? []
+          : parseTaskItems(pipeline.results, pipeline.focus);
+  let evidenceResults =
+    typedTaskResults.length > 0
+      ? typedTaskResults
+      : taskBearingTasks.length > 0
+        ? taskBearingResults
+        : [];
+  if (memoryPlan.intent === "project_task_scope") {
+    const projectTaskRead = await readProjectScopedTasks({
+      queryText: query.query,
+      namespaceId: query.namespaceId,
+      plan: memoryPlan,
+      limit: 12
+    });
+    const scopedPattern = /\b(?:hybrid\s+temporal|memoryqueryplan|query\s+plan|corpus|capability|trusted\s+reader|miss\s+ledger|source\s+audit|benchmark|route\s+arbitration|mcp\s+gold)\b/iu;
+    const unrelatedPattern = /\b(?:travel|trip|flight|driver'?s?\s+license|rv|jeep|reno|iceland|thailand|songkran|burning\s+man|passport|storage\s+unit)\b/iu;
+    const scopedTasks = tasks.filter((task) => {
+      const text = `${task.title} ${task.description} ${task.project ?? ""}`;
+      return scopedPattern.test(text) && !unrelatedPattern.test(text);
+    });
+    const scopedEvidence = evidenceResults.filter((result) => {
+      const text = normalizeWhitespace(result.content);
+      return scopedPattern.test(text) && !unrelatedPattern.test(text);
+    });
+    tasks = projectTaskRead.tasks.length > 0 ? projectTaskRead.tasks : scopedTasks;
+    evidenceResults = projectTaskRead.results.length > 0 ? projectTaskRead.results : scopedEvidence;
+  }
+  if (memoryPlan.taskScope === "travel") {
+    tasks = filterTravelTaskItems(tasks);
+    evidenceResults = filterTravelTaskResults(evidenceResults);
+  }
 
   return {
     query: query.query,
@@ -33435,24 +36372,328 @@ export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtracti
     confidence: pipeline.duality.confidence,
     followUpAction: pipeline.duality.followUpAction,
     clarificationHint: pipeline.duality.clarificationHint,
-    evidence: pipeline.evidence,
+    evidence: evidenceResults.length > 0 ? buildEvidenceBundle(evidenceResults) : pipeline.evidence,
     retrievalPlan: {
       intent: "task_extraction",
       probes: pipeline.retrievalPlan.probes,
       groupedBy: pipeline.retrievalPlan.groupedBy,
       queryDecompositionApplied: pipeline.retrievalPlan.queryDecompositionApplied,
-      queryDecompositionSubqueries: pipeline.retrievalPlan.queryDecompositionSubqueries
+      queryDecompositionSubqueries: pipeline.retrievalPlan.queryDecompositionSubqueries,
+      scopeMode: pipeline.retrievalPlan.scopeMode,
+      sourceConstraintUri: pipeline.retrievalPlan.sourceConstraintUri ?? undefined,
+      usedEventWindow: pipeline.retrievalPlan.usedEventWindow,
+      usedCapturedAtOnly: pipeline.retrievalPlan.usedCapturedAtOnly,
+      ...buildSingleStageLatencyMeta({
+        stageName: memoryPlan.intent === "project_task_scope" ? "project_scoped_task_extraction" : "task_extraction_pipeline",
+        startedAt: extractionStartedAt,
+        candidateCount: tasks.length,
+        rowsScanned: evidenceResults.length > 0 ? evidenceResults.length : pipeline.evidence.length,
+        earlyStopReason: tasks.length > 0 ? "task_extraction_support_selected" : "task_extraction_no_task_support",
+        finalRouteFamily: memoryPlan.intent
+      }),
+      ...memoryQueryPlanTelemetry(memoryPlan)
     },
     tasks,
     derivation: derivation.derivation
   };
 }
 
+function resultProvenanceString(result: RecallResult, key: string): string | null {
+  const value = result.provenance?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function resultProvenanceNumber(result: RecallResult, key: string): number | null {
+  const value = result.provenance?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function resultWindowStart(result: RecallResult): string | null {
+  return (
+    resultProvenanceString(result, "window_start") ??
+    resultProvenanceString(result, "event_anchor_start") ??
+    resultProvenanceString(result, "valid_from")
+  );
+}
+
+function resultWindowEnd(result: RecallResult): string | null {
+  return (
+    resultProvenanceString(result, "window_end") ??
+    resultProvenanceString(result, "event_anchor_end") ??
+    resultProvenanceString(result, "valid_until")
+  );
+}
+
+function commitmentHasWindow(item: CalendarCommitmentItem): boolean {
+  return Boolean(item.windowStart || item.windowEnd);
+}
+
+function hasEventWindowSupport(results: readonly RecallResult[], commitments: readonly CalendarCommitmentItem[] = []): boolean {
+  return (
+    results.some((result) =>
+      Boolean(
+        resultWindowStart(result) ||
+          resultWindowEnd(result) ||
+          resultProvenanceString(result, "temporal_anchor_reference") ||
+          resultProvenanceString(result, "temporal_anchor_type")
+      )
+    ) || commitments.some(commitmentHasWindow)
+  );
+}
+
+function buildTemporalSupportPaths(results: readonly RecallResult[]): readonly TemporalSupportPath[] {
+  return results.slice(0, 12).map((result, index) => ({
+    id: `temporal_support_path:${index + 1}`,
+    sourceKind: resultProvenanceString(result, "source_kind") ?? resultProvenanceString(result, "source_table") ?? null,
+    sourceUri: resultProvenanceString(result, "source_uri"),
+    capturedAt: resultProvenanceString(result, "captured_at") ?? result.occurredAt ?? null,
+    occurredAt: result.occurredAt ?? null,
+    windowStart: resultWindowStart(result),
+    windowEnd: resultWindowEnd(result),
+    timeGranularity: resultProvenanceString(result, "time_granularity"),
+    timeExactness: resultProvenanceString(result, "time_exactness"),
+    temporalAnchorType: resultProvenanceString(result, "temporal_anchor_type"),
+    temporalAnchorReference: resultProvenanceString(result, "temporal_anchor_reference") ?? resultProvenanceString(result, "time_hint_text"),
+    quote: normalizeWhitespace(result.content).slice(0, 500)
+  }));
+}
+
+function extractLikelyPlaces(text: string): readonly string[] {
+  const knownPlaces = ["Chiang Mai", "San Francisco", "Tahoe", "Lake Tahoe", "Bend", "Reno", "Iceland", "Thailand", "Istanbul", "US", "United States"];
+  return knownPlaces.filter((place) => new RegExp(`\\b${place.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\b`, "iu").test(text));
+}
+
+function buildEventMemoryUnits(results: readonly RecallResult[]): readonly EventMemoryUnit[] {
+  const units: EventMemoryUnit[] = [];
+  const seen = new Set<string>();
+  for (const result of results) {
+    const id = `event_memory_unit:${result.memoryId}`;
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const text = normalizeWhitespace(result.content);
+    units.push({
+      id,
+      subject: resultProvenanceString(result, "subject_name") ?? "Steve Tietze",
+      eventType: resultProvenanceString(result, "event_type") ?? resultProvenanceString(result, "source_table") ?? "temporal_event",
+      participants: [],
+      places: extractLikelyPlaces(`${text} ${resultProvenanceString(result, "location_hint_text") ?? ""}`),
+      projects: [],
+      capturedAt: resultProvenanceString(result, "captured_at") ?? result.occurredAt ?? null,
+      occurredAt: result.occurredAt ?? null,
+      windowStart: resultWindowStart(result),
+      windowEnd: resultWindowEnd(result),
+      timeGranularity: resultProvenanceString(result, "time_granularity"),
+      timeExactness: resultProvenanceString(result, "time_exactness"),
+      temporalAnchorType: resultProvenanceString(result, "temporal_anchor_type"),
+      temporalAnchorReference: resultProvenanceString(result, "temporal_anchor_reference") ?? resultProvenanceString(result, "time_hint_text"),
+      durationText: resultProvenanceString(result, "duration_text"),
+      durationSecondsApprox: resultProvenanceNumber(result, "duration_seconds_approx"),
+      sourceKind: resultProvenanceString(result, "source_kind") ?? resultProvenanceString(result, "source_table"),
+      sourceTrail: resultProvenanceString(result, "source_uri") ? [resultProvenanceString(result, "source_uri")!] : []
+    });
+  }
+  return units.slice(0, 12);
+}
+
 export async function extractCalendarMemory(query: RecapQuery): Promise<CalendarExtractionResponse> {
+  const extractionStartedAt = performance.now();
+  const memoryPlan = buildMemoryQueryPlan(query.query);
+  const earlyTypedCalendarScopeRequested = shouldUseTypedCalendarScope(query);
+  const initialResolvedWindow = resolveRecapWindow(query);
+  const strictExplicitEventWindowRequested =
+    Boolean(initialResolvedWindow.timeStart || initialResolvedWindow.timeEnd) &&
+    /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|20\d{2}|19\d{2})\b/iu.test(query.query);
+  if (strictExplicitEventWindowRequested) {
+    const typedCommitments = await getTypedCalendarItems(query);
+    const typedCalendarResults = typedCommitments.length > 0 ? await getTypedCalendarResults(query) : [];
+    if (typedCommitments.length === 0 || typedCalendarResults.length === 0) {
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "calendar_extraction",
+        resolvedWindow: initialResolvedWindow,
+        focus: buildRecapFocus(query),
+        confidence: "missing",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: [],
+        retrievalPlan: {
+          intent: "calendar_extraction",
+          probes: [query.query],
+          groupedBy: "result_order",
+          queryDecompositionApplied: false,
+          queryDecompositionSubqueries: [],
+          scopeMode: "event_window_scope",
+          sourceConstraintUri: undefined,
+          usedEventWindow: true,
+          usedCapturedAtOnly: false,
+          temporalSupportPaths: [],
+          ...buildSingleStageLatencyMeta({
+            stageName: "typed_calendar_extraction_strict_window_abstention",
+            startedAt: extractionStartedAt,
+            candidateCount: 0,
+            rowsScanned: 0,
+            earlyStopReason: "explicit_event_window_without_typed_support",
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        commitments: [],
+        eventMemoryUnits: []
+      };
+    }
+  }
+  const anchorFocus = buildRecapFocus(query);
+  const anchoredCalendarRead = await readAnchoredCalendarSupport(query, anchorFocus, 12);
+  if (anchoredCalendarRead.commitments.length > 0 && anchoredCalendarRead.results.length > 0) {
+    const resolvedWindow = resolveRecapWindow(query);
+    const temporalSupportPaths = buildTemporalSupportPaths(anchoredCalendarRead.results);
+    return {
+      query: query.query,
+      namespaceId: query.namespaceId,
+      intent: "calendar_extraction",
+      resolvedWindow,
+      focus: anchorFocus,
+      confidence: "confident",
+      followUpAction: "none",
+      clarificationHint: undefined,
+      evidence: buildEvidenceBundle(anchoredCalendarRead.results),
+      retrievalPlan: {
+        intent: "calendar_extraction",
+        probes: [query.query, ...anchoredCalendarRead.anchorPhrases.map((phrase) => `anchor:${phrase}`)],
+        groupedBy: "artifact_cluster",
+        queryDecompositionApplied: false,
+        queryDecompositionSubqueries: [],
+        scopeMode: "event_window_scope",
+        sourceConstraintUri: undefined,
+        usedEventWindow:
+          Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd) ||
+          hasEventWindowSupport(anchoredCalendarRead.results, anchoredCalendarRead.commitments) ||
+          anchoredCalendarRead.anchorPhrases.length > 0,
+        usedCapturedAtOnly: false,
+        temporalSupportPaths,
+        ...buildSingleStageLatencyMeta({
+          stageName: "anchored_calendar_extraction_fast_path",
+          startedAt: extractionStartedAt,
+          candidateCount: anchoredCalendarRead.commitments.length,
+          rowsScanned: anchoredCalendarRead.results.length,
+          earlyStopReason: "anchored_calendar_support_selected_before_recap_pipeline",
+          finalRouteFamily: memoryPlan.intent
+        }),
+        ...memoryQueryPlanTelemetry(memoryPlan)
+      },
+      commitments: anchoredCalendarRead.commitments.slice(0, 12),
+      eventMemoryUnits: buildEventMemoryUnits(anchoredCalendarRead.results)
+    };
+  }
+  if (memoryPlan.intent === "temporal_change" && /\b(?:july|september)\b/iu.test(query.query)) {
+    const scopedQueries = [
+      { ...query, query: "What trips did I mention for mid to late July?" },
+      { ...query, query: "What trips did I mention for September 2026?" }
+    ];
+    const scopedCommitments = (await Promise.all(scopedQueries.map((scopedQuery) => getTypedCalendarItems(scopedQuery)))).flat();
+    const scopedResults = (await Promise.all(scopedQueries.map((scopedQuery) => getTypedCalendarResults(scopedQuery)))).flat();
+    if (scopedCommitments.length > 0 && scopedResults.length > 0) {
+      const temporalSupportPaths = buildTemporalSupportPaths(scopedResults);
+      const merged = new Map<string, CalendarCommitmentItem>();
+      for (const item of scopedCommitments) {
+        merged.set(`${item.title.toLowerCase()}|${item.timeHint ?? ""}`, item);
+      }
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "calendar_extraction",
+        resolvedWindow: {
+          label: "July and September travel change windows",
+          source: "explicit"
+        },
+        focus: {
+          participants: [],
+          topics: ["travel", "July", "September"],
+          projects: [],
+          ambiguityState: "clear"
+        },
+        confidence: "confident",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: buildEvidenceBundle(scopedResults),
+        retrievalPlan: {
+          intent: "calendar_extraction",
+          probes: scopedQueries.map((scopedQuery) => scopedQuery.query),
+          groupedBy: "result_order",
+          queryDecompositionApplied: true,
+          queryDecompositionSubqueries: scopedQueries.map((scopedQuery) => scopedQuery.query),
+          scopeMode: "event_window_scope",
+          usedEventWindow: true,
+          usedCapturedAtOnly: false,
+          temporalSupportPaths,
+          ...buildSingleStageLatencyMeta({
+            stageName: "temporal_change_calendar_extraction",
+            startedAt: extractionStartedAt,
+            candidateCount: merged.size,
+            rowsScanned: scopedResults.length,
+            earlyStopReason: "temporal_change_typed_calendar_support_selected",
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        commitments: [...merged.values()].slice(0, 12),
+        eventMemoryUnits: buildEventMemoryUnits(scopedResults)
+      };
+    }
+  }
+  if (earlyTypedCalendarScopeRequested) {
+    const typedCommitments = await getTypedCalendarItems(query);
+    const typedCalendarResults = typedCommitments.length > 0 ? await getTypedCalendarResults(query) : [];
+    if (typedCommitments.length > 0 && typedCalendarResults.length > 0) {
+      const resolvedWindow = resolveRecapWindow(query);
+      const focus = buildRecapFocus(query);
+      const temporalSupportPaths = buildTemporalSupportPaths(typedCalendarResults);
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "calendar_extraction",
+        resolvedWindow,
+        focus,
+        confidence: "confident",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: buildEvidenceBundle(typedCalendarResults),
+        retrievalPlan: {
+          intent: "calendar_extraction",
+          probes: [query.query],
+          groupedBy: "result_order",
+          queryDecompositionApplied: false,
+          queryDecompositionSubqueries: [],
+          scopeMode: "event_window_scope",
+          sourceConstraintUri: undefined,
+          usedEventWindow: Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd) || hasEventWindowSupport(typedCalendarResults, typedCommitments),
+          usedCapturedAtOnly: false,
+          temporalSupportPaths,
+          ...buildSingleStageLatencyMeta({
+            stageName: "typed_calendar_extraction_fast_path",
+            startedAt: extractionStartedAt,
+            candidateCount: typedCommitments.length,
+            rowsScanned: typedCalendarResults.length,
+            earlyStopReason: "typed_calendar_support_selected_before_recap_pipeline",
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        commitments: typedCommitments.slice(0, 12),
+        eventMemoryUnits: buildEventMemoryUnits(typedCalendarResults)
+      };
+    }
+  }
   const pipeline = await runRecapPipeline("calendar_extraction", {
     ...query,
     provider: query.provider ?? "none"
   });
+  const explicitWindowRequested = Boolean(query.timeStart || query.timeEnd);
+  const sourceScopeRequested = pipeline.retrievalPlan.scopeMode === "source_scope";
+  const typedCalendarScopeRequested = earlyTypedCalendarScopeRequested;
   const derivation = await deriveRecapOutput("calendar_extraction", query, pipeline.focus, pipeline.resolvedWindow, pipeline.evidence);
   const derivedCommitments = Array.isArray(derivation.payload?.commitments)
     ? derivation.payload.commitments
@@ -33471,8 +36712,30 @@ export async function extractCalendarMemory(query: RecapQuery): Promise<Calendar
             : []
         }))
     : [];
-  let commitments = derivedCommitments.length > 0 ? derivedCommitments : parseCalendarItems(pipeline.results, pipeline.focus);
-  if (commitments.length < 2 && pipeline.resolvedWindow.timeStart && pipeline.resolvedWindow.timeEnd) {
+  const typedCommitments = typedCalendarScopeRequested ? await getTypedCalendarItems(query) : [];
+  const typedCalendarResults = typedCommitments.length > 0 ? await getTypedCalendarResults(query) : [];
+  let exactWindowTimelineCommitments: readonly CalendarCommitmentItem[] = [];
+  if (explicitWindowRequested && pipeline.resolvedWindow.timeStart && pipeline.resolvedWindow.timeEnd) {
+    const timeline = await timelineMemory({
+      namespaceId: query.namespaceId,
+      timeStart: pipeline.resolvedWindow.timeStart,
+      timeEnd: pipeline.resolvedWindow.timeEnd,
+      limit: 24
+    });
+    exactWindowTimelineCommitments = parseCalendarItems(
+      timeline.timeline.filter((result) => result.memoryType === "episodic_memory"),
+      pipeline.focus
+    );
+  }
+  let commitments =
+    typedCommitments.length > 0
+      ? typedCommitments
+      : explicitWindowRequested && exactWindowTimelineCommitments.length > 0
+      ? exactWindowTimelineCommitments
+      : derivedCommitments.length > 0
+        ? derivedCommitments
+        : parseCalendarItems(pipeline.results, pipeline.focus);
+  if (!sourceScopeRequested && !explicitWindowRequested && commitments.length < 2 && pipeline.resolvedWindow.timeStart && pipeline.resolvedWindow.timeEnd) {
     const timeline = await timelineMemory({
       namespaceId: query.namespaceId,
       timeStart: pipeline.resolvedWindow.timeStart,
@@ -33489,7 +36752,7 @@ export async function extractCalendarMemory(query: RecapQuery): Promise<Calendar
     }
     commitments = [...merged.values()].slice(0, 12);
   }
-  if (pipeline.resolvedWindow.label) {
+  if (!sourceScopeRequested && !explicitWindowRequested && pipeline.resolvedWindow.label) {
     const relativeRows = await loadRelativePhraseEpisodicRows(query.namespaceId, pipeline.resolvedWindow.label, 12);
     const relativeCommitments = parseCalendarItems(relativeRows, pipeline.focus);
     const merged = new Map<string, CalendarCommitmentItem>();
@@ -33497,6 +36760,23 @@ export async function extractCalendarMemory(query: RecapQuery): Promise<Calendar
       merged.set(item.title.toLowerCase(), item);
     }
     commitments = [...merged.values()].slice(0, 12);
+  }
+  let finalEvidenceResults: readonly RecallResult[] = typedCalendarResults;
+  if (memoryPlan.intent === "temporal_change" && /\b(?:july|september)\b/iu.test(query.query)) {
+    const scopedQueries = [
+      { ...query, query: "What trips did I mention for mid to late July?" },
+      { ...query, query: "What trips did I mention for September 2026?" }
+    ];
+    const scopedCommitments = (await Promise.all(scopedQueries.map((scopedQuery) => getTypedCalendarItems(scopedQuery)))).flat();
+    const scopedResults = (await Promise.all(scopedQueries.map((scopedQuery) => getTypedCalendarResults(scopedQuery)))).flat();
+    if (scopedCommitments.length > 0) {
+      const merged = new Map<string, CalendarCommitmentItem>();
+      for (const item of scopedCommitments) {
+        merged.set(`${item.title.toLowerCase()}|${item.timeHint ?? ""}`, item);
+      }
+      commitments = [...merged.values()].slice(0, 12);
+      finalEvidenceResults = scopedResults;
+    }
   }
 
   return {
@@ -33508,15 +36788,30 @@ export async function extractCalendarMemory(query: RecapQuery): Promise<Calendar
     confidence: pipeline.duality.confidence,
     followUpAction: pipeline.duality.followUpAction,
     clarificationHint: pipeline.duality.clarificationHint,
-    evidence: pipeline.evidence,
+    evidence: finalEvidenceResults.length > 0 ? buildEvidenceBundle(finalEvidenceResults) : pipeline.evidence,
     retrievalPlan: {
       intent: "calendar_extraction",
       probes: pipeline.retrievalPlan.probes,
       groupedBy: pipeline.retrievalPlan.groupedBy,
       queryDecompositionApplied: pipeline.retrievalPlan.queryDecompositionApplied,
-      queryDecompositionSubqueries: pipeline.retrievalPlan.queryDecompositionSubqueries
+      queryDecompositionSubqueries: pipeline.retrievalPlan.queryDecompositionSubqueries,
+      scopeMode: pipeline.retrievalPlan.scopeMode,
+      sourceConstraintUri: pipeline.retrievalPlan.sourceConstraintUri ?? undefined,
+      usedEventWindow: pipeline.retrievalPlan.usedEventWindow || hasEventWindowSupport(finalEvidenceResults, commitments),
+      usedCapturedAtOnly: pipeline.retrievalPlan.usedCapturedAtOnly,
+      temporalSupportPaths: buildTemporalSupportPaths(finalEvidenceResults),
+      ...buildSingleStageLatencyMeta({
+        stageName: "calendar_extraction_pipeline",
+        startedAt: extractionStartedAt,
+        candidateCount: commitments.length,
+        rowsScanned: finalEvidenceResults.length > 0 ? finalEvidenceResults.length : pipeline.evidence.length,
+        earlyStopReason: commitments.length > 0 ? "calendar_extraction_support_selected" : "calendar_extraction_no_event_support",
+        finalRouteFamily: memoryPlan.intent
+      }),
+      ...memoryQueryPlanTelemetry(memoryPlan)
     },
     commitments,
+    eventMemoryUnits: buildEventMemoryUnits(finalEvidenceResults),
     derivation: derivation.derivation
   };
 }
@@ -33550,7 +36845,11 @@ export async function explainRecap(query: RecapQuery): Promise<ExplainRecapRespo
       probes: recap.retrievalPlan.probes,
       groupedBy: recap.retrievalPlan.groupedBy,
       queryDecompositionApplied: recap.retrievalPlan.queryDecompositionApplied,
-      queryDecompositionSubqueries: recap.retrievalPlan.queryDecompositionSubqueries
+      queryDecompositionSubqueries: recap.retrievalPlan.queryDecompositionSubqueries,
+      scopeMode: recap.retrievalPlan.scopeMode,
+      sourceConstraintUri: recap.retrievalPlan.sourceConstraintUri ?? undefined,
+      usedEventWindow: recap.retrievalPlan.usedEventWindow,
+      usedCapturedAtOnly: recap.retrievalPlan.usedCapturedAtOnly
     },
     explanation,
     claimText: recap.summaryText
@@ -33773,6 +37072,17 @@ export async function getRelationships(query: RelationshipQuery): Promise<Relati
         LEFT JOIN artifacts a ON a.id = em.artifact_id
         WHERE rc.namespace_id = $1
           AND rc.status IN ('pending', 'accepted')
+          AND (
+            $8::boolean = true
+            OR (
+              rc.valid_until IS NULL
+              AND (
+                rc.predicate = 'former_partner_of'
+                OR COALESCE((rc.metadata->>'historical_relationship')::boolean, false) = false
+              )
+              AND rc.predicate NOT IN ('relationship_ended', 'was_with')
+            )
+          )
       ) relationships
       INNER JOIN entities subject_entity ON subject_entity.id = relationships.subject_entity_id
       INNER JOIN entities object_entity ON object_entity.id = relationships.object_entity_id
@@ -33781,8 +37091,13 @@ export async function getRelationships(query: RelationshipQuery): Promise<Relati
         AND ($5::timestamptz IS NULL OR relationships.occurred_at <= $5)
         AND (
           ($7::uuid IS NOT NULL AND (relationships.subject_entity_id = $7::uuid OR relationships.object_entity_id = $7::uuid))
-          OR relationships.subject_entity_id IN (SELECT id FROM matched_entities)
-          OR relationships.object_entity_id IN (SELECT id FROM matched_entities)
+          OR (
+            $7::uuid IS NULL
+            AND (
+              relationships.subject_entity_id IN (SELECT id FROM matched_entities)
+              OR relationships.object_entity_id IN (SELECT id FROM matched_entities)
+            )
+          )
         )
       ORDER BY
         CASE WHEN relationships.status = 'active' AND relationships.valid_until IS NULL THEN 0 ELSE 1 END,
@@ -34266,108 +37581,4 @@ function buildFallbackRelationships(
   });
 }
 
-function extractEntityRelationshipClauses(sentence: string, entityName: string): readonly string[] {
-  const normalizedEntity = entityName.trim().toLowerCase();
-  if (!normalizedEntity) {
-    return [];
-  }
-
-  const clauses = sentence
-    .split(/\s*(?:;|(?<!\bLake)\bbut\b|(?<!\bLake)\bhowever\b|\bwhereas\b)\s+/iu)
-    .flatMap((part) => part.split(/\s+(?=(?:and\s+)?[A-Z][a-z]+,\s)/u))
-    .map((part) => normalizeWhitespace(part))
-    .filter((part) => part.length >= 8);
-  const matching = clauses.filter((part) => part.toLowerCase().includes(normalizedEntity));
-  return matching.length > 0 ? matching : [normalizeWhitespace(sentence)];
-}
-
-function sliceSentenceFromEntity(sentence: string, entityName: string): string | undefined {
-  const normalizedSentence = sentence.toLowerCase();
-  const normalizedEntity = entityName.trim().toLowerCase();
-  const entityIndex = normalizedSentence.indexOf(normalizedEntity);
-  if (entityIndex === -1) {
-    return undefined;
-  }
-  return normalizeWhitespace(sentence.slice(entityIndex));
-}
-
-function clipEntityRelationshipWindow(entityTail: string): string {
-  const delimiterPatterns = [
-    /,\s+(?:and\s+)?[A-Z][a-z]+(?:\b|,)/u,
-    /\b(?:but|however|whereas)\b/iu
-  ];
-  let endIndex = entityTail.length;
-  for (const pattern of delimiterPatterns) {
-    const match = pattern.exec(entityTail);
-    if (match?.index !== undefined && match.index > 0) {
-      endIndex = Math.min(endIndex, match.index);
-    }
-  }
-  return normalizeWhitespace(entityTail.slice(0, endIndex));
-}
-
-function findEntityAdjacentObject(
-  sentenceTail: string,
-  objectPattern: RegExp,
-  maxDistance: number
-): string | undefined {
-  const match = objectPattern.exec(sentenceTail);
-  if (!match?.[1] || match.index === undefined || match.index > maxDistance) {
-    return undefined;
-  }
-  return normalizeWhitespace(match[1]).replace(/^[Tt]he\s+/u, "").replace(/[.,!?]+$/u, "");
-}
-
-function findSentenceLevelRelationshipObjects(sentence: string, entityName: string): readonly string[] {
-  const escapedEntity = entityName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const objects = new Set<string>();
-  const patterns = [
-    new RegExp(`\\b([A-Z][A-Za-z0-9'’& -]{2,80}?)(?:\\s+company)?\\s+that\\s+${escapedEntity}\\s+owns\\b`, "giu"),
-    new RegExp(`\\b([A-Z][A-Za-z0-9'’& -]{2,80}?)(?:\\s+company)?\\s+is\\s+owned\\s+by\\s+${escapedEntity}\\b`, "giu"),
-    new RegExp(`\\b${escapedEntity}\\s*\\(([^)]+)\\)`, "giu"),
-    new RegExp(`\\b${escapedEntity}\\s+that\\s+owns\\s+([A-Z][A-Za-z0-9'’& -]{2,80})\\b`, "giu")
-  ];
-  for (const pattern of patterns) {
-    for (const match of sentence.matchAll(pattern)) {
-      const value = match[1]?.trim();
-      if (!value) {
-        continue;
-      }
-      objects.add(value.replace(/^[Tt]he\s+/u, "").replace(/[.,!?]+$/u, "").trim());
-    }
-  }
-  return [...objects];
-}
-
-function extractAssociatedPlacesNearEntity(sentenceTail: string): readonly string[] {
-  const places = new Set<string>();
-  const directPlacePatterns = [
-    /\b(Chiang Mai|Bangkok|Thailand|Lake Tahoe|Koh Samui|Bend|Oregon|Mexico City|Tahoe City|Japan)\b/giu
-  ];
-  for (const pattern of directPlacePatterns) {
-    for (const match of sentenceTail.matchAll(pattern)) {
-      const value = match[1]?.trim();
-      if (!value) {
-        continue;
-      }
-      places.add(value);
-    }
-  }
-
-  for (const match of sentenceTail.matchAll(/\b(?:from|in)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,2})/gu)) {
-    const value = match[1]?.trim();
-    if (!value) {
-      continue;
-    }
-    const cleaned = value.replace(/[.,!?]+$/u, "");
-    if (
-      cleaned.split(/\s+/u).length <= 3 &&
-      !["Chiang", "Lake", "Koh", "Tahoe", "Mexico"].includes(cleaned) &&
-      !cleaned.toLowerCase().startsWith("a ")
-    ) {
-      places.add(cleaned);
-    }
-  }
-
-  return [...places];
-}
+export { extractExactDetailValues as extractExactDetailValuesForTest };

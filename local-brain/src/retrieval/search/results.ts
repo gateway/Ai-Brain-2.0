@@ -45,10 +45,13 @@ export function buildEvidenceBundle(results: readonly RecallResult[]): RecallRes
 
   for (const result of results) {
     const sourceUri = typeof result.provenance.source_uri === "string" ? result.provenance.source_uri : null;
-    if (!result.artifactId && !sourceUri) {
+    const sourceMemoryId = typeof result.provenance.source_memory_id === "string" ? result.provenance.source_memory_id : null;
+    const sourceChunkId = typeof result.provenance.source_chunk_id === "string" ? result.provenance.source_chunk_id : null;
+    const sourceSceneId = typeof result.provenance.source_scene_id === "string" ? result.provenance.source_scene_id : null;
+    if (!result.artifactId && !sourceUri && !sourceMemoryId && !sourceChunkId && !sourceSceneId) {
       continue;
     }
-    const key = `${result.memoryId}|${result.artifactId ?? "none"}|${sourceUri ?? "none"}`;
+    const key = `${result.memoryId}|${result.artifactId ?? "none"}|${sourceUri ?? "none"}|${sourceMemoryId ?? "none"}|${sourceChunkId ?? "none"}|${sourceSceneId ?? "none"}`;
     if (seen.has(key)) {
       continue;
     }

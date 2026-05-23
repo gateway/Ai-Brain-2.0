@@ -244,6 +244,30 @@ test("temporal claim derivation prefers anchored relative wording for school-eve
   assert.equal(claimText, "the week before June 9, 2023.");
 });
 
+test("temporal claim derivation uses turn-local support-network context for meetup queries", () => {
+  const claimText = deriveTemporalClaimText("When did Caroline meet up with her friends, family, and mentors?", [
+    {
+      memoryId: "caroline-support-network-meetup",
+      memoryType: "episodic_memory",
+      content:
+        "Caroline: Thanks, Mel! My friends, family and mentors are my rocks – they motivate me and give me the strength to push on. Here's a pic from when we met up last week!",
+      score: 1,
+      artifactId: "artifact-support-network-meetup",
+      occurredAt: "2023-06-09T19:55:00.000Z",
+      namespaceId: "ns_temporal_anchor",
+      provenance: {
+        source_uri: "/tmp/conv-26-session_3.md",
+        metadata: {
+          source_sentence_text:
+            "Caroline: Thanks, Mel! My friends, family and mentors are my rocks – they motivate me and give me the strength to push on. Here's a pic from when we met up last week!"
+        }
+      }
+    }
+  ]);
+
+  assert.equal(claimText, "the week before June 9, 2023.");
+});
+
 test("temporal claim derivation prefers anchored relative wording for charity-race weekend phrasing", () => {
   const claimText = deriveTemporalClaimText("When did Melanie run a charity race?", [
     {
@@ -332,6 +356,94 @@ test("temporal claim derivation prefers anchored range wording for first travel 
   }
 });
 
+test("temporal claim derivation ignores later festival-location mentions for first-travel queries", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "brain-temporal-first-travel-filter-"));
+  const earlierSourcePath = path.join(dir, "conv-50-session_2.md");
+  const firstTravelSourcePath = path.join(dir, "conv-50-session_3.md");
+  const laterFestivalSourcePath = path.join(dir, "conv-50-session_6.md");
+  writeFileSync(
+    earlierSourcePath,
+    [
+      "Captured: 2023-03-26T00:00:00.000Z",
+      "",
+      "Dave: If I had money I'd go to Tokyo"
+    ].join("\n"),
+    "utf8"
+  );
+  writeFileSync(
+    firstTravelSourcePath,
+    [
+      "Captured: 2023-04-20T00:00:00.000Z",
+      "",
+      "Calvin: I just went to Tokyo for a game festival and had a blast."
+    ].join("\n"),
+    "utf8"
+  );
+  writeFileSync(
+    laterFestivalSourcePath,
+    [
+      "Captured: 2023-08-12T00:00:00.000Z",
+      "",
+      "Calvin attended another music festival in Tokyo and met Frank Ocean."
+    ].join("\n"),
+    "utf8"
+  );
+
+  try {
+    const claimText = deriveTemporalClaimText("When did Calvin first travel to Tokyo?", [
+      {
+        memoryId: "tokyo-earlier",
+        memoryType: "episodic_memory",
+        content: "Dave: If I had money I'd go to Tokyo",
+        score: 0.7,
+        artifactId: "artifact-early-tokyo",
+        occurredAt: "2023-03-26T00:00:00.000Z",
+        namespaceId: "ns_temporal_anchor",
+        provenance: {
+          source_uri: earlierSourcePath,
+          metadata: {
+            source_sentence_text: "Dave: If I had money I'd go to Tokyo"
+          }
+        }
+      },
+      {
+        memoryId: "tokyo-first-travel",
+        memoryType: "episodic_memory",
+        content: "Calvin: I just went to Tokyo for a game festival and had a blast.",
+        score: 1,
+        artifactId: "artifact-first-tokyo",
+        occurredAt: "2023-04-20T00:00:00.000Z",
+        namespaceId: "ns_temporal_anchor",
+        provenance: {
+          source_uri: firstTravelSourcePath,
+          metadata: {
+            source_sentence_text: "Calvin: I just went to Tokyo for a game festival and had a blast."
+          }
+        }
+      },
+      {
+        memoryId: "tokyo-later-festival",
+        memoryType: "episodic_memory",
+        content: "Calvin attended another music festival in Tokyo and met Frank Ocean.",
+        score: 1.1,
+        artifactId: "artifact-late-tokyo",
+        occurredAt: "2023-08-12T00:00:00.000Z",
+        namespaceId: "ns_temporal_anchor",
+        provenance: {
+          source_uri: laterFestivalSourcePath,
+          metadata: {
+            source_sentence_text: "Calvin attended another music festival in Tokyo and met Frank Ocean."
+          }
+        }
+      }
+    ]);
+
+    assert.equal(claimText, "between 26 March 2023 and 20 April 2023.");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("temporal claim derivation prefers anchored weekend wording for saw-live queries", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "brain-temporal-live-"));
   const sourcePath = path.join(dir, "conv-50-session_2.md");
@@ -357,6 +469,69 @@ test("temporal claim derivation prefers anchored weekend wording for saw-live qu
         namespaceId: "ns_temporal_anchor",
         provenance: {
           source_uri: sourcePath,
+          metadata: {
+            source_sentence_text: "Dave: I saw Aerosmith perform live last weekend and they were incredible."
+          }
+        }
+      }
+    ]);
+
+    assert.equal(claimText, "the weekend before March 26, 2023.");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("temporal claim derivation ignores unrelated last-weekend rows for saw-live queries", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "brain-temporal-live-filter-"));
+  const livePath = path.join(dir, "conv-50-session_2.md");
+  const carShowPath = path.join(dir, "conv-50-session_3.md");
+  writeFileSync(
+    livePath,
+    [
+      "Captured: 2023-03-26T00:00:00.000Z",
+      "",
+      "Dave: I saw Aerosmith perform live last weekend and they were incredible."
+    ].join("\n"),
+    "utf8"
+  );
+  writeFileSync(
+    carShowPath,
+    [
+      "Captured: 2023-04-20T16:15:00.000Z",
+      "",
+      "Dave: Last weekend I went to a car show. Classic cars are so charming."
+    ].join("\n"),
+    "utf8"
+  );
+
+  try {
+    const claimText = deriveTemporalClaimText("When did Dave see Aerosmith perform live?", [
+      {
+        memoryId: "car-show",
+        memoryType: "episodic_memory",
+        content: "Dave: Last weekend I went to a car show. Classic cars are so charming.",
+        score: 1,
+        artifactId: "artifact-car-show",
+        occurredAt: "2023-04-20T16:15:00.000Z",
+        namespaceId: "ns_temporal_anchor",
+        provenance: {
+          source_uri: carShowPath,
+          metadata: {
+            source_sentence_text: "Dave: Last weekend I went to a car show. Classic cars are so charming."
+          }
+        }
+      },
+      {
+        memoryId: "aerosmith-live",
+        memoryType: "episodic_memory",
+        content: "Dave: I saw Aerosmith perform live last weekend and they were incredible.",
+        score: 1,
+        artifactId: "artifact-aerosmith-live",
+        occurredAt: "2023-03-26T00:00:00.000Z",
+        namespaceId: "ns_temporal_anchor",
+        provenance: {
+          source_uri: livePath,
           metadata: {
             source_sentence_text: "Dave: I saw Aerosmith perform live last weekend and they were incredible."
           }

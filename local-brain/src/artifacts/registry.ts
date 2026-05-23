@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { PoolClient } from "pg";
 import type { ArtifactRecord, SourceType } from "../types.js";
@@ -28,6 +29,14 @@ function inferMimeType(sourceType: SourceType, uri: string): string {
 
   if (sourceType === "chat_turn" || ext === ".json") {
     return "application/json";
+  }
+
+  if (sourceType === "task_list") {
+    return ext === ".json" ? "application/json" : "text/plain";
+  }
+
+  if (sourceType === "calendar_export" || ext === ".ics") {
+    return ext === ".json" ? "application/json" : "text/calendar";
   }
 
   if (sourceType === "pdf" || ext === ".pdf") {
@@ -65,6 +74,31 @@ function isTextLike(sourceType: SourceType, mimeType: string, uri: string): bool
   }
 
   return [".md", ".markdown", ".txt", ".json"].includes(ext);
+}
+
+async function readPdfTextProxy(absolutePath: string, metadata?: Record<string, unknown>): Promise<string | null> {
+  const inline = metadata?.extracted_text;
+  if (typeof inline === "string" && inline.trim().length > 0) {
+    return inline;
+  }
+
+  const explicitPath = metadata?.extracted_text_path;
+  const candidates = [
+    typeof explicitPath === "string" && explicitPath.trim().length > 0 ? path.resolve(explicitPath) : null,
+    `${absolutePath}.txt`
+  ].filter((value): value is string => Boolean(value));
+
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    const text = await readFile(candidate, "utf8");
+    if (text.trim().length > 0) {
+      return text;
+    }
+  }
+
+  return null;
 }
 
 export async function ensureArtifactRoot(artifactRoot: string): Promise<void> {
@@ -113,9 +147,10 @@ export async function registerArtifactObservation(
   const [buffer, fileStats] = await Promise.all([readFile(absolutePath), stat(absolutePath)]);
   const checksumSha256 = sha256(buffer);
   const textLike = isTextLike(options.sourceType, mimeType, absolutePath);
+  const pdfTextProxy = options.sourceType === "pdf" ? await readPdfTextProxy(absolutePath, options.metadata) : null;
   const source = {
-    textContent: textLike ? buffer.toString("utf8") : "",
-    hasTextContent: textLike,
+    textContent: textLike ? buffer.toString("utf8") : pdfTextProxy ?? "",
+    hasTextContent: textLike || Boolean(pdfTextProxy),
     uri: absolutePath,
     byteSize: fileStats.size,
     modifiedAt: fileStats.mtime.toISOString(),

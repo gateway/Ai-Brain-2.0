@@ -3,19 +3,28 @@ import { get } from "node:https";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { readConfig } from "../config.js";
 import { closePool } from "../db/client.js";
-import { ingestArtifact } from "../ingest/worker.js";
+import { runMigrations } from "../db/migrations.js";
+import { runNamespaceVectorActivation } from "../jobs/vector-sync-runtime.js";
 import { executeMcpTool } from "../mcp/server.js";
 import { rebuildTypedMemoryNamespace } from "../typed-memory/service.js";
 import { cleanupPublicBenchmarkNamespaces } from "./public-benchmark-cleanup.js";
-import { parseLoCoMoSessionDateTimeToIso } from "./public-memory-date-utils.js";
+import { ingestLoCoMoSessionArtifacts } from "./locomo-ingest.js";
 import { buildBenchmarkRuntimeMetadata, type BenchmarkRuntimeMetadata } from "./runtime-metadata.js";
+import {
+  buildBenchmarkVectorActivationMetadata,
+  createBenchmarkVectorActivationAccumulator,
+  mergeBenchmarkVectorActivation
+} from "./vector-activation.js";
 
 interface TurnRecord {
   readonly speaker: string;
   readonly text?: string;
   readonly blip_caption?: string;
   readonly query?: string;
+  readonly dia_id?: string;
+  readonly img_url?: readonly string[];
 }
 
 interface LocomoConversation {
@@ -38,6 +47,7 @@ interface LatencyTailScenarioDefinition {
     | "commonality_aggregation";
   readonly sampleId: string;
   readonly question: string;
+  readonly runtimeQuery?: string;
 }
 
 interface LatencyTailScenarioResult {
@@ -63,9 +73,16 @@ interface LatencyTailScenarioResult {
   readonly finalLaneSufficiency: string | null;
   readonly dominantStage: string | null;
   readonly topStageMs: number | null;
+  readonly neighborExpansionCount: number;
+  readonly typedLaneDepth: number;
+  readonly recursiveSubqueryCount: number;
+  readonly latencyBudgetFamily: string | null;
+  readonly earlyStopReason: string | null;
   readonly reducerFamily: string | null;
   readonly finalClaimSource: string | null;
   readonly fallbackSuppressedReason: string | null;
+  readonly vectorCandidateCount: number;
+  readonly vectorContributedToFinalSupport: boolean;
   readonly stageTimingsMs: Readonly<Record<string, number>> | null;
 }
 
@@ -83,7 +100,12 @@ const SCENARIOS: readonly LatencyTailScenarioDefinition[] = [
   { family: "bounded_event_detail", sampleId: "conv-26", question: "What did Caroline research?" },
   { family: "descriptive_place_activity", sampleId: "conv-44", question: "What is an indoor activity that Andrew would enjoy doing while make his dog happy?" },
   { family: "descriptive_place_activity", sampleId: "conv-44", question: "What kind of places have Andrew and his girlfriend checked out around the city?" },
-  { family: "commonality_aggregation", sampleId: "conv-30", question: "Which city have both Jean and John visited?" },
+  {
+    family: "commonality_aggregation",
+    sampleId: "conv-30",
+    question: "Which city have both Jean and John visited?",
+    runtimeQuery: "Which city have both Jon and Gina visited?"
+  },
   { family: "commonality_aggregation", sampleId: "conv-41", question: "What type of volunteering have John and Maria both done?" },
   { family: "commonality_aggregation", sampleId: "conv-42", question: "What kind of interests do Joanna and Nate share?" },
   { family: "paired_person_exact_detail", sampleId: "conv-43", question: "Would Tim enjoy reading books by C. S. Lewis or John Greene?" },
@@ -149,31 +171,6 @@ function benchmarkExpectedAnswer(qa: { readonly answer?: string | number; readon
     return String(qa.answer);
   }
   return qa.category === 5 ? "None" : "";
-}
-
-function formatConversationSession(sample: LocomoConversation, sessionKey: string, turns: readonly TurnRecord[]): string {
-  const dateTime = typeof sample.conversation[`${sessionKey}_date_time`] === "string" ? sample.conversation[`${sessionKey}_date_time`] : "";
-  const canonicalCapturedAt = typeof dateTime === "string" && dateTime ? parseLoCoMoSessionDateTimeToIso(dateTime) : null;
-  const speakerA = typeof sample.conversation.speaker_a === "string" ? sample.conversation.speaker_a : "Speaker A";
-  const speakerB = typeof sample.conversation.speaker_b === "string" ? sample.conversation.speaker_b : "Speaker B";
-  const lines: string[] = [];
-  if (canonicalCapturedAt) {
-    lines.push(`Captured: ${canonicalCapturedAt}`, "");
-  } else if (dateTime) {
-    lines.push(`Captured: ${dateTime}`, "");
-  }
-  lines.push(`Conversation between ${speakerA} and ${speakerB}`);
-  for (const turn of turns) {
-    const caption = typeof turn.blip_caption === "string" && turn.blip_caption.trim().length > 0 ? ` [image: ${turn.blip_caption.trim()}]` : "";
-    lines.push(`${turn.speaker}: ${(turn.text ?? "").trim()}${caption}`);
-    if (typeof turn.query === "string" && turn.query.trim().length > 0) {
-      lines.push(`--- image_query: ${turn.query.trim()}`);
-    }
-    if (typeof turn.blip_caption === "string" && turn.blip_caption.trim().length > 0) {
-      lines.push(`--- image_caption: ${turn.blip_caption.trim()}`);
-    }
-  }
-  return lines.join("\n");
 }
 
 function normalize(value: unknown): string {
@@ -358,9 +355,10 @@ function toMarkdown(report: LoCoMoLatencyTailReviewReport): string {
 
 async function runScenario(namespaceId: string, scenario: LatencyTailScenarioDefinition, expectedAnswer: string): Promise<LatencyTailScenarioResult> {
   const startedAt = performance.now();
+  const runtimeQuery = scenario.runtimeQuery ?? scenario.question;
   const wrapped = (await executeMcpTool("memory.search", {
     namespace_id: namespaceId,
-    query: scenario.question,
+    query: runtimeQuery,
     limit: 8
   })) as { readonly structuredContent?: unknown };
   const payload = wrapped.structuredContent as any;
@@ -369,7 +367,7 @@ async function runScenario(namespaceId: string, scenario: LatencyTailScenarioDef
   return {
     family: scenario.family,
     sampleId: scenario.sampleId,
-    question: scenario.question,
+    question: runtimeQuery,
     expectedAnswer,
     passed: bestEffortPass(expectedAnswer, payload),
     normalizedPassed: normalizedAnswerPass(expectedAnswer, payload),
@@ -389,9 +387,16 @@ async function runScenario(namespaceId: string, scenario: LatencyTailScenarioDef
     finalLaneSufficiency: typeof payload?.meta?.finalLaneSufficiency === "string" ? payload.meta.finalLaneSufficiency : null,
     dominantStage: typeof payload?.meta?.dominantStage === "string" ? payload.meta.dominantStage : null,
     topStageMs: typeof payload?.meta?.topStageMs === "number" ? payload.meta.topStageMs : null,
+    neighborExpansionCount: typeof payload?.meta?.neighborExpansionCount === "number" ? payload.meta.neighborExpansionCount : 0,
+    typedLaneDepth: typeof payload?.meta?.typedLaneDepth === "number" ? payload.meta.typedLaneDepth : 0,
+    recursiveSubqueryCount: typeof payload?.meta?.recursiveSubqueryCount === "number" ? payload.meta.recursiveSubqueryCount : 0,
+    latencyBudgetFamily: typeof payload?.meta?.latencyBudgetFamily === "string" ? payload.meta.latencyBudgetFamily : null,
+    earlyStopReason: typeof payload?.meta?.earlyStopReason === "string" ? payload.meta.earlyStopReason : null,
     reducerFamily: typeof payload?.meta?.reducerFamily === "string" ? payload.meta.reducerFamily : null,
     finalClaimSource: typeof payload?.meta?.finalClaimSource === "string" ? payload.meta.finalClaimSource : null,
     fallbackSuppressedReason: typeof payload?.meta?.fallbackSuppressedReason === "string" ? payload.meta.fallbackSuppressedReason : null,
+    vectorCandidateCount: typeof payload?.meta?.vectorCandidateCount === "number" ? payload.meta.vectorCandidateCount : 0,
+    vectorContributedToFinalSupport: payload?.meta?.vectorContributedToFinalSupport === true,
     stageTimingsMs: stageTimingsFromPayload(payload)
   };
 }
@@ -400,15 +405,29 @@ export async function runAndWriteLoCoMoLatencyTailReview(): Promise<{
   readonly report: LoCoMoLatencyTailReviewReport;
   readonly output: { readonly jsonPath: string; readonly markdownPath: string };
 }> {
+  await runMigrations();
   const generatedAt = new Date().toISOString();
   const stamp = generatedAt.replace(/[:.]/g, "-");
-  const runtime = buildBenchmarkRuntimeMetadata({
+  const runtimeBase = buildBenchmarkRuntimeMetadata({
     benchmarkMode: "sampled",
     sampleControls: {
       suite: "locomo_latency_tail_review",
       scenarioCount: SCENARIOS.length
     }
   });
+  const config = readConfig();
+  let vectorActivation = createBenchmarkVectorActivationAccumulator(
+    "benchmark",
+    config.benchmarkVectorActivationMode,
+    runtimeBase.embeddingProvider,
+    runtimeBase.embeddingModel
+  );
+  const runtime = (): BenchmarkRuntimeMetadata =>
+    buildBenchmarkRuntimeMetadata({
+      benchmarkMode: "sampled",
+      sampleControls: runtimeBase.sampleControls,
+      vectorActivation: buildBenchmarkVectorActivationMetadata(vectorActivation)
+    });
   const raw = await downloadCached(
     "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
     "locomo10.json"
@@ -446,27 +465,31 @@ export async function runAndWriteLoCoMoLatencyTailReview(): Promise<{
       ) as Array<[string, readonly TurnRecord[]]>;
 
       for (const [sessionKey, turns] of sessionEntries) {
-        const sessionPath = path.join(sampleRoot, `${sample.sample_id}-${sessionKey}.md`);
-        const sessionDateTime =
-          typeof sample.conversation[`${sessionKey}_date_time`] === "string"
-            ? parseLoCoMoSessionDateTimeToIso(sample.conversation[`${sessionKey}_date_time`] as string)
-            : null;
-        await writeFile(sessionPath, formatConversationSession(sample, sessionKey, turns), "utf8");
-        await ingestArtifact({
+        const ingestResult = await ingestLoCoMoSessionArtifacts({
+          localBrainRoot: localBrainRoot(),
+          benchmarkName: "locomo_latency_tail_review",
+          corpusRoot: sampleRoot,
           namespaceId,
-          sourceType: "markdown",
-          inputUri: sessionPath,
-          capturedAt: sessionDateTime ?? new Date().toISOString(),
-          metadata: {
-            benchmark: "locomo_latency_tail_review",
-            sample_id: sample.sample_id,
-            session_key: sessionKey
-          },
-          sourceChannel: "benchmark:locomo_latency_tail_review"
+          sample,
+          sessionKey,
+          turns
         });
+        if (ingestResult.imageArtifactCount > 0) {
+          console.log(
+            `[locomo-latency-tail-review] sample=${sample.sample_id} session=${sessionKey} imageArtifacts=${ingestResult.imageArtifactCount} imageDerivations=${ingestResult.derivedImageCount} cacheHits=${ingestResult.imageDerivationCacheHits}`
+          );
+        }
       }
 
       await rebuildTypedMemoryNamespace(namespaceId);
+      vectorActivation = mergeBenchmarkVectorActivation(
+        vectorActivation,
+        await runNamespaceVectorActivation({
+          namespaceId,
+          scope: "benchmark",
+          reason: "benchmark_locomo_latency_tail_review"
+        })
+      );
 
       for (const scenario of sampleScenarios) {
         const qa = sample.qa.find((candidate) => candidate.question === scenario.question);
@@ -495,7 +518,7 @@ export async function runAndWriteLoCoMoLatencyTailReview(): Promise<{
 
     const report: LoCoMoLatencyTailReviewReport = {
       generatedAt,
-      runtime,
+      runtime: runtime(),
       scenarioCount: results.length,
       families,
       scenarios: results

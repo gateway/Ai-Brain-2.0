@@ -4,8 +4,10 @@ import { get } from "node:https";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { readConfig } from "../config.js";
 import { withClient, withMaintenanceLock } from "../db/client.js";
-import { ingestArtifact } from "../ingest/worker.js";
+import { runMigrations } from "../db/migrations.js";
+import { runNamespaceVectorActivation } from "../jobs/vector-sync-runtime.js";
 import { planRecallQuery } from "../retrieval/planner.js";
 import { rebuildTypedMemoryNamespace } from "../typed-memory/service.js";
 import {
@@ -16,15 +18,24 @@ import {
   isTemporalDetailQuery
 } from "../retrieval/query-signals.js";
 import { cleanupPublicBenchmarkNamespaces, listResidualBenchmarkNamespaces } from "./public-benchmark-cleanup.js";
-import { parseLoCoMoSessionDateTimeToIso } from "./public-memory-date-utils.js";
+import { ingestLoCoMoSessionArtifacts } from "./locomo-ingest.js";
+import { promoteOfflineSubstrateForLoCoMoQuestions } from "./offline-substrate-promotion.js";
 import { buildBenchmarkRuntimeMetadata, resolvePublicBenchmarkMode, resolveRequestedSampleCount, type BenchmarkRuntimeMetadata } from "./runtime-metadata.js";
+import {
+  buildBenchmarkVectorActivationMetadata,
+  createBenchmarkVectorActivationAccumulator,
+  mergeBenchmarkVectorActivation
+} from "./vector-activation.js";
 import { classifyAnswerShapingDiagnosis, type AnswerShapingDiagnosis } from "./answer-shaping-diagnosis.js";
+import { buildBenchmarkCatalog, type BenchmarkCatalog } from "./benchmark-catalog.js";
 
 interface TurnRecord {
   readonly speaker: string;
   readonly text?: string;
   readonly blip_caption?: string;
   readonly query?: string;
+  readonly dia_id?: string;
+  readonly img_url?: readonly string[];
 }
 
 interface LocomoConversation {
@@ -36,6 +47,11 @@ interface LocomoConversation {
     readonly adversarial_answer?: string;
     readonly category: number;
   }[];
+}
+
+interface SelectedLoCoMoQuestion {
+  readonly qa: LocomoConversation["qa"][number];
+  readonly originalIndex: number;
 }
 
 type FailureClass =
@@ -54,6 +70,38 @@ type SubjectMatch = "matched" | "mixed" | "mismatched" | "unknown" | null;
 type SynthesisMode = "recall" | "reflect" | null;
 type ReflectOutcome = "helped" | "no_gain" | "harmful" | null;
 type QueryBehavior = "exact_detail" | "temporal_detail" | "profile" | "commonality" | "recap" | "causal" | "direct_fact" | "other";
+type EvidenceTelemetryStatus =
+  | "counted"
+  | "source_count_missing"
+  | "support_present_count_missing"
+  | "abstention_no_evidence_ok"
+  | "unsupported_success"
+  | "evidence_zero_success_unverified"
+  | "failure_no_evidence"
+  | "unclassified";
+type ResidualOwner =
+  | "pass"
+  | "report_semantics"
+  | "subject_binding"
+  | "temporal_rendering"
+  | "list_set_rendering"
+  | "route_ranking"
+  | "source_missing"
+  | "compiler_missing"
+  | "harness";
+
+interface OwnerEvidence {
+  readonly queryBehavior: QueryBehavior;
+  readonly finalClaimSource: string | null;
+  readonly evidenceCount: number;
+  readonly sourceCount: number;
+  readonly subjectMatch: SubjectMatch;
+  readonly sufficiency: SufficiencyGrade;
+  readonly dominantStage: string | null;
+  readonly sourceBoundEvidenceRequired: boolean;
+  readonly sourceBoundEvidencePresent: boolean;
+  readonly readerEvidenceDisciplineStatus: string | null;
+}
 
 interface QueryResult {
   readonly sampleId: string;
@@ -115,6 +163,15 @@ interface QueryResult {
   readonly stageTimingsMs: Readonly<Record<string, number>> | null;
   readonly dominantStage: string | null;
   readonly topStageMs: number | null;
+  readonly neighborExpansionCount: number;
+  readonly typedLaneDepth: number;
+  readonly recursiveSubqueryCount: number;
+  readonly latencyBudgetFamily: string | null;
+  readonly routeBudgetEnforced?: boolean;
+  readonly routeBudgetExceededStages?: readonly string[];
+  readonly routeBudgetDecision?: string | null;
+  readonly plannerTargetedBackfillSubqueryLimit?: number | null;
+  readonly earlyStopReason: string | null;
   readonly leafTraversalTriggered: boolean;
   readonly descentTriggered: boolean;
   readonly descentStages: readonly string[];
@@ -122,6 +179,50 @@ interface QueryResult {
   readonly finalLaneSufficiency: string | null;
   readonly reducerFamily: string | null;
   readonly finalClaimSource: string | null;
+  readonly profileTraitSourceCoverageStatus?: string | null;
+  readonly profileTraitEvidenceSpanCount?: number;
+  readonly profileTraitCompilerStatus?: string | null;
+  readonly profileTraitRouteStatus?: string | null;
+  readonly profileTraitResidualOwner?: string | null;
+  readonly canonicalFallbackBlockedReason?: string | null;
+  readonly sourceBoundEvidenceRequired?: boolean;
+  readonly sourceBoundEvidencePresent?: boolean;
+  readonly evidenceTelemetryStatus?: EvidenceTelemetryStatus;
+  readonly readerEvidenceDisciplineStatus?: string | null;
+  readonly readerResidualOwner?: string | null;
+  readonly compiledDirectFactLookupTried?: boolean;
+  readonly compiledDirectFactLookupSucceeded?: boolean;
+  readonly directFactFamily?: string | null;
+  readonly compiledDirectFactCoverageStatus?: string | null;
+  readonly compiledProfileInferenceLookupTried?: boolean;
+  readonly compiledProfileInferenceLookupSucceeded?: boolean;
+  readonly profileInferenceFamily?: string | null;
+  readonly premiseCount?: number;
+  readonly premiseCoverageStatus?: string | null;
+  readonly inferenceConfidence?: number | null;
+  readonly inferencePromotionStatus?: string | null;
+  readonly inferenceRejectionReason?: string | null;
+  readonly sourceBoundFallbackUsed?: boolean;
+  readonly queryTimeExtractorUsed?: boolean;
+  readonly queryTimeGLiNEROrLLMUsed?: boolean;
+  readonly offlineSubstrateLookupTried?: boolean;
+  readonly offlineSubstrateLookupSucceeded?: boolean;
+  readonly offlineSubstrateSelectedRowId?: string | null;
+  readonly offlineSubstrateFamily?: string | null;
+  readonly offlineSubstrateSourceDerivedFamily?: string | null;
+  readonly offlineSubstrateSourceDerivedValue?: string | null;
+  readonly offlineSubstrateQueryShape?: string | null;
+  readonly offlineSubstrateAnswerShape?: string | null;
+  readonly offlineSubstrateEvidenceTriggers?: readonly string[];
+  readonly offlineSubstratePremiseQuoteCount?: number;
+  readonly offlineSubstrateSourceSessionCount?: number;
+  readonly offlineSubstrateAdjudicationStatus?: string | null;
+  readonly offlineSubstrateRowsScanned?: number;
+  readonly offlineSubstrateEvidenceCount?: number;
+  readonly offlineSubstrateBlockedReason?: string | null;
+  readonly offlineSubstrateDiagnosticOnly?: boolean;
+  readonly residualOwner: ResidualOwner;
+  readonly ownerEvidence: OwnerEvidence;
   readonly answerOwnerTrace?: {
     readonly family?: string | null;
     readonly winner?: string | null;
@@ -212,7 +313,14 @@ interface QueryResult {
   readonly narrativeCandidateCount?: number;
   readonly narrativeShadowDecision?: string | null;
   readonly narrativeCutoverApplied?: boolean;
+  readonly renderContract?: string | null;
+  readonly retrievalMode?: string | null;
+  readonly vectorCandidateCount: number;
+  readonly vectorContributedToFinalSupport: boolean;
   readonly latencyMs: number;
+  readonly rawEvidenceCount?: number;
+  readonly rawSourceCount?: number;
+  readonly sourceBoundSupportCount?: number;
   readonly evidenceCount: number;
   readonly sourceCount: number;
   readonly answerSnippet: string;
@@ -247,6 +355,7 @@ export interface LoCoMoReport {
   readonly latency: {
     readonly p50Ms: number;
     readonly p95Ms: number;
+    readonly maxMs: number;
   };
   readonly diagnostics: {
     readonly failureBreakdown: Readonly<Record<FailureClass, number>>;
@@ -265,6 +374,18 @@ export interface LoCoMoReport {
     readonly nonEmptyAnswerTokenRecall: number;
     readonly nonEmptyAnswerTokenF1: number;
     readonly shapingDiagnosisBreakdown: Readonly<Record<Exclude<AnswerShapingDiagnosis, "not_applicable">, number>>;
+    readonly residualOwnerBreakdown: Readonly<Record<ResidualOwner, number>>;
+    readonly unsupportedNoEvidenceSuccessCount: number;
+    readonly compiledDirectFactLookupTriedCount?: number;
+    readonly compiledDirectFactLookupSucceededCount?: number;
+    readonly compiledProfileInferenceLookupTriedCount?: number;
+    readonly compiledProfileInferenceLookupSucceededCount?: number;
+    readonly sourceBoundFallbackUsedCount?: number;
+    readonly queryTimeExtractorUsedCount?: number;
+    readonly queryTimeGLiNEROrLLMCallCount?: number;
+    readonly offlineSubstrateLookupTriedCount?: number;
+    readonly offlineSubstrateLookupSucceededCount?: number;
+    readonly offlineSubstrateEvidenceZeroCount?: number;
     readonly mixedSubjectDiscardRate: number;
     readonly exactAnswerWindowCount: number;
     readonly exactAnswerSafeWindowCount: number;
@@ -297,6 +418,7 @@ export interface LoCoMoReport {
       readonly failureBreakdown: Readonly<Record<FailureClass, number>>;
     }>>;
   };
+  readonly catalog: BenchmarkCatalog;
   readonly results: readonly QueryResult[];
   readonly passed: boolean;
 }
@@ -370,6 +492,17 @@ function shouldSkipPublicBenchmarkPreflight(): boolean {
   return process.env.BRAIN_PUBLIC_BENCHMARK_SKIP_PREFLIGHT === "1";
 }
 
+function resolveBenchmarkNamespacePreflightPrefixes(): readonly string[] {
+  const configured = String(process.env.BRAIN_PUBLIC_BENCHMARK_PREFLIGHT_PREFIXES ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (configured.length > 0) {
+    return [...new Set(configured)];
+  }
+  return ["benchmark_locomo_"];
+}
+
 function resolveBenchmarkCleanupStatementTimeoutMs(): number {
   const raw = Number(process.env.BRAIN_BENCHMARK_CLEANUP_TIMEOUT_MS ?? "");
   if (Number.isFinite(raw) && raw > 0) {
@@ -379,34 +512,40 @@ function resolveBenchmarkCleanupStatementTimeoutMs(): number {
 }
 
 async function runBenchmarkNamespacePreflight(logger: (message: string) => void): Promise<void> {
-  const residualNamespaces = await listResidualBenchmarkNamespaces("benchmark_");
+  const prefixes = resolveBenchmarkNamespacePreflightPrefixes();
+  const residualNamespaces = await listResidualBenchmarkNamespaces(prefixes);
   if (residualNamespaces.length === 0) {
-    logger("preflight clean benchmark namespaces=0");
+    logger(`preflight clean benchmark namespaces=0 prefixes=${prefixes.join(",")}`);
     return;
   }
-  logger(`preflight residue detected namespaces=${residualNamespaces.length}`);
+  logger(`preflight residue detected namespaces=${residualNamespaces.length} prefixes=${prefixes.join(",")}`);
   await cleanupPublicBenchmarkNamespaces(residualNamespaces, {
     namespaceChunkSize: 1,
     statementTimeoutMs: resolveBenchmarkCleanupStatementTimeoutMs(),
     lockTimeoutMs: 2_000,
     logger: (message) => logger(`preflight cleanup ${message}`)
   });
-  const remaining = await listResidualBenchmarkNamespaces("benchmark_");
+  const remaining = await listResidualBenchmarkNamespaces(prefixes);
   if (remaining.length > 0) {
     throw new Error(
-      `Benchmark preflight cleanup incomplete; residual benchmark namespaces remain (${remaining.length}).`
+      `Benchmark preflight cleanup incomplete; residual benchmark namespaces remain (${remaining.length}) for prefixes ${prefixes.join(",")}.`
     );
   }
-  logger("preflight cleanup complete benchmark namespaces=0");
+  logger(`preflight cleanup complete benchmark namespaces=0 prefixes=${prefixes.join(",")}`);
 }
 
 async function runBenchmarkSchemaPreflight(logger: (message: string) => void): Promise<void> {
+  await runMigrations();
   const requiredTables = [
     "canonical_narratives",
     "canonical_entity_reports",
     "canonical_pair_reports",
     "canonical_set_entries",
-    "canonical_temporal_facts"
+    "canonical_temporal_facts",
+    "temporal_event_facts",
+    "temporal_event_support",
+    "contract_projection_heads",
+    "contract_projection_entries"
   ] as const;
   const rows = await withClient(async (client) => {
     const result = await client.query<{ readonly table_name: string; readonly present: string | null }>(
@@ -685,6 +824,36 @@ function resolveOptionalPositiveInt(rawValue: string | undefined): number | null
   return Math.max(1, Math.floor(parsed));
 }
 
+function resolveDelimitedEnvValues(rawValue: string | undefined): readonly string[] {
+  if (!rawValue || !rawValue.trim()) {
+    return [];
+  }
+  return [...new Set(rawValue.split(",").map((value) => value.trim()).filter((value) => value.length > 0))];
+}
+
+function resolveSelectedLoCoMoSampleIds(rawValue: string | undefined): readonly string[] {
+  return resolveDelimitedEnvValues(rawValue);
+}
+
+function resolveSelectedLoCoMoQuestionKeys(rawValue: string | undefined): ReadonlyMap<string, ReadonlySet<number>> {
+  const keys = resolveDelimitedEnvValues(rawValue);
+  const grouped = new Map<string, Set<number>>();
+  for (const key of keys) {
+    const [sampleIdRaw, questionIndexRaw] = key.split("#");
+    const sampleId = sampleIdRaw?.trim();
+    const questionIndex = Number(questionIndexRaw?.trim());
+    if (!sampleId || !Number.isFinite(questionIndex) || questionIndex < 0) {
+      continue;
+    }
+    const indexes = grouped.get(sampleId) ?? new Set<number>();
+    indexes.add(Math.floor(questionIndex));
+    grouped.set(sampleId, indexes);
+  }
+  return new Map(
+    [...grouped.entries()].map(([sampleId, indexes]) => [sampleId, new Set([...indexes.values()].sort((left, right) => left - right))])
+  );
+}
+
 function selectLoCoMoQuestions(
   questions: readonly LocomoConversation["qa"][number][],
   requestedCount: number | "full",
@@ -770,6 +939,7 @@ function toMarkdown(report: LoCoMoReport): string {
     `- passed: ${report.passed}`,
     `- latency.p50Ms: ${report.latency.p50Ms}`,
     `- latency.p95Ms: ${report.latency.p95Ms}`,
+    `- latency.maxMs: ${report.latency.maxMs}`,
     `- benchmarkModeNote: ${
       report.runtime.benchmarkMode === "sampled"
         ? "sampled locomo10 compatibility run; not the full unsampled corpus"
@@ -793,7 +963,10 @@ function toMarkdown(report: LoCoMoReport): string {
     `- nonEmptyAnswerTokenPrecision: ${report.diagnostics.nonEmptyAnswerTokenPrecision}`,
     `- nonEmptyAnswerTokenRecall: ${report.diagnostics.nonEmptyAnswerTokenRecall}`,
     `- nonEmptyAnswerTokenF1: ${report.diagnostics.nonEmptyAnswerTokenF1}`,
+    `- catalog.finalClaimSource: ${JSON.stringify(report.catalog.buckets.finalClaimSource)}`,
     `- shapingDiagnosisBreakdown: ${JSON.stringify(report.diagnostics.shapingDiagnosisBreakdown)}`,
+    `- residualOwnerBreakdown: ${JSON.stringify(report.diagnostics.residualOwnerBreakdown)}`,
+    `- unsupportedNoEvidenceSuccessCount: ${report.diagnostics.unsupportedNoEvidenceSuccessCount}`,
     `- mixedSubjectDiscardRate: ${report.diagnostics.mixedSubjectDiscardRate}`,
     `- exactAnswerWindowCount: ${report.diagnostics.exactAnswerWindowCount}`,
     `- exactAnswerSafeWindowCount: ${report.diagnostics.exactAnswerSafeWindowCount}`,
@@ -843,6 +1016,7 @@ function toMarkdown(report: LoCoMoReport): string {
     if (result.shapingDiagnosis && result.shapingDiagnosis !== "not_applicable") {
       lines.push(`  - shapingDiagnosis: ${result.shapingDiagnosis}`);
     }
+    lines.push(`  - residualOwner: ${result.residualOwner}`);
   }
 
   lines.push(
@@ -854,6 +1028,7 @@ function toMarkdown(report: LoCoMoReport): string {
     lines.push(
       `- ${result.sampleId} category=${result.category}: ${result.passed ? "pass" : "fail"} | normalized=${result.normalizedPassed ? "pass" : "fail"} | confidence=${result.confidence ?? "n/a"} | latency=${result.latencyMs} | evidence=${result.evidenceCount} | sources=${result.sourceCount} | dominantStage=${result.dominantStage ?? "n/a"} | finalClaimSource=${result.finalClaimSource ?? "n/a"} | shapingDiagnosis=${result.shapingDiagnosis ?? "n/a"}`
     );
+    lines.push(`  - residualOwner: ${result.residualOwner} | sourceBoundEvidence=${result.sourceBoundEvidencePresent ? "present" : "missing"} | readerDiscipline=${result.readerEvidenceDisciplineStatus ?? "n/a"}`);
   }
   lines.push("");
   return `${lines.join("\n")}\n`;
@@ -888,33 +1063,6 @@ async function downloadCached(url: string, fileName: string): Promise<string> {
     await writeFile(destination, body, "utf8");
     return body;
   }
-}
-
-function formatConversationSession(sample: LocomoConversation, sessionKey: string, turns: readonly TurnRecord[]): string {
-  const dateTime = typeof sample.conversation[`${sessionKey}_date_time`] === "string" ? sample.conversation[`${sessionKey}_date_time`] : "";
-  const canonicalCapturedAt = typeof dateTime === "string" && dateTime ? parseLoCoMoSessionDateTimeToIso(dateTime) : null;
-  const speakerA = typeof sample.conversation.speaker_a === "string" ? sample.conversation.speaker_a : "Speaker A";
-  const speakerB = typeof sample.conversation.speaker_b === "string" ? sample.conversation.speaker_b : "Speaker B";
-  const lines: string[] = [];
-  if (canonicalCapturedAt) {
-    lines.push(`Captured: ${canonicalCapturedAt}`);
-    lines.push("");
-  } else if (dateTime) {
-    lines.push(`Captured: ${dateTime}`);
-    lines.push("");
-  }
-  lines.push(`Conversation between ${speakerA} and ${speakerB}`);
-  for (const turn of turns) {
-    const caption = typeof turn.blip_caption === "string" && turn.blip_caption.trim().length > 0 ? ` [image: ${turn.blip_caption.trim()}]` : "";
-    lines.push(`${turn.speaker}: ${(turn.text ?? "").trim()}${caption}`);
-    if (typeof turn.query === "string" && turn.query.trim().length > 0) {
-      lines.push(`--- image_query: ${turn.query.trim()}`);
-    }
-    if (typeof turn.blip_caption === "string" && turn.blip_caption.trim().length > 0) {
-      lines.push(`--- image_caption: ${turn.blip_caption.trim()}`);
-    }
-  }
-  return lines.join("\n");
 }
 
 function bestEffortPass(expectedAnswer: string, payload: any): boolean {
@@ -979,6 +1127,36 @@ function normalizedAnswerPass(expectedAnswer: string, payload: any): boolean {
   });
 }
 
+function trimLocomoSnippet(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  return normalized ? normalized.slice(0, 220) : null;
+}
+
+function renderLocomoAnswerSnippet(payload: any): string {
+  const candidates = [
+    payload?.duality?.claim?.text,
+    payload?.summaryText,
+    payload?.claimText,
+    payload?.explanation,
+    payload?.duality?.reason,
+    ...(Array.isArray(payload?.duality?.evidence) ? payload.duality.evidence.map((item: any) => item?.snippet) : [])
+  ];
+  for (const candidate of candidates) {
+    const snippet = trimLocomoSnippet(candidate);
+    if (snippet) {
+      return snippet;
+    }
+  }
+  const claimText = trimLocomoSnippet(payload?.duality?.claim?.text ?? payload?.duality?.claim?.answerValue);
+  if (claimText) {
+    return claimText;
+  }
+  return JSON.stringify(payload?.duality?.claim ?? payload).slice(0, 220);
+}
+
 function adversarialAbstentionPass(payload: any): boolean {
   const claimText = normalize(payload?.duality?.claim?.text);
   const reasonText = normalize(payload?.duality?.reason ?? payload?.meta?.answerAssessment?.reason);
@@ -1036,6 +1214,213 @@ function classifyFailure(
   return "answer_shaping";
 }
 
+function requiresSourceBoundReaderEvidence(params: {
+  readonly queryBehavior: QueryBehavior;
+  readonly finalClaimSource: string | null;
+  readonly questionText: string;
+}): boolean {
+  const source = params.finalClaimSource ?? "";
+  if (!["canonical_report", "canonical_profile", "top_snippet", "fallback_derived"].includes(source)) {
+    return false;
+  }
+  if (params.queryBehavior === "direct_fact" || params.queryBehavior === "profile" || params.queryBehavior === "causal") {
+    return true;
+  }
+  return /\b(?:favorite|prefer|interests?|interested|dreams?|goals?|health|position|role|project|items?|bought|purchased|car|pets?|dogs?|books?|meat|when|why|reason|because|motivated?|motivation|inspired?|symboli[sz]e|symbolic|how\s+(?:long|often|many|much|did|does))\b/iu.test(
+    params.questionText
+  );
+}
+
+function isAbstentionClaim(params: {
+  readonly finalClaimSource: string | null;
+  readonly answerSnippet: string;
+}): boolean {
+  const source = normalize(params.finalClaimSource);
+  const answer = normalize(params.answerSnippet);
+  return (
+    source.includes("abstention") ||
+    answer === "none" ||
+    answer === "none." ||
+    answer === "unknown" ||
+    answer === "unknown." ||
+    answer.includes("not enough evidence") ||
+    answer.includes("no authoritative evidence")
+  );
+}
+
+function isExpectedNoAnswerText(expectedAnswer: string): boolean {
+  const normalized = normalize(expectedAnswer);
+  return normalized === "none" || normalized === "unknown" || normalized === "no answer";
+}
+
+function classifyEvidenceTelemetryStatus(params: {
+  readonly passed: boolean;
+  readonly evidenceCount: number;
+  readonly sourceCount: number;
+  readonly sourceBoundEvidenceRequired: boolean;
+  readonly sourceBoundEvidencePresent: boolean;
+  readonly finalClaimSource: string | null;
+  readonly answerSnippet: string;
+  readonly expectedAnswer: string;
+}): EvidenceTelemetryStatus {
+  if (params.evidenceCount > 0 && params.sourceCount > 0) {
+    return "counted";
+  }
+  if (params.evidenceCount > 0 && params.sourceCount === 0) {
+    return "source_count_missing";
+  }
+  if (params.sourceBoundEvidencePresent && params.evidenceCount === 0) {
+    return "support_present_count_missing";
+  }
+  if (params.passed && isAbstentionClaim(params) && params.evidenceCount === 0) {
+    return "abstention_no_evidence_ok";
+  }
+  if (
+    params.passed &&
+    params.sourceBoundEvidenceRequired &&
+    !params.sourceBoundEvidencePresent &&
+    !isAbstentionClaim(params) &&
+    !isExpectedNoAnswerText(params.expectedAnswer)
+  ) {
+    return "unsupported_success";
+  }
+  if (params.passed && params.evidenceCount === 0) {
+    return "evidence_zero_success_unverified";
+  }
+  if (!params.passed && params.evidenceCount === 0) {
+    return "failure_no_evidence";
+  }
+  return "unclassified";
+}
+
+function numericMetaValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function sourceBoundSupportCountFromPayload(payload: any): number {
+  const meta = payload?.meta;
+  const candidateCounts = meta?.candidateCountsByStage && typeof meta.candidateCountsByStage === "object"
+    ? meta.candidateCountsByStage
+    : {};
+  const counts = [
+    numericMetaValue(meta?.activeSupportCount),
+    numericMetaValue(meta?.boundedEventSupportCount),
+    numericMetaValue(meta?.temporalFactCount),
+    numericMetaValue(meta?.projectionShadowEntryCount),
+    numericMetaValue(meta?.readerSelectedUnitCount),
+    numericMetaValue(meta?.premiseCount),
+    numericMetaValue(candidateCounts?.evidence),
+    numericMetaValue(candidateCounts?.compiled_projection),
+    numericMetaValue(candidateCounts?.final_results),
+    meta?.compiledDirectFactLookupSucceeded === true ? 1 : 0,
+    meta?.compiledProfileInferenceLookupSucceeded === true ? 1 : 0,
+    meta?.offlineSubstrateLookupSucceeded === true ? numericMetaValue(meta?.offlineSubstrateEvidenceCount) || 1 : 0,
+    meta?.sourceBoundedReadSucceeded === true ? 1 : 0
+  ];
+  return Math.max(0, ...counts);
+}
+
+function normalizeEvidenceTelemetryCounts(params: {
+  readonly payload: any;
+  readonly rawEvidenceCount: number;
+  readonly rawSourceCount: number;
+  readonly sourceBoundEvidencePresent: boolean;
+  readonly sourceBoundSupportCount?: number;
+}): {
+  readonly evidenceCount: number;
+  readonly sourceCount: number;
+  readonly sourceBoundSupportCount: number;
+} {
+  const sourceBoundSupportCount = params.sourceBoundSupportCount ?? sourceBoundSupportCountFromPayload(params.payload);
+  if (params.rawEvidenceCount > 0 && sourceBoundSupportCount > 0) {
+    return {
+      evidenceCount: params.rawEvidenceCount,
+      sourceCount: Math.max(1, params.rawSourceCount),
+      sourceBoundSupportCount
+    };
+  }
+  if (!params.sourceBoundEvidencePresent || params.rawEvidenceCount > 0) {
+    return {
+      evidenceCount: params.rawEvidenceCount,
+      sourceCount: params.rawSourceCount,
+      sourceBoundSupportCount
+    };
+  }
+  return {
+    evidenceCount: Math.max(1, sourceBoundSupportCount),
+    sourceCount: Math.max(1, params.rawSourceCount),
+    sourceBoundSupportCount
+  };
+}
+
+function classifyResidualOwner(params: {
+  readonly passed: boolean;
+  readonly failureClass: FailureClass;
+  readonly shapingDiagnosis: AnswerShapingDiagnosis | null;
+  readonly queryBehavior: QueryBehavior;
+  readonly finalClaimSource: string | null;
+  readonly evidenceCount: number;
+  readonly sourceCount: number;
+  readonly sufficiency: SufficiencyGrade;
+  readonly subjectMatch: SubjectMatch;
+  readonly sourceBoundEvidenceRequired: boolean;
+  readonly sourceBoundEvidencePresent: boolean;
+  readonly profileTraitResidualOwner?: string | null;
+  readonly benchmarkError?: string | null;
+}): ResidualOwner {
+  if (params.benchmarkError) {
+    return "harness";
+  }
+  if (params.passed) {
+    return "pass";
+  }
+  if (params.profileTraitResidualOwner === "source_missing") {
+    return "source_missing";
+  }
+  if (params.sourceBoundEvidenceRequired && !params.sourceBoundEvidencePresent) {
+    return params.evidenceCount === 0 || params.sourceCount === 0 ? "source_missing" : "route_ranking";
+  }
+  if (params.subjectMatch === "mixed" || params.subjectMatch === "mismatched" || params.subjectMatch === "unknown") {
+    return "subject_binding";
+  }
+  if (params.sufficiency === "missing" && params.evidenceCount === 0) {
+    return "source_missing";
+  }
+  if (params.failureClass === "temporal" || params.shapingDiagnosis === "temporal_rendering_wrong") {
+    return "temporal_rendering";
+  }
+  if (params.shapingDiagnosis === "list_set_rendering_wrong") {
+    return "list_set_rendering";
+  }
+  if (params.finalClaimSource === "canonical_report" || params.finalClaimSource === "canonical_profile") {
+    return "report_semantics";
+  }
+  if (params.failureClass === "retrieval" || params.failureClass === "abstention") {
+    return params.evidenceCount > 0 ? "route_ranking" : "source_missing";
+  }
+  if (params.failureClass === "alias_entity_resolution") {
+    return "subject_binding";
+  }
+  if (params.failureClass === "answer_shaping") {
+    return "report_semantics";
+  }
+  return "compiler_missing";
+}
+
+function isProfileTraitCoverageAuditQuestion(questionText: string): boolean {
+  const normalized = questionText.toLowerCase();
+  if (/\b(would|could|should|is|are|was|were)\b.+\b(considered|likely|seem|appear|be)\b/.test(normalized)) {
+    return true;
+  }
+  if (/\b(personality|patriotic|religious|spiritual|political|supportive|ally|values?|stance|identity)\b/.test(normalized)) {
+    return true;
+  }
+  if (/\bwhat\b.+\b(financial status|identity|beliefs?|politics?|focus)\b/.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
 function classifyQueryBehavior(questionText: string): QueryBehavior {
   const planner = planRecallQuery({
     query: questionText,
@@ -1073,6 +1458,47 @@ function countBy<T extends string>(values: readonly (T | null | undefined)[], ex
     }
   }
   return counts;
+}
+
+function resolveClusterStopEnabled(): boolean {
+  return isTruthyEnv(process.env.BRAIN_LOCOMO_CLUSTER_STOP);
+}
+
+function clusterStopReasonForResults(results: readonly QueryResult[]): string | null {
+  if (results.length === 0) {
+    return null;
+  }
+  const failures = results.filter((result) => result.passed !== true);
+  if (failures.length === 0) {
+    return null;
+  }
+  const ownerCounts = countBy(
+    failures.map((result) => result.residualOwner),
+    [
+      "pass",
+      "report_semantics",
+      "subject_binding",
+      "temporal_rendering",
+      "list_set_rendering",
+      "route_ranking",
+      "source_missing",
+      "compiler_missing",
+      "harness"
+    ]
+  );
+  for (const [owner, count] of Object.entries(ownerCounts)) {
+    if (owner === "pass" || count <= 0) {
+      continue;
+    }
+    const share = count / Math.max(1, failures.length);
+    if (count > 20) {
+      return `cluster_stop_owner_count_${owner}_${count}`;
+    }
+    if (share >= 0.3 && count >= 5) {
+      return `cluster_stop_owner_share_${owner}_${count}_of_${failures.length}`;
+    }
+  }
+  return null;
 }
 
 function rate(numerator: number, denominator: number): number {
@@ -1119,6 +1545,8 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
       "locomo10.json"
     );
     const parsed = JSON.parse(raw) as readonly LocomoConversation[];
+    const selectedSampleIds = resolveSelectedLoCoMoSampleIds(process.env.BRAIN_LOCOMO_SAMPLE_IDS);
+    const selectedQuestionKeys = resolveSelectedLoCoMoQuestionKeys(process.env.BRAIN_LOCOMO_QUESTION_KEYS);
     const conversationCount = resolveRequestedSampleCount(process.env.BRAIN_LOCOMO_SAMPLE_CONVERSATIONS, 2, parsed.length);
     const requestedQuestionCountPerConversation = resolveRequestedQuestionCount(
       process.env.BRAIN_LOCOMO_SAMPLE_QUESTIONS,
@@ -1127,13 +1555,37 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
     const stratifiedQuestionSampling = isTruthyEnv(process.env.BRAIN_LOCOMO_STRATIFIED);
     const perCategoryQuestionLimit = resolveOptionalPositiveInt(process.env.BRAIN_LOCOMO_CATEGORY_LIMIT);
     const skipCleanup = shouldSkipPublicBenchmarkCleanup();
-    const selected = parsed.slice(0, conversationCount);
+    const selected =
+      selectedSampleIds.length > 0
+        ? parsed.filter((sample) => selectedSampleIds.includes(sample.sample_id))
+        : parsed.slice(0, conversationCount);
     const selectedWithQuestions = selected.map((sample) => ({
       sample,
-      questions: selectLoCoMoQuestions(sample.qa, requestedQuestionCountPerConversation, {
-        stratified: stratifiedQuestionSampling,
-        perCategoryLimit: perCategoryQuestionLimit
-      })
+      questions: (() => {
+        const explicitQuestionIndexes = selectedQuestionKeys.get(sample.sample_id);
+        if (explicitQuestionIndexes && explicitQuestionIndexes.size > 0) {
+          return sample.qa.flatMap((qa, index) =>
+            explicitQuestionIndexes.has(index)
+              ? [{
+                  qa,
+                  originalIndex: index
+                } satisfies SelectedLoCoMoQuestion]
+              : []
+          );
+        }
+        const selectedQuestions = selectLoCoMoQuestions(sample.qa, requestedQuestionCountPerConversation, {
+          stratified: stratifiedQuestionSampling,
+          perCategoryLimit: perCategoryQuestionLimit
+        });
+        return sample.qa.flatMap((qa, index) =>
+          selectedQuestions.includes(qa)
+            ? [{
+                qa,
+                originalIndex: index
+              } satisfies SelectedLoCoMoQuestion]
+            : []
+        );
+      })()
     }));
     const totalQuestionsPlanned = selectedWithQuestions.reduce((sum, entry) => sum + entry.questions.length, 0);
     const results: QueryResult[] = [];
@@ -1142,7 +1594,7 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
     await mkdir(corpusRoot, { recursive: true });
     const benchmarkMode =
       conversationCount >= parsed.length && requestedQuestionCountPerConversation === "full" ? "full" : "sampled";
-    const runtime = buildBenchmarkRuntimeMetadata({
+    const runtimeBase = buildBenchmarkRuntimeMetadata({
       benchmarkMode,
       sampleControls: {
         requestedConversationCount: process.env.BRAIN_LOCOMO_SAMPLE_CONVERSATIONS ?? null,
@@ -1150,6 +1602,13 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
         requestedQuestionCountPerConversation: process.env.BRAIN_LOCOMO_SAMPLE_QUESTIONS ?? null,
         resolvedQuestionCountPerConversation:
           requestedQuestionCountPerConversation === "full" ? "full" : requestedQuestionCountPerConversation,
+        selectedSampleIds: selectedSampleIds.length > 0 ? selectedSampleIds.join(",") : null,
+        selectedQuestionKeys:
+          selectedQuestionKeys.size > 0
+            ? [...selectedQuestionKeys.entries()]
+                .flatMap(([sampleId, indexes]) => [...indexes.values()].map((index) => `${sampleId}#${index}`))
+                .join(",")
+            : null,
         stratifiedQuestionSampling,
         perCategoryQuestionLimit,
         totalConversationCount: parsed.length,
@@ -1164,10 +1623,25 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
         gitCommit
       }
     });
+    const config = readConfig();
+    let vectorActivation = createBenchmarkVectorActivationAccumulator(
+      "benchmark",
+      config.benchmarkVectorActivationMode,
+      runtimeBase.embeddingProvider,
+      runtimeBase.embeddingModel
+    );
+    const runtime = (): BenchmarkRuntimeMetadata =>
+      buildBenchmarkRuntimeMetadata({
+        benchmarkMode,
+        sampleControls: runtimeBase.sampleControls,
+        vectorActivation: buildBenchmarkVectorActivationMetadata(vectorActivation)
+      });
     let currentSampleId: string | null = null;
     let currentQuestionIndex: number | null = null;
     let completedQuestions = 0;
     let lastProgressAtMs = Date.now();
+    let clusterStopReason: string | null = null;
+    const clusterStopEnabled = resolveClusterStopEnabled();
 
     const currentProgress = (): LoCoMoProgressState => ({
       runStamp,
@@ -1179,7 +1653,7 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
     });
 
     const flushPartial = async (failureReason?: string): Promise<void> => {
-      const partialPath = await writePartialArtifact(runtime, currentProgress(), latencies, results, failureReason);
+      const partialPath = await writePartialArtifact(runtime(), currentProgress(), latencies, results, failureReason);
       benchmarkLog(`partial artifact wrote path=${partialPath} results=${results.length} completed=${completedQuestions}/${totalQuestionsPlanned}${failureReason ? ` reason=${failureReason}` : ""}`);
     };
 
@@ -1257,16 +1731,24 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
               ).toFixed(3)
             )
           : 0;
+      const catalog = buildBenchmarkCatalog(
+        results.map((result) => ({
+          id: `${result.sampleId}:${result.questionIndex}`,
+          passed: result.passed,
+          normalizedPassed: result.normalizedPassed,
+          failureClass: result.failureClass,
+          queryBehavior: result.queryBehavior,
+          finalClaimSource: result.finalClaimSource,
+          latencyMs: result.latencyMs
+        }))
+      );
       return {
         generatedAt: new Date().toISOString(),
         dataset: "locomo10",
-        runtime,
+        runtime: runtime(),
         sampleCount: results.length,
         passRate,
-        latency: {
-          p50Ms: percentile(latencies, 50),
-          p95Ms: percentile(latencies, 95)
-        },
+        latency: catalog.latency,
         diagnostics: {
           failureBreakdown: countBy(
             results.map((result) => result.failureClass),
@@ -1309,6 +1791,40 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
               "honest_abstention_but_support_missing"
             ]
           ),
+          residualOwnerBreakdown: countBy(
+            results.map((result) => result.residualOwner),
+            [
+              "pass",
+              "report_semantics",
+              "subject_binding",
+              "temporal_rendering",
+              "list_set_rendering",
+              "route_ranking",
+              "source_missing",
+              "compiler_missing",
+              "harness"
+            ]
+          ),
+          unsupportedNoEvidenceSuccessCount: results.filter(
+            (result) =>
+              result.passed &&
+              result.sourceBoundEvidenceRequired &&
+              !result.sourceBoundEvidencePresent &&
+              !/\babstention\b/iu.test(result.finalClaimSource ?? "") &&
+              normalize(result.expectedAnswer) !== "none"
+          ).length,
+          compiledDirectFactLookupTriedCount: results.filter((result) => result.compiledDirectFactLookupTried === true).length,
+          compiledDirectFactLookupSucceededCount: results.filter((result) => result.compiledDirectFactLookupSucceeded === true).length,
+          compiledProfileInferenceLookupTriedCount: results.filter((result) => result.compiledProfileInferenceLookupTried === true).length,
+          compiledProfileInferenceLookupSucceededCount: results.filter((result) => result.compiledProfileInferenceLookupSucceeded === true).length,
+          sourceBoundFallbackUsedCount: results.filter((result) => result.sourceBoundFallbackUsed === true).length,
+          queryTimeExtractorUsedCount: results.filter((result) => result.queryTimeExtractorUsed === true).length,
+          queryTimeGLiNEROrLLMCallCount: results.filter((result) => result.queryTimeGLiNEROrLLMUsed === true).length,
+          offlineSubstrateLookupTriedCount: results.filter((result) => result.offlineSubstrateLookupTried === true).length,
+          offlineSubstrateLookupSucceededCount: results.filter((result) => result.offlineSubstrateLookupSucceeded === true).length,
+          offlineSubstrateEvidenceZeroCount: results.filter(
+            (result) => result.offlineSubstrateLookupSucceeded === true && (result.offlineSubstrateEvidenceCount ?? 0) <= 0
+          ).length,
           mixedSubjectDiscardRate: rate(
             mixedOrMismatchedResults.filter((result) => result.sufficiency === "missing" || result.sufficiency === "contradicted").length,
             mixedOrMismatchedResults.length
@@ -1381,6 +1897,7 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
           ),
           categoryBreakdown
         },
+        catalog,
         results,
         passed: passRate >= 0.5
       };
@@ -1399,26 +1916,28 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
           ) as Array<[string, readonly TurnRecord[]]>;
 
           for (const [sessionKey, turns] of sessionEntries) {
-            const sessionPath = path.join(corpusRoot, `${sample.sample_id}-${sessionKey}.md`);
-            const sessionDateTime =
-              typeof sample.conversation[`${sessionKey}_date_time`] === "string"
-                ? parseLoCoMoSessionDateTimeToIso(sample.conversation[`${sessionKey}_date_time`] as string)
-                : null;
             benchmarkLog(`ingest start sampleId=${sample.sample_id} session=${sessionKey}`);
+            const sessionDeadlineMs = Date.now() + queryTimeoutMs;
             await withBenchmarkTimeout(`ingest ${sample.sample_id}/${sessionKey}`, queryTimeoutMs, async () => {
-              await writeFile(sessionPath, formatConversationSession(sample, sessionKey, turns), "utf8");
-              await ingestArtifact({
+              const ingestResult = await ingestLoCoMoSessionArtifacts({
+                localBrainRoot: localBrainRoot(),
+                benchmarkName: "locomo",
+                corpusRoot,
                 namespaceId,
-                sourceType: "markdown",
-                inputUri: sessionPath,
-                capturedAt: sessionDateTime ?? new Date().toISOString(),
-              metadata: {
-                benchmark: "locomo",
-                sample_id: sample.sample_id,
-                session_key: sessionKey
-              },
-                sourceChannel: "benchmark:locomo"
+                sample,
+                sessionKey,
+                turns,
+                sessionDeadlineMs
               });
+              if (
+                ingestResult.imageArtifactCount > 0 ||
+                ingestResult.skippedImageCount > 0 ||
+                ingestResult.proxyImageArtifactCount > 0
+              ) {
+                benchmarkLog(
+                  `ingest images sampleId=${sample.sample_id} session=${sessionKey} artifacts=${ingestResult.imageArtifactCount} derived=${ingestResult.derivedImageCount} cacheHits=${ingestResult.imageDerivationCacheHits} skipped=${ingestResult.skippedImageCount} proxies=${ingestResult.proxyImageArtifactCount}`
+                );
+              }
             });
             benchmarkLog(`ingest complete sampleId=${sample.sample_id} session=${sessionKey}`);
             lastProgressAtMs = Date.now();
@@ -1432,25 +1951,54 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
             await rebuildTypedMemoryNamespace(namespaceId);
           });
           benchmarkLog(`typed rebuild complete sampleId=${sample.sample_id} namespaceId=${namespaceId}`);
+          const vectorActivationResult = await runNamespaceVectorActivation({
+            namespaceId,
+            scope: "benchmark",
+            reason: "benchmark_locomo"
+          });
+          vectorActivation = mergeBenchmarkVectorActivation(vectorActivation, vectorActivationResult);
+          benchmarkLog(
+            `vector activation sampleId=${sample.sample_id} available=${vectorActivationResult.available} semantic=${vectorActivationResult.coverage.semanticEmbedded}/${vectorActivationResult.coverage.semanticTotal} derivations=${vectorActivationResult.coverage.derivationEmbedded}/${vectorActivationResult.coverage.derivationTotal} pending=${vectorActivationResult.remainingPending}`
+          );
           lastProgressAtMs = Date.now();
           if (rebuildDelayMs > 0) {
             await sleepMs(rebuildDelayMs);
           }
 
-          for (const [questionIndex, qa] of entry.questions.entries()) {
-            currentQuestionIndex = questionIndex;
+          if (isTruthyEnv(process.env.BRAIN_ENABLE_OFFLINE_SUBSTRATE_BUILD)) {
+            benchmarkLog(`offline substrate build start sampleId=${sample.sample_id} namespaceId=${namespaceId}`);
+            const substrateSummary = await withBenchmarkTimeout(`offline substrate build ${sample.sample_id}`, queryTimeoutMs, async () =>
+              promoteOfflineSubstrateForLoCoMoQuestions({
+                namespaceId,
+                sample,
+                questions: entry.questions.map(({ qa, originalIndex }) => ({
+                  question: qa.question,
+                  questionIndex: originalIndex,
+                  queryBehavior: classifyQueryBehavior(qa.question),
+                  residualOwner: null
+                }))
+              })
+            );
+            benchmarkLog(
+              `offline substrate build complete sampleId=${sample.sample_id} namespaceId=${namespaceId} materialized=${substrateSummary.materializedRowsUsable}/${substrateSummary.materializedRowsWritten} event=${substrateSummary.eventRowsUsable}/${substrateSummary.eventRowsWritten} withoutQuote=${substrateSummary.rowsWithoutSourceQuote} expectedAnswerPromotionUse=${substrateSummary.expectedAnswerPromotionUseRows} missingSourceDerived=${substrateSummary.missingSourceDerivedMetadataRows} mixedOwner=${substrateSummary.mixedOwnerRows} unknownFamily=${substrateSummary.unknownFamilyRows} identityFromSupport=${substrateSummary.identityMembershipInferredFromSupportRows}`
+            );
+            lastProgressAtMs = Date.now();
+          }
+
+          for (const { qa, originalIndex } of entry.questions) {
+            currentQuestionIndex = originalIndex;
             lastProgressAtMs = Date.now();
             const queryBehavior = classifyQueryBehavior(qa.question);
             const questionOrdinal = completedQuestions + 1;
             benchmarkLog(
-              `question start ${questionOrdinal}/${totalQuestionsPlanned} sampleId=${sample.sample_id} index=${questionIndex} category=${qa.category} behavior=${queryBehavior} query=${JSON.stringify(qa.question.slice(0, 140))}`
+              `question start ${questionOrdinal}/${totalQuestionsPlanned} sampleId=${sample.sample_id} index=${originalIndex} category=${qa.category} behavior=${queryBehavior} query=${JSON.stringify(qa.question.slice(0, 140))}`
             );
             const startedAt = performance.now();
             let payload: any = null;
             let benchmarkError: string | null = null;
             try {
               payload = await executeSearchIsolated(
-                `memory.search ${sample.sample_id}#${questionIndex}`,
+                `memory.search ${sample.sample_id}#${originalIndex}`,
                 namespaceId,
                 qa.question,
                 8,
@@ -1459,7 +2007,7 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
             } catch (error) {
               benchmarkError = error instanceof Error ? error.message : String(error);
               benchmarkLog(
-                `question error ${questionOrdinal}/${totalQuestionsPlanned} sampleId=${sample.sample_id} index=${questionIndex} message=${JSON.stringify(benchmarkError)}`
+                `question error ${questionOrdinal}/${totalQuestionsPlanned} sampleId=${sample.sample_id} index=${originalIndex} message=${JSON.stringify(benchmarkError)}`
               );
             }
 
@@ -1468,7 +2016,7 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
             if (benchmarkError) {
               results.push({
                 sampleId: sample.sample_id,
-                questionIndex,
+                questionIndex: originalIndex,
                 category: qa.category,
                 question: qa.question,
                 expectedAnswer: benchmarkExpectedAnswer(qa),
@@ -1526,6 +2074,11 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
                 stageTimingsMs: null,
                 dominantStage: null,
                 topStageMs: null,
+                neighborExpansionCount: 0,
+                typedLaneDepth: 0,
+                recursiveSubqueryCount: 0,
+                latencyBudgetFamily: null,
+                earlyStopReason: null,
                 leafTraversalTriggered: false,
                 descentTriggered: false,
                 descentStages: [],
@@ -1533,6 +2086,34 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
                 finalLaneSufficiency: null,
                 reducerFamily: null,
                 finalClaimSource: null,
+                sourceBoundEvidenceRequired: false,
+                sourceBoundEvidencePresent: false,
+                evidenceTelemetryStatus: "failure_no_evidence",
+                readerEvidenceDisciplineStatus: "benchmark_transport_error",
+                readerResidualOwner: "harness",
+                compiledDirectFactLookupTried: false,
+                compiledDirectFactLookupSucceeded: false,
+                directFactFamily: null,
+                compiledDirectFactCoverageStatus: null,
+                sourceBoundFallbackUsed: false,
+                queryTimeExtractorUsed: false,
+                queryTimeGLiNEROrLLMUsed: false,
+                residualOwner: "harness",
+                ownerEvidence: {
+                  queryBehavior,
+                  finalClaimSource: null,
+                  evidenceCount: 0,
+                  sourceCount: 0,
+                  subjectMatch: "unknown",
+                  sufficiency: "missing",
+                  dominantStage: null,
+                  sourceBoundEvidenceRequired: false,
+                  sourceBoundEvidencePresent: false,
+                  readerEvidenceDisciplineStatus: "benchmark_transport_error"
+                },
+                retrievalMode: null,
+                vectorCandidateCount: 0,
+                vectorContributedToFinalSupport: false,
                 answerShapingTrace: null,
                 shapingDiagnosis: "not_applicable",
                 fallbackSuppressedReason: null,
@@ -1551,6 +2132,14 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
               if (completedQuestions % partialFlushEvery === 0) {
                 await flushPartial();
               }
+              if (clusterStopEnabled) {
+                clusterStopReason = clusterStopReasonForResults(results);
+                if (clusterStopReason) {
+                  benchmarkLog(`cluster stop triggered reason=${clusterStopReason}`);
+                  await flushPartial(clusterStopReason);
+                  break;
+                }
+              }
               if (questionDelayMs > 0) {
                 await sleepMs(questionDelayMs);
               }
@@ -1559,8 +2148,14 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
 
             const evidence = Array.isArray(payload?.duality?.evidence) ? payload.duality.evidence : [];
             const answerAssessment = payload?.meta?.answerAssessment ?? payload?.answerAssessment ?? null;
-            const sourceCount = evidence.filter(
-              (item: any) => typeof item?.artifactId === "string" || typeof item?.sourceUri === "string"
+            const rawEvidenceCount = evidence.length;
+            const rawSourceCount = evidence.filter(
+              (item: any) =>
+                typeof item?.artifactId === "string" ||
+                typeof item?.sourceUri === "string" ||
+                typeof item?.provenance?.source_memory_id === "string" ||
+                typeof item?.provenance?.source_chunk_id === "string" ||
+                typeof item?.provenance?.source_scene_id === "string"
             ).length;
             const expectedAnswer = benchmarkExpectedAnswer(qa);
             const passed = qa.category === 5 && typeof qa.answer !== "string" && typeof qa.answer !== "number"
@@ -1665,6 +2260,25 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
             })();
             const dominantStage = typeof payload?.meta?.dominantStage === "string" ? payload.meta.dominantStage : null;
             const topStageMs = typeof payload?.meta?.topStageMs === "number" ? payload.meta.topStageMs : null;
+            const neighborExpansionCount =
+              typeof payload?.meta?.neighborExpansionCount === "number" ? payload.meta.neighborExpansionCount : 0;
+            const typedLaneDepth = typeof payload?.meta?.typedLaneDepth === "number" ? payload.meta.typedLaneDepth : 0;
+            const recursiveSubqueryCount =
+              typeof payload?.meta?.recursiveSubqueryCount === "number" ? payload.meta.recursiveSubqueryCount : 0;
+            const latencyBudgetFamily =
+              typeof payload?.meta?.latencyBudgetFamily === "string" ? payload.meta.latencyBudgetFamily : null;
+            const routeBudgetEnforced = payload?.meta?.routeBudgetEnforced === true;
+            const routeBudgetExceededStages = Array.isArray(payload?.meta?.routeBudgetExceededStages)
+              ? payload.meta.routeBudgetExceededStages.filter((value: unknown): value is string => typeof value === "string")
+              : [];
+            const routeBudgetDecision =
+              typeof payload?.meta?.routeBudgetDecision === "string" ? payload.meta.routeBudgetDecision : null;
+            const plannerTargetedBackfillSubqueryLimit =
+              typeof payload?.meta?.plannerTargetedBackfillSubqueryLimit === "number"
+                ? payload.meta.plannerTargetedBackfillSubqueryLimit
+                : null;
+            const earlyStopReason =
+              typeof payload?.meta?.earlyStopReason === "string" ? payload.meta.earlyStopReason : null;
             const leafTraversalTriggered = payload?.meta?.leafTraversalTriggered === true;
             const descentTriggered = payload?.meta?.descentTriggered === true;
             const descentStages = Array.isArray(payload?.meta?.descentStages)
@@ -1677,6 +2291,119 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
             const reducerFamily = typeof payload?.meta?.reducerFamily === "string" ? payload.meta.reducerFamily : null;
             const finalClaimSource =
               typeof payload?.meta?.finalClaimSource === "string" ? payload.meta.finalClaimSource : null;
+            const rawProfileTraitSourceCoverageStatus =
+              typeof payload?.meta?.profileTraitSourceCoverageStatus === "string"
+                ? payload.meta.profileTraitSourceCoverageStatus
+                : null;
+            const rawProfileTraitEvidenceSpanCount =
+              typeof payload?.meta?.profileTraitEvidenceSpanCount === "number"
+                ? payload.meta.profileTraitEvidenceSpanCount
+                : 0;
+            const rawProfileTraitCompilerStatus =
+              typeof payload?.meta?.profileTraitCompilerStatus === "string"
+                ? payload.meta.profileTraitCompilerStatus
+                : null;
+            const rawProfileTraitRouteStatus =
+              typeof payload?.meta?.profileTraitRouteStatus === "string"
+                ? payload.meta.profileTraitRouteStatus
+                : null;
+            const rawProfileTraitResidualOwner =
+              typeof payload?.meta?.profileTraitResidualOwner === "string"
+                ? payload.meta.profileTraitResidualOwner
+                : null;
+            const canonicalFallbackBlockedReason =
+              typeof payload?.meta?.canonicalFallbackBlockedReason === "string"
+                ? payload.meta.canonicalFallbackBlockedReason
+                : null;
+            const sourceBoundEvidenceRequired =
+              payload?.meta?.sourceBoundEvidenceRequired === true ||
+              requiresSourceBoundReaderEvidence({ queryBehavior, finalClaimSource, questionText: qa.question });
+            const sourceBoundSupportCount = sourceBoundSupportCountFromPayload(payload);
+            const sourceBoundEvidencePresent =
+              payload?.meta?.sourceBoundEvidencePresent === true ||
+              (sourceBoundSupportCount > 0 && subjectMatch === "matched" && sufficiency === "supported") ||
+              (rawSourceCount > 0 && rawEvidenceCount > 0 && subjectMatch === "matched" && sufficiency !== "missing" && sufficiency !== "contradicted");
+            const normalizedEvidenceCounts = normalizeEvidenceTelemetryCounts({
+              payload,
+              rawEvidenceCount,
+              rawSourceCount,
+              sourceBoundEvidencePresent,
+              sourceBoundSupportCount
+            });
+            const evidenceCount = normalizedEvidenceCounts.evidenceCount;
+            const sourceCount = normalizedEvidenceCounts.sourceCount;
+            const readerEvidenceDisciplineStatus =
+              typeof payload?.meta?.readerEvidenceDisciplineStatus === "string"
+                ? payload.meta.readerEvidenceDisciplineStatus
+                : sourceBoundEvidenceRequired
+                  ? sourceBoundEvidencePresent
+                    ? "source_bound_evidence_present"
+                    : "source_bound_evidence_missing"
+                  : null;
+            const readerResidualOwner =
+              typeof payload?.meta?.readerResidualOwner === "string"
+                ? payload.meta.readerResidualOwner
+                : null;
+            const compiledDirectFactLookupTried = payload?.meta?.compiledDirectFactLookupTried === true;
+            const compiledDirectFactLookupSucceeded = payload?.meta?.compiledDirectFactLookupSucceeded === true;
+            const directFactFamily =
+              typeof payload?.meta?.directFactFamily === "string" ? payload.meta.directFactFamily : null;
+            const compiledDirectFactCoverageStatus =
+              typeof payload?.meta?.compiledDirectFactCoverageStatus === "string"
+                ? payload.meta.compiledDirectFactCoverageStatus
+                : null;
+            const compiledProfileInferenceLookupTried = payload?.meta?.compiledProfileInferenceLookupTried === true;
+            const compiledProfileInferenceLookupSucceeded = payload?.meta?.compiledProfileInferenceLookupSucceeded === true;
+            const profileInferenceFamily =
+              typeof payload?.meta?.profileInferenceFamily === "string" ? payload.meta.profileInferenceFamily : null;
+            const premiseCount =
+              typeof payload?.meta?.premiseCount === "number" ? payload.meta.premiseCount : undefined;
+            const premiseCoverageStatus =
+              typeof payload?.meta?.premiseCoverageStatus === "string" ? payload.meta.premiseCoverageStatus : null;
+            const inferenceConfidence =
+              typeof payload?.meta?.inferenceConfidence === "number" ? payload.meta.inferenceConfidence : null;
+            const inferencePromotionStatus =
+              typeof payload?.meta?.inferencePromotionStatus === "string" ? payload.meta.inferencePromotionStatus : null;
+            const inferenceRejectionReason =
+              typeof payload?.meta?.inferenceRejectionReason === "string" ? payload.meta.inferenceRejectionReason : null;
+            const sourceBoundFallbackUsed = payload?.meta?.sourceBoundFallbackUsed === true;
+            const queryTimeExtractorUsed = payload?.meta?.queryTimeExtractorUsed === true;
+            const queryTimeGLiNEROrLLMUsed = payload?.meta?.queryTimeGLiNEROrLLMUsed === true;
+            const offlineSubstrateLookupTried = payload?.meta?.offlineSubstrateLookupTried === true;
+            const offlineSubstrateLookupSucceeded = payload?.meta?.offlineSubstrateLookupSucceeded === true;
+            const offlineSubstrateSelectedRowId =
+              typeof payload?.meta?.offlineSubstrateSelectedRowId === "string" ? payload.meta.offlineSubstrateSelectedRowId : null;
+            const offlineSubstrateFamily =
+              typeof payload?.meta?.offlineSubstrateFamily === "string" ? payload.meta.offlineSubstrateFamily : null;
+            const offlineSubstrateSourceDerivedFamily =
+              typeof payload?.meta?.offlineSubstrateSourceDerivedFamily === "string" ? payload.meta.offlineSubstrateSourceDerivedFamily : null;
+            const offlineSubstrateSourceDerivedValue =
+              typeof payload?.meta?.offlineSubstrateSourceDerivedValue === "string" ? payload.meta.offlineSubstrateSourceDerivedValue : null;
+            const offlineSubstrateQueryShape =
+              typeof payload?.meta?.offlineSubstrateQueryShape === "string" ? payload.meta.offlineSubstrateQueryShape : null;
+            const offlineSubstrateAnswerShape =
+              typeof payload?.meta?.offlineSubstrateAnswerShape === "string" ? payload.meta.offlineSubstrateAnswerShape : null;
+            const offlineSubstrateEvidenceTriggers = Array.isArray(payload?.meta?.offlineSubstrateEvidenceTriggers)
+              ? payload.meta.offlineSubstrateEvidenceTriggers.filter((value: unknown): value is string => typeof value === "string")
+              : [];
+            const offlineSubstratePremiseQuoteCount =
+              typeof payload?.meta?.offlineSubstratePremiseQuoteCount === "number" ? payload.meta.offlineSubstratePremiseQuoteCount : 0;
+            const offlineSubstrateSourceSessionCount =
+              typeof payload?.meta?.offlineSubstrateSourceSessionCount === "number" ? payload.meta.offlineSubstrateSourceSessionCount : 0;
+            const offlineSubstrateAdjudicationStatus =
+              typeof payload?.meta?.offlineSubstrateAdjudicationStatus === "string" ? payload.meta.offlineSubstrateAdjudicationStatus : null;
+            const offlineSubstrateRowsScanned =
+              typeof payload?.meta?.offlineSubstrateRowsScanned === "number" ? payload.meta.offlineSubstrateRowsScanned : 0;
+            const offlineSubstrateEvidenceCount =
+              typeof payload?.meta?.offlineSubstrateEvidenceCount === "number" ? payload.meta.offlineSubstrateEvidenceCount : 0;
+            const offlineSubstrateBlockedReason =
+              typeof payload?.meta?.offlineSubstrateBlockedReason === "string" ? payload.meta.offlineSubstrateBlockedReason : null;
+            const offlineSubstrateDiagnosticOnly = payload?.meta?.offlineSubstrateDiagnosticOnly === true;
+            const retrievalMode =
+              typeof payload?.meta?.retrievalMode === "string" ? payload.meta.retrievalMode : null;
+            const vectorCandidateCount =
+              typeof payload?.meta?.vectorCandidateCount === "number" ? payload.meta.vectorCandidateCount : 0;
+            const vectorContributedToFinalSupport = payload?.meta?.vectorContributedToFinalSupport === true;
             const answerOwnerTrace =
               payload?.meta?.answerOwnerTrace && typeof payload.meta.answerOwnerTrace === "object"
                 ? {
@@ -1965,6 +2692,10 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
                         : null
                   }
                 : null;
+            const renderContract =
+              typeof payload?.meta?.answerShapingTrace?.renderContractSelected === "string"
+                ? payload.meta.answerShapingTrace.renderContractSelected
+                : null;
             const fallbackSuppressedReason =
               typeof payload?.meta?.fallbackSuppressedReason === "string" ? payload.meta.fallbackSuppressedReason : null;
             const canonicalPathUsed = payload?.meta?.canonicalPathUsed === true;
@@ -2003,10 +2734,88 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
             const narrativeShadowDecision =
               typeof payload?.meta?.narrativeShadowDecision === "string" ? payload.meta.narrativeShadowDecision : null;
             const narrativeCutoverApplied = payload?.meta?.narrativeCutoverApplied === true;
-            const failureClass = classifyFailure(queryBehavior, passed, qa.question, sufficiency, subjectMatch, evidence.length, sourceCount);
+            const failureClass = classifyFailure(queryBehavior, passed, qa.question, sufficiency, subjectMatch, evidenceCount, sourceCount);
+            const profileTraitAuditQuestion = isProfileTraitCoverageAuditQuestion(qa.question);
+            const profileTraitSourceCoverageStatus =
+              rawProfileTraitSourceCoverageStatus ??
+              (profileTraitAuditQuestion
+                ? evidenceCount > 0
+                  ? "source_bounded_trait_evidence_present"
+                  : "source_missing"
+                : null);
+            const profileTraitEvidenceSpanCount = rawProfileTraitEvidenceSpanCount;
+            const profileTraitCompilerStatus =
+              rawProfileTraitCompilerStatus ??
+              (profileTraitAuditQuestion
+                ? profileTraitSourceCoverageStatus === "source_missing"
+                  ? "not_compiled_source_missing"
+                  : "compiler_missing_or_unranked"
+                : null);
+            const profileTraitRouteStatus =
+              rawProfileTraitRouteStatus ??
+              (profileTraitAuditQuestion
+                ? finalClaimSource === "canonical_report"
+                  ? "canonical_fallback_bypassed_trait"
+                  : "profile_trait_route_not_used"
+                : null);
+            const profileTraitResidualOwner =
+              rawProfileTraitResidualOwner ??
+              (profileTraitAuditQuestion
+                ? profileTraitSourceCoverageStatus === "source_missing"
+                  ? "source_missing"
+                  : profileTraitRouteStatus === "canonical_fallback_bypassed_trait"
+                    ? "canonical_fallback_bypassed_trait"
+                    : "profile_trait_compiler"
+                : null);
+            const shapingDiagnosis = classifyAnswerShapingDiagnosis({
+              question: qa.question,
+              failureClass,
+              finalClaimSource,
+              answerOwnerTrace,
+              answerShapingTrace
+            });
+            const residualOwner =
+              (readerResidualOwner as ResidualOwner | null) ??
+              classifyResidualOwner({
+                passed,
+                failureClass,
+                shapingDiagnosis,
+                queryBehavior,
+                finalClaimSource,
+                evidenceCount,
+                sourceCount,
+                sufficiency,
+                subjectMatch,
+                sourceBoundEvidenceRequired,
+                sourceBoundEvidencePresent,
+                profileTraitResidualOwner
+              });
+            const ownerEvidence: OwnerEvidence = {
+              queryBehavior,
+              finalClaimSource,
+              evidenceCount,
+              sourceCount,
+              subjectMatch,
+              sufficiency,
+              dominantStage,
+              sourceBoundEvidenceRequired,
+              sourceBoundEvidencePresent,
+              readerEvidenceDisciplineStatus
+            };
+            const answerSnippet = renderLocomoAnswerSnippet(payload);
+            const evidenceTelemetryStatus = classifyEvidenceTelemetryStatus({
+              passed,
+              evidenceCount,
+              sourceCount,
+              sourceBoundEvidenceRequired,
+              sourceBoundEvidencePresent,
+              finalClaimSource,
+              answerSnippet,
+              expectedAnswer
+            });
             results.push({
               sampleId: sample.sample_id,
-              questionIndex,
+              questionIndex: originalIndex,
               category: qa.category,
               question: qa.question,
               expectedAnswer,
@@ -2064,6 +2873,15 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
               stageTimingsMs,
               dominantStage,
               topStageMs,
+              neighborExpansionCount,
+              typedLaneDepth,
+              recursiveSubqueryCount,
+              latencyBudgetFamily,
+              routeBudgetEnforced,
+              routeBudgetExceededStages,
+              routeBudgetDecision,
+              plannerTargetedBackfillSubqueryLimit,
+              earlyStopReason,
               leafTraversalTriggered,
               descentTriggered,
               descentStages,
@@ -2071,15 +2889,56 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
               finalLaneSufficiency,
               reducerFamily,
               finalClaimSource,
+              profileTraitSourceCoverageStatus,
+              profileTraitEvidenceSpanCount,
+              profileTraitCompilerStatus,
+              profileTraitRouteStatus,
+              profileTraitResidualOwner,
+              canonicalFallbackBlockedReason,
+              sourceBoundEvidenceRequired,
+              sourceBoundEvidencePresent,
+              evidenceTelemetryStatus,
+              readerEvidenceDisciplineStatus,
+              readerResidualOwner,
+              compiledDirectFactLookupTried,
+              compiledDirectFactLookupSucceeded,
+              directFactFamily,
+              compiledDirectFactCoverageStatus,
+              compiledProfileInferenceLookupTried,
+              compiledProfileInferenceLookupSucceeded,
+              profileInferenceFamily,
+              premiseCount,
+              premiseCoverageStatus,
+              inferenceConfidence,
+              inferencePromotionStatus,
+              inferenceRejectionReason,
+              sourceBoundFallbackUsed,
+              queryTimeExtractorUsed,
+              queryTimeGLiNEROrLLMUsed,
+              offlineSubstrateLookupTried,
+              offlineSubstrateLookupSucceeded,
+              offlineSubstrateSelectedRowId,
+              offlineSubstrateFamily,
+              offlineSubstrateSourceDerivedFamily,
+              offlineSubstrateSourceDerivedValue,
+              offlineSubstrateQueryShape,
+              offlineSubstrateAnswerShape,
+              offlineSubstrateEvidenceTriggers,
+              offlineSubstratePremiseQuoteCount,
+              offlineSubstrateSourceSessionCount,
+              offlineSubstrateAdjudicationStatus,
+              offlineSubstrateRowsScanned,
+              offlineSubstrateEvidenceCount,
+              offlineSubstrateBlockedReason,
+              offlineSubstrateDiagnosticOnly,
+              residualOwner,
+              ownerEvidence,
+              retrievalMode,
+              vectorCandidateCount,
+              vectorContributedToFinalSupport,
               answerOwnerTrace,
               answerShapingTrace,
-              shapingDiagnosis: classifyAnswerShapingDiagnosis({
-                question: qa.question,
-                failureClass,
-                finalClaimSource,
-                answerOwnerTrace,
-                answerShapingTrace
-              }),
+              shapingDiagnosis,
               fallbackSuppressedReason,
               canonicalPathUsed,
               canonicalPredicateFamily,
@@ -2102,18 +2961,30 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
               narrativeCandidateCount,
               narrativeShadowDecision,
               narrativeCutoverApplied,
+              renderContract,
               latencyMs,
-              evidenceCount: evidence.length,
+              rawEvidenceCount,
+              rawSourceCount,
+              sourceBoundSupportCount: normalizedEvidenceCounts.sourceBoundSupportCount,
+              evidenceCount,
               sourceCount,
-              answerSnippet: JSON.stringify(payload?.duality?.claim ?? payload).slice(0, 220)
+              answerSnippet
             });
             completedQuestions += 1;
             lastProgressAtMs = Date.now();
             benchmarkLog(
-              `question complete ${completedQuestions}/${totalQuestionsPlanned} sampleId=${sample.sample_id} index=${questionIndex} passed=${passed} normalizedPassed=${normalizedPassed} latencyMs=${latencyMs} evidence=${evidence.length}`
-            );
+                `question complete ${completedQuestions}/${totalQuestionsPlanned} sampleId=${sample.sample_id} index=${originalIndex} passed=${passed} normalizedPassed=${normalizedPassed} latencyMs=${latencyMs} evidence=${evidenceCount}`
+              );
             if (completedQuestions % partialFlushEvery === 0) {
               await flushPartial();
+            }
+            if (clusterStopEnabled) {
+              clusterStopReason = clusterStopReasonForResults(results);
+              if (clusterStopReason) {
+                benchmarkLog(`cluster stop triggered reason=${clusterStopReason}`);
+                await flushPartial(clusterStopReason);
+                break;
+              }
             }
             if (questionDelayMs > 0) {
               await sleepMs(questionDelayMs);
@@ -2128,6 +2999,9 @@ export async function runAndWriteLoCoMoBenchmark(): Promise<{
         }
         if (sampleDelayMs > 0) {
           await sleepMs(sampleDelayMs);
+        }
+        if (clusterStopReason) {
+          break;
         }
       }
 

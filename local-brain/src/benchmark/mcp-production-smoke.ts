@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { closePool, withMaintenanceLock } from "../db/client.js";
 import { runMigrations } from "../db/migrations.js";
+import { ingestArtifact } from "../ingest/worker.js";
 import { upsertNamespaceSelfProfile } from "../identity/service.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
 import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
@@ -16,7 +17,11 @@ import {
   listMonitoredSources,
   scanMonitoredSource
 } from "../ops/source-service.js";
+import { rebuildContractProjectionsNamespace } from "../contract-projections/service.js";
+import { anyDefaultProjectionBackedQueryEnabled } from "../retrieval/query-runtime-flags.js";
 import { rebuildTypedMemoryNamespace } from "../typed-memory/service.js";
+import { resetNamespaceData } from "../cli/reset-namespace.js";
+import { capturedAtFromOmiRelativePath, mcpProductionOmiFixtureFiles, mcpProductionOmiRelativeFiles } from "./mcp-production-fixture.js";
 import type { ProductionFailureCategory } from "./production-confidence-shared.js";
 import { countFailureCategories } from "./production-confidence-shared.js";
 
@@ -59,6 +64,8 @@ interface ScenarioResult {
 
 export interface McpProductionSmokeReport {
   readonly generatedAt: string;
+  readonly mainNamespaceId: string;
+  readonly continuityNamespaceId: string;
   readonly results: readonly ScenarioResult[];
   readonly summary: {
     readonly pass: number;
@@ -83,6 +90,29 @@ function outputDir(): string {
 function continuityFixtureRoot(): string {
   return path.resolve(rootDir(), "benchmark-generated", "personal-openclaw-fixtures");
 }
+
+const MAIN_NAMESPACE_ID = "personal_query_surface_smoke";
+const CONTINUITY_NAMESPACE_ID = "personal_continuity_shadow_query_smoke";
+const LIFE_REPLAY_QUERY_FILES = [
+  "relationship-history.md",
+  "social-circle.md",
+  "current-project.md",
+  "current-employer.md",
+  "employer-two-way.md",
+  "employer-well-inked.md",
+  "work-history.md",
+  "location-history.md",
+  "residence-chiang-mai.md",
+  "residence-koh-samui.md",
+  "daily-life.md",
+  "routine-week-1.md",
+  "routine-week-2.md",
+  "routine-week-3.md",
+  "friends-and-preferences.md",
+  "movies-and-watchlist.md",
+  "decisions-and-constraints.md",
+  "uncle-ambiguity.md"
+] as const;
 
 function jsonString(value: unknown): string {
   return JSON.stringify(value ?? null).toLowerCase();
@@ -177,8 +207,9 @@ async function rebuildContinuityShadowNamespace(namespaceId: string): Promise<vo
   await rebuildTypedMemoryNamespace(namespaceId);
 }
 
-async function primeContinuityShadowNamespace(namespaceId = "personal_continuity_shadow"): Promise<void> {
+async function primeContinuityShadowNamespace(namespaceId = CONTINUITY_NAMESPACE_ID): Promise<void> {
   await runMigrations();
+  await resetNamespaceData(namespaceId, { resetOwnerProfile: true });
   await upsertNamespaceSelfProfile({
     namespaceId,
     canonicalName: "Steve Tietze",
@@ -191,14 +222,63 @@ async function primeContinuityShadowNamespace(namespaceId = "personal_continuity
   await rebuildContinuityShadowNamespace(namespaceId);
 }
 
-function scenarios(): readonly Scenario[] {
+async function primeMainNamespace(namespaceId = MAIN_NAMESPACE_ID): Promise<void> {
+  await runMigrations();
+  await resetNamespaceData(namespaceId, { resetOwnerProfile: true });
+  await upsertNamespaceSelfProfile({
+    namespaceId,
+    canonicalName: "Steve Tietze",
+    aliases: ["Steve"],
+    note: "Isolated self anchor for MCP production smoke benchmarking."
+  });
+
+  for (const fileName of LIFE_REPLAY_QUERY_FILES) {
+    await ingestArtifact({
+      inputUri: path.resolve(rootDir(), "examples-private", "life-replay", fileName),
+      namespaceId,
+      sourceType: "markdown",
+      sourceChannel: "benchmark:life-replay-production-smoke",
+      capturedAt: "2026-03-20T12:00:00Z",
+      skipExternalRelationCandidates: true,
+      skipVectorActivation: true
+    });
+  }
+
+  const relativePaths = mcpProductionOmiRelativeFiles();
+  const absolutePaths = mcpProductionOmiFixtureFiles();
+  for (let index = 0; index < absolutePaths.length; index += 1) {
+    await ingestArtifact({
+      inputUri: absolutePaths[index]!,
+      namespaceId,
+      sourceType: "text",
+      sourceChannel: "benchmark:omi-production-smoke",
+      capturedAt: capturedAtFromOmiRelativePath(relativePaths[index]!),
+      skipExternalRelationCandidates: true,
+      skipVectorActivation: true,
+      metadata: {
+        source_type_hint: "omi",
+        benchmark_dataset: "omi_query_production"
+      }
+    });
+  }
+
+  await runCandidateConsolidation(namespaceId, 1600);
+  await runRelationshipAdjudication(namespaceId, {
+    limit: 1600,
+    acceptThreshold: 0.58,
+    rejectThreshold: 0.38
+  });
+  await rebuildTypedMemoryNamespace(namespaceId);
+}
+
+function scenarios(mainNamespaceId = MAIN_NAMESPACE_ID, continuityNamespaceId = CONTINUITY_NAMESPACE_ID): readonly Scenario[] {
   return [
     {
       name: "continuity_yesterday_pack",
       tool: "memory.recap",
-      namespaceId: "personal_continuity_shadow",
+      namespaceId: continuityNamespaceId,
       args: {
-        namespace_id: "personal_continuity_shadow",
+        namespace_id: continuityNamespaceId,
         query: "Give me a recap of what I was talking about yesterday, including projects and people.",
         reference_now: "2026-03-28T08:00:00Z",
         limit: 8
@@ -212,9 +292,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "continuity_support_file",
       tool: "memory.explain_recap",
-      namespaceId: "personal_continuity_shadow",
+      namespaceId: continuityNamespaceId,
       args: {
-        namespace_id: "personal_continuity_shadow",
+        namespace_id: continuityNamespaceId,
         query: "Why do you think the 2026-03-27 memory note is the right evidence for what I was talking about yesterday?",
         reference_now: "2026-03-28T08:00:00Z",
         limit: 8
@@ -228,9 +308,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "entity_dan_relationship",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "Who is Dan in my life right now, exactly?",
         limit: 8
       },
@@ -243,9 +323,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "relationships_dan_direct",
       tool: "memory.get_relationships",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "Dan",
         limit: 8
       },
@@ -257,9 +337,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "relationships_lauren_direct",
       tool: "memory.get_relationships",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "Lauren",
         limit: 8
       },
@@ -271,9 +351,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "relationships_lauren_history_direct",
       tool: "memory.get_relationships",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "Lauren",
         include_historical: true,
         limit: 12
@@ -286,9 +366,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "entity_lauren_current_relationship",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "Who is Lauren in my life right now, exactly?",
         limit: 8
       },
@@ -301,9 +381,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "habits_constraints_current",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What habits or constraints matter right now?",
         limit: 8
       },
@@ -316,9 +396,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "relationships_john_direct",
       tool: "memory.get_relationships",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "John",
         limit: 8
       },
@@ -330,9 +410,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "alias_uncle_resolution",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "Who is Uncle?",
         limit: 8
       },
@@ -345,9 +425,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "clarifications_uncle_closed",
       tool: "memory.get_clarifications",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "uncle",
         limit: 8
       },
@@ -358,9 +438,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "relationships_james_direct",
       tool: "memory.get_relationships",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "James",
         limit: 8
       },
@@ -372,9 +452,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "temporal_lauren_departure",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "When did Lauren leave for the US?",
         limit: 8
       },
@@ -387,9 +467,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "entity_dan_movie_two_weeks",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What movie did Dan mention two weeks ago, and where did he mention it?",
         limit: 8
       },
@@ -402,9 +482,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "project_ben_idea_exact",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What project idea did Ben and I discuss, and what was the idea exactly?",
         limit: 8
       },
@@ -417,9 +497,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "yesterday_work_recap",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What did I do yesterday?",
         limit: 8
       },
@@ -432,9 +512,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "yesterday_talk_recap",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What did I talk about yesterday?",
         limit: 8
       },
@@ -447,9 +527,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "warm_start_today",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What should you know about me to start today?",
         limit: 8
       },
@@ -462,9 +542,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "purchase_today_exact",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What did I buy on March 28, 2026 and what were the prices?",
         limit: 8
       },
@@ -477,9 +557,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "media_titles_exact",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What movies have I talked about?",
         limit: 8
       },
@@ -492,9 +572,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "food_preference_exact",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What food did I like?",
         limit: 8
       },
@@ -507,9 +587,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "beer_preference_exact",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What are my favorite beers in Thailand?",
         limit: 8
       },
@@ -522,9 +602,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "preferences_exact",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What do I like and dislike?",
         limit: 8
       },
@@ -537,9 +617,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "routine_current_exact",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What is my current daily routine?",
         limit: 8
       },
@@ -552,9 +632,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "lauren_change_direct",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What changed with Lauren, and when?",
         limit: 8
       },
@@ -567,9 +647,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "lauren_stop_talking_when",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "When did Steve and Lauren stop talking?",
         limit: 8
       },
@@ -582,9 +662,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "relationship_transition_startup",
       tool: "memory.search",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         query: "What important relationship transition should I know about right now?",
         limit: 8
       },
@@ -597,9 +677,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "relationships_ben_direct",
       tool: "memory.get_relationships",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "Ben",
         limit: 8
       },
@@ -611,9 +691,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "relationships_omi_direct",
       tool: "memory.get_relationships",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "Omi",
         limit: 8
       },
@@ -625,9 +705,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "task_open_items",
       tool: "memory.extract_tasks",
-      namespaceId: "personal_continuity_shadow",
+      namespaceId: continuityNamespaceId,
       args: {
-        namespace_id: "personal_continuity_shadow",
+        namespace_id: continuityNamespaceId,
         query: "Make a task list from what was still open in my recent notes yesterday and before context was lost.",
         reference_now: "2026-03-28T08:00:00Z",
         limit: 8
@@ -640,9 +720,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "graph_dan_neighborhood",
       tool: "memory.get_graph",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "Dan",
         limit: 40
       },
@@ -652,9 +732,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "graph_john_neighborhood",
       tool: "memory.get_graph",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "John",
         limit: 40
       },
@@ -664,9 +744,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "graph_kozimui_alias",
       tool: "memory.get_graph",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "Kozimui",
         limit: 40
       },
@@ -676,9 +756,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "graph_lauren_history_window",
       tool: "memory.get_graph",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "Lauren",
         time_start: "2024-01-01T00:00:00Z",
         time_end: "2026-12-31T23:59:59Z",
@@ -690,9 +770,9 @@ function scenarios(): readonly Scenario[] {
     {
       name: "graph_omi_neighborhood",
       tool: "memory.get_graph",
-      namespaceId: "personal",
+      namespaceId: mainNamespaceId,
       args: {
-        namespace_id: "personal",
+        namespace_id: mainNamespaceId,
         entity_name: "Omi",
         limit: 40
       },
@@ -751,6 +831,8 @@ function toMarkdown(report: McpProductionSmokeReport): string {
     "# MCP Production Smoke",
     "",
     `- generatedAt: ${report.generatedAt}`,
+    `- mainNamespaceId: ${report.mainNamespaceId}`,
+    `- continuityNamespaceId: ${report.continuityNamespaceId}`,
     `- pass/fail: ${report.summary.pass}/${report.summary.fail}`,
     `- passed: ${report.passed}`,
     `- failureCategoryCounts: ${JSON.stringify(report.summary.failureCategoryCounts)}`,
@@ -781,14 +863,22 @@ export async function runAndWriteMcpProductionSmokeBenchmark(): Promise<{
   };
 }> {
   return withMaintenanceLock("the MCP production smoke benchmark", async () => {
-    await primeContinuityShadowNamespace();
+    await primeMainNamespace(MAIN_NAMESPACE_ID);
+    await primeContinuityShadowNamespace(CONTINUITY_NAMESPACE_ID);
+    if (anyDefaultProjectionBackedQueryEnabled()) {
+      for (const namespaceId of new Set([MAIN_NAMESPACE_ID, CONTINUITY_NAMESPACE_ID])) {
+        await rebuildContractProjectionsNamespace(namespaceId);
+      }
+    }
 
     const results: ScenarioResult[] = [];
-    for (const scenario of scenarios()) {
+    for (const scenario of scenarios(MAIN_NAMESPACE_ID, CONTINUITY_NAMESPACE_ID)) {
       results.push(await runScenario(scenario));
     }
     const report: McpProductionSmokeReport = {
       generatedAt: new Date().toISOString(),
+      mainNamespaceId: MAIN_NAMESPACE_ID,
+      continuityNamespaceId: CONTINUITY_NAMESPACE_ID,
       results,
       summary: {
         pass: results.filter((item) => item.passed).length,

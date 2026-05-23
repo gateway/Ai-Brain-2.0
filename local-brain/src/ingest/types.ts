@@ -15,6 +15,11 @@ export interface IngestRequest {
   readonly scenes?: readonly SceneRecord[];
   readonly fragments?: readonly FragmentRecord[];
   readonly skipNarrativeClaims?: boolean;
+  readonly skipExternalRelationCandidates?: boolean;
+  readonly forceExternalRelationCandidates?: boolean;
+  readonly relationIeMode?: "support_only" | "support_and_promote";
+  readonly relationIeExtractors?: readonly string[];
+  readonly skipVectorActivation?: boolean;
 }
 
 export interface EmbeddingRequest {

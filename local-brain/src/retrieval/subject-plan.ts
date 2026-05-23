@@ -84,10 +84,10 @@ export function buildCanonicalSubjectPlan(params: {
     };
   }
 
-  if (status === "resolved" && params.subjectEntityId) {
+  if (status === "resolved" && (params.subjectEntityId || params.canonicalSubjectName)) {
     return {
       kind: "single_subject",
-      subjectEntityId: params.subjectEntityId,
+      subjectEntityId: params.subjectEntityId ?? null,
       canonicalSubjectName: params.canonicalSubjectName ?? possessiveNames[0] ?? primaryNames[0] ?? candidateNames[0] ?? null,
       candidateEntityIds,
       candidateNames,

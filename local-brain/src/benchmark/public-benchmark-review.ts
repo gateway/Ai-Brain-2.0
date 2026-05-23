@@ -60,7 +60,11 @@ function rawDir(): string {
 async function latestArtifactPath(prefix: string): Promise<string> {
   const entries = await readdir(outputDir());
   const matches = entries
-    .filter((entry) => entry.startsWith(`${prefix}-`) && entry.endsWith(".json"))
+    .filter((entry) =>
+      prefix === "locomo"
+        ? /^locomo-\d{4}-\d{2}-\d{2}T.*\.json$/u.test(entry) && !entry.includes(".partial")
+        : entry.startsWith(`${prefix}-`) && entry.endsWith(".json")
+    )
     .sort();
   const latest = matches.at(-1);
   if (!latest) {

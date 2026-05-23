@@ -5,10 +5,20 @@ import { constants as fsConstants } from "node:fs";
 import { queryRows, withTransaction } from "../db/client.js";
 import { applyStoredClarificationResolutions } from "../clarifications/service.js";
 import { readConfig } from "../config.js";
+import { loadNamespaceSelfProfileForClient } from "../identity/service.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { runCandidateConsolidation } from "../jobs/consolidation.js";
 import { runRelationshipAdjudication } from "../jobs/relationship-adjudication.js";
 import { runTemporalNodeArchival, runTemporalSummaryScaffold } from "../jobs/temporal-summary.js";
+import { runNamespaceVectorActivation } from "../jobs/vector-sync-runtime.js";
+import {
+  stageExternalRelationCandidatesForScenes,
+  type ExternalRelationIeMode
+} from "../relationships/external-ie.js";
+import {
+  analyzeSceneStructuredExactDetailRows,
+  type SceneExactDetailPromotionDiagnostic
+} from "../retrieval/exact-detail-fact-keys.js";
 import { rebuildTypedMemoryNamespace } from "../typed-memory/service.js";
 import type { SourceType } from "../types.js";
 
@@ -87,6 +97,16 @@ interface ScanRunRow {
   readonly errored_files: number;
   readonly notes: string | null;
   readonly result_json: Record<string, unknown>;
+}
+
+interface NarrativeSceneEnrichmentRow {
+  readonly id: string;
+  readonly scene_index: number;
+  readonly scene_text: string;
+  readonly occurred_at: string | null;
+  readonly source_memory_id: string | null;
+  readonly source_chunk_id: string | null;
+  readonly metadata: Record<string, unknown> | null;
 }
 
 interface ImportRunRow {
@@ -274,6 +294,24 @@ export interface ProcessScheduledMonitoredSourcesResult {
 export interface ImportMonitoredSourceOptions {
   readonly forceImport?: boolean;
   readonly skipPostImportRefresh?: boolean;
+  readonly skipVectorActivation?: boolean;
+  readonly skipRelationIeEnrichment?: boolean;
+}
+
+type MonitoredSourceRelationIeMode = "off" | ExternalRelationIeMode;
+
+interface RelationIeEnrichmentSummary {
+  readonly mode: MonitoredSourceRelationIeMode;
+  readonly skipped?: boolean;
+  readonly skippedReason?: string;
+  readonly artifactsAttempted: number;
+  readonly artifactsEnriched: number;
+  readonly artifactsFailed: number;
+  readonly warnings: number;
+  readonly promotedRows: number;
+  readonly rejectedRows: number;
+  readonly rejectionBreakdown: Readonly<Record<string, number>>;
+  readonly errors: readonly string[];
 }
 
 async function refreshDerivedNamespaceState(namespaceId: string): Promise<void> {
@@ -407,6 +445,246 @@ async function validateDirectoryPath(inputPath: string): Promise<string> {
 
 function defaultNamespaceId(): string {
   return readConfig().namespaceDefault;
+}
+
+function normalizeRelationIeMode(value: unknown): MonitoredSourceRelationIeMode | null {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  switch (normalized) {
+    case "off":
+      return "off";
+    case "support_only":
+    case "support-only":
+      return "support_only";
+    case "support_and_promote":
+    case "support-and-promote":
+      return "support_and_promote";
+    default:
+      return null;
+  }
+}
+
+function isOmiNormalizedSource(source: Pick<MonitoredSourceRow, "label" | "root_path" | "metadata">): boolean {
+  const rootPath = source.root_path.toLowerCase();
+  const label = source.label.toLowerCase();
+  const producer = typeof source.metadata?.producer === "string" ? source.metadata.producer.toLowerCase() : "";
+  return (
+    rootPath.includes(`${path.sep}data${path.sep}inbox${path.sep}omi${path.sep}normalized`) ||
+    label.includes("omi") ||
+    producer === "omi_sync"
+  );
+}
+
+function resolveMonitoredSourceRelationIeMode(source: Pick<MonitoredSourceRow, "label" | "root_path" | "metadata">): MonitoredSourceRelationIeMode {
+  const explicitMode =
+    normalizeRelationIeMode(source.metadata?.relation_ie_mode) ??
+    normalizeRelationIeMode(source.metadata?.relationIeMode);
+  if (explicitMode) {
+    return explicitMode;
+  }
+  return isOmiNormalizedSource(source) ? "support_only" : "off";
+}
+
+function withMonitoredSourceMetadataDefaults(params: {
+  readonly label: string;
+  readonly rootPath: string;
+  readonly metadata?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const nextMetadata = { ...(params.metadata ?? {}) };
+  const explicitMode =
+    normalizeRelationIeMode(nextMetadata.relation_ie_mode) ??
+    normalizeRelationIeMode(nextMetadata.relationIeMode);
+  if (!explicitMode && isOmiNormalizedSource({ label: params.label, root_path: params.rootPath, metadata: nextMetadata })) {
+    nextMetadata.relation_ie_mode = "support_only";
+  }
+  return nextMetadata;
+}
+
+async function loadArtifactScenesForRelationIe(
+  sourceId: string,
+  artifactId: string
+): Promise<readonly NarrativeSceneEnrichmentRow[]> {
+  return queryRows<NarrativeSceneEnrichmentRow>(
+    `
+      SELECT
+        ns.id::text,
+        ns.scene_index,
+        ns.scene_text,
+        ns.occurred_at::text,
+        ns.metadata->'source_memory_ids'->>0 AS source_memory_id,
+        ns.metadata->'source_chunk_ids'->>0 AS source_chunk_id,
+        ns.metadata
+      FROM narrative_scenes ns
+      JOIN artifacts a
+        ON a.id = ns.artifact_id
+      WHERE ns.artifact_id = $1::uuid
+        AND (
+          a.metadata->>'monitored_source_id' = $2
+          OR a.uri LIKE '%/data/inbox/omi/normalized/%'
+        )
+      ORDER BY ns.scene_index ASC
+    `,
+    [artifactId, sourceId]
+  );
+}
+
+function bumpCount(map: Map<string, number>, key: string | null | undefined): void {
+  const normalized = String(key ?? "").trim();
+  if (!normalized) {
+    return;
+  }
+  map.set(normalized, (map.get(normalized) ?? 0) + 1);
+}
+
+function summarizePromotionDiagnostics(diagnostics: readonly SceneExactDetailPromotionDiagnostic[]): {
+  readonly promotedRows: number;
+  readonly rejectedRows: number;
+  readonly rejectionBreakdown: Readonly<Record<string, number>>;
+} {
+  const rejectionBreakdown = new Map<string, number>();
+  let promotedRows = 0;
+  let rejectedRows = 0;
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.promotionEligible) {
+      promotedRows += 1;
+      continue;
+    }
+    rejectedRows += 1;
+    bumpCount(rejectionBreakdown, diagnostic.promotionRejectedReason ?? "unknown");
+  }
+  return {
+    promotedRows,
+    rejectedRows,
+    rejectionBreakdown: Object.fromEntries(rejectionBreakdown)
+  };
+}
+
+async function writeScenePromotionReviewsForArtifact(params: {
+  readonly sourceId: string;
+  readonly namespaceId: string;
+  readonly artifactId: string;
+}): Promise<{
+  readonly promotedRows: number;
+  readonly rejectedRows: number;
+  readonly rejectionBreakdown: Readonly<Record<string, number>>;
+}> {
+  return withTransaction(async (client) => {
+    const selfProfile = await loadNamespaceSelfProfileForClient(client, params.namespaceId);
+    const scenes = await loadArtifactScenesForRelationIe(params.sourceId, params.artifactId);
+    const totals = new Map<string, number>();
+    let promotedRows = 0;
+    let rejectedRows = 0;
+
+    for (const scene of scenes) {
+      const analysis = analyzeSceneStructuredExactDetailRows({
+        sceneId: scene.id,
+        sceneText: scene.scene_text,
+        occurredAt: scene.occurred_at,
+        sceneMetadata: scene.metadata,
+        selfEntityId: selfProfile?.entityId ?? null,
+        selfAliases: selfProfile ? [selfProfile.canonicalName, ...selfProfile.aliases] : []
+      });
+      const summary = summarizePromotionDiagnostics(analysis.diagnostics);
+      promotedRows += summary.promotedRows;
+      rejectedRows += summary.rejectedRows;
+      for (const [reason, count] of Object.entries(summary.rejectionBreakdown)) {
+        totals.set(reason, (totals.get(reason) ?? 0) + count);
+      }
+      await client.query(
+        `
+          UPDATE narrative_scenes
+          SET metadata = jsonb_set(
+            COALESCE(metadata, '{}'::jsonb),
+            '{external_relation_ie,promotion_review}',
+            $2::jsonb,
+            true
+          ),
+          updated_at = now()
+          WHERE id = $1::uuid
+        `,
+        [
+          scene.id,
+          JSON.stringify({
+            updated_at: new Date().toISOString(),
+            promoted_row_count: analysis.rows.length,
+            rejected_count: analysis.diagnostics.filter((entry) => !entry.promotionEligible).length,
+            diagnostics: analysis.diagnostics
+          })
+        ]
+      );
+    }
+
+    return {
+      promotedRows,
+      rejectedRows,
+      rejectionBreakdown: Object.fromEntries(totals)
+    };
+  });
+}
+
+async function enrichArtifactsWithRelationIe(params: {
+  readonly sourceId: string;
+  readonly namespaceId: string;
+  readonly relationIeMode: ExternalRelationIeMode;
+  readonly artifactIds: readonly string[];
+}): Promise<RelationIeEnrichmentSummary> {
+  let artifactsEnriched = 0;
+  let artifactsFailed = 0;
+  let warnings = 0;
+  let promotedRows = 0;
+  let rejectedRows = 0;
+  const errors: string[] = [];
+  const rejectionBreakdown = new Map<string, number>();
+
+  for (const artifactId of params.artifactIds) {
+    try {
+      const scenes = await loadArtifactScenesForRelationIe(params.sourceId, artifactId);
+      if (scenes.length === 0) {
+        continue;
+      }
+      const result = await withTransaction((client) =>
+        stageExternalRelationCandidatesForScenes(client, {
+          namespaceId: params.namespaceId,
+          forceRun: true,
+          relationIeMode: params.relationIeMode,
+          scenes: scenes.map((scene) => ({
+            sceneIndex: scene.scene_index,
+            sceneId: scene.id,
+            text: scene.scene_text,
+            occurredAt: scene.occurred_at ?? new Date().toISOString(),
+            sourceMemoryId: scene.source_memory_id,
+            sourceChunkId: scene.source_chunk_id
+          }))
+        })
+      );
+      const review = await writeScenePromotionReviewsForArtifact({
+        sourceId: params.sourceId,
+        namespaceId: params.namespaceId,
+        artifactId
+      });
+      warnings += result.warningCount;
+      promotedRows += review.promotedRows;
+      rejectedRows += review.rejectedRows;
+      for (const [reason, count] of Object.entries(review.rejectionBreakdown)) {
+        rejectionBreakdown.set(reason, (rejectionBreakdown.get(reason) ?? 0) + count);
+      }
+      artifactsEnriched += 1;
+    } catch (error) {
+      artifactsFailed += 1;
+      errors.push(`artifact ${artifactId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return {
+    mode: params.relationIeMode,
+    artifactsAttempted: params.artifactIds.length,
+    artifactsEnriched,
+    artifactsFailed,
+    warnings,
+    promotedRows,
+    rejectedRows,
+    rejectionBreakdown: Object.fromEntries(rejectionBreakdown),
+    errors
+  };
 }
 
 function mapBootstrapState(row: BootstrapStateRow): OpsBootstrapState {
@@ -1235,6 +1513,11 @@ export async function createMonitoredSource(input: CreateMonitoredSourceRequest)
   const fileExtensions = sanitizeExtensions();
   const monitorEnabled = Boolean(input.monitorEnabled);
   const scanSchedule = monitorEnabled ? input.scanSchedule?.trim() || DEFAULT_SCAN_SCHEDULE : "disabled";
+  const metadata = withMonitoredSourceMetadataDefaults({
+    label,
+    rootPath,
+    metadata: input.metadata ?? {}
+  });
 
   const rows = await queryRows<MonitoredSourceListRow>(
     `
@@ -1286,7 +1569,7 @@ export async function createMonitoredSource(input: CreateMonitoredSourceRequest)
       scanSchedule,
       input.createdBy ?? "operator",
       input.notes?.trim() || null,
-      JSON.stringify(input.metadata ?? {})
+      JSON.stringify(metadata)
     ]
   );
 
@@ -1296,10 +1579,14 @@ export async function createMonitoredSource(input: CreateMonitoredSourceRequest)
 export async function updateMonitoredSource(sourceId: string, input: UpdateMonitoredSourceRequest): Promise<OpsMonitoredSourceSummary> {
   const existing = await getSourceRow(sourceId);
   const rootPath = input.rootPath === undefined ? existing.root_path : await validateDirectoryPath(input.rootPath);
-  const nextMetadata = {
+  const nextMetadata = withMonitoredSourceMetadataDefaults({
+    label: input.label?.trim() || existing.label,
+    rootPath,
+    metadata: {
     ...(existing.metadata ?? {}),
     ...(input.metadata ?? {})
-  };
+    }
+  });
   const monitorEnabled = input.monitorEnabled ?? existing.monitor_enabled;
   const scanSchedule = monitorEnabled ? input.scanSchedule?.trim() || existing.scan_schedule || DEFAULT_SCAN_SCHEDULE : "disabled";
 
@@ -1571,8 +1858,12 @@ export async function importMonitoredSource(
 }> {
   await scanMonitoredSource(sourceId);
   const sourceRow = await getSourceRow(sourceId);
+  const relationIeMode = resolveMonitoredSourceRelationIeMode(sourceRow);
   const forceImport = options.forceImport === true;
   const skipPostImportRefresh = options.skipPostImportRefresh === true;
+  const skipVectorActivation = options.skipVectorActivation === true;
+  const skipRelationIeEnrichment = options.skipRelationIeEnrichment === true;
+  const useIntegratedRelationIe = !skipRelationIeEnrichment && relationIeMode !== "off";
   const normalizedFileIds =
     fileIds?.filter((value): value is string => typeof value === "string" && value.trim().length > 0) ?? [];
   const pendingRows = await queryRows<MonitoredSourceFileRow>(
@@ -1656,6 +1947,23 @@ export async function importMonitoredSource(
   const importedArtifactIds: string[] = [];
   let filesImported = 0;
   let filesFailed = 0;
+  let relationIeSummary: RelationIeEnrichmentSummary = {
+    mode: relationIeMode,
+    skipped: skipRelationIeEnrichment || useIntegratedRelationIe,
+    skippedReason: skipRelationIeEnrichment
+      ? "source_import_decoupled_from_relation_ie"
+      : useIntegratedRelationIe
+        ? "relation_ie_handled_during_ingest"
+        : undefined,
+    artifactsAttempted: 0,
+    artifactsEnriched: 0,
+    artifactsFailed: 0,
+    warnings: 0,
+    promotedRows: 0,
+    rejectedRows: 0,
+    rejectionBreakdown: {},
+    errors: []
+  };
 
   for (const row of pendingRows) {
     try {
@@ -1665,7 +1973,10 @@ export async function importMonitoredSource(
         namespaceId: sourceRow.namespace_id,
         sourceType: resultSourceTypeFor(row.extension),
         sourceChannel: `bootstrap:${sourceRow.source_type}`,
+        skipExternalRelationCandidates: relationIeMode === "off" || skipRelationIeEnrichment,
+        skipVectorActivation: true,
         capturedAt,
+        relationIeMode: relationIeMode === "off" ? undefined : relationIeMode,
         metadata: {
           ...(row.metadata ?? {}),
           bootstrap_import: true,
@@ -1674,6 +1985,7 @@ export async function importMonitoredSource(
           monitored_source_file_id: row.id,
           monitored_source_type: sourceRow.source_type,
           monitored_source_root_path: sourceRow.root_path,
+          monitored_source_relation_ie_mode: relationIeMode,
           monitored_import_run_id: importRunId,
           relative_path: row.relative_path
         }
@@ -1717,10 +2029,21 @@ export async function importMonitoredSource(
     }
   }
 
+  if (!useIntegratedRelationIe && !skipRelationIeEnrichment && relationIeMode !== "off" && importedArtifactIds.length > 0) {
+    relationIeSummary = await enrichArtifactsWithRelationIe({
+      sourceId,
+      namespaceId: sourceRow.namespace_id,
+      relationIeMode,
+      artifactIds: importedArtifactIds
+    });
+  }
+
   const filesAttempted = pendingRows.length;
   const filesSkipped = Math.max(0, (await countSourceFiles(sourceId)) - filesAttempted);
   const finalStatus: RunStatus =
-    filesFailed > 0 ? (filesImported > 0 ? "partial" : "failed") : "succeeded";
+    filesFailed > 0 || relationIeSummary.artifactsFailed > 0
+      ? (filesImported > 0 ? "partial" : "failed")
+      : "succeeded";
 
   const importRun = (
     await queryRows<ImportRunRow>(
@@ -1763,7 +2086,8 @@ export async function importMonitoredSource(
           imported_artifact_ids: importedArtifactIds,
           source_label: sourceRow.label,
           targeted_file_ids: normalizedFileIds,
-          force_import: forceImport
+          force_import: forceImport,
+          relation_ie: relationIeSummary
         })
       ]
     )
@@ -1782,6 +2106,14 @@ export async function importMonitoredSource(
       [sourceId, finalStatus === "failed" ? "error" : sourceRow.status === "disabled" ? "disabled" : "ready"]
     );
   });
+
+  if (!skipVectorActivation && filesImported > 0) {
+    await runNamespaceVectorActivation({
+      namespaceId: sourceRow.namespace_id,
+      scope: "runtime",
+      reason: "monitored_source_import"
+    });
+  }
 
   if (!skipPostImportRefresh && filesImported > 0) {
     await refreshDerivedNamespaceState(sourceRow.namespace_id);

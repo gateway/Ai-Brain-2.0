@@ -15,14 +15,39 @@ import {
   buildPlannerRuntimeReportCandidate,
   buildPlannerRuntimeStoredReportResult,
   buildPlannerTargetedBackfillSubqueries,
+  deriveSubjectBoundExactDetailClaimWithTelemetry,
   preferPlannerRuntimeReportCandidate
 } from "../dist/retrieval/service.js";
+import { evaluateSourceBoundReaderEvidenceDisciplineForTest } from "../dist/retrieval/reader-evidence-discipline.js";
+import {
+  buildDirectActiveProjectClaimText,
+  compiledDirectFactFitsQueryForTest,
+  compiledProfileInferenceFitsQueryForTest,
+  directFactSourceResultFitsQueryForTest,
+  extractDirectFactValueFromSupportForTest,
+  isActiveProjectFocusDirectQuery,
+  isPreferredRatioDirectQuery,
+  shouldBypassDirectFactRouteToGeneralTypedReadersForTest,
+  shouldDeferDirectFactMissToGeneralTypedReadersForTest,
+  sourceBoundDirectFactFamilyForTest,
+  sourceBoundProfileInferenceFamilyForTest
+} from "../dist/retrieval/route-locked-fast-paths.js";
+import { buildProfileInferenceCandidatesFromSourceTextsForTest } from "../dist/taxonomy-temporal/profile-inference-compiler.js";
+import { boundedDirectSourceSnippetForTest } from "../dist/retrieval/direct-source-read-models.js";
 import { buildPlannerTypedCandidate, preferPlannerTypedCandidate } from "../dist/retrieval/planner-typed-candidates.js";
 import {
   rankCollectionPoolResults,
   rankProfilePoolResults,
   rankTemporalPoolResults
 } from "../dist/retrieval/planner-pool-ranker.js";
+import { retrievalLatencyBudgetForQuery } from "../dist/retrieval/canonical-adjudication-policy.js";
+import { evaluateTypedContractCompleteness } from "../dist/retrieval/typed-contract-completeness.js";
+import {
+  buildTypedCompletionFollowupSubqueries,
+  buildTypedContractBackfillSubqueries
+} from "../dist/retrieval/typed-backfill-policy.js";
+import { buildContractFirstPlannerBackfillDecision } from "../dist/retrieval/contract-first-runtime-policy.js";
+import { buildPreciseFactEvidenceQueryText } from "../dist/retrieval/search/query-builders.js";
 
 function recallResult(content, provenance = {}) {
   return {
@@ -33,6 +58,60 @@ function recallResult(content, provenance = {}) {
     occurredAt: "2023-05-21T09:00:00.000Z",
     namespaceId: "test",
     provenance
+  };
+}
+
+function datedRecallResult(content, occurredAt) {
+  return {
+    ...recallResult(content),
+    occurredAt
+  };
+}
+
+function compiledDirectFactRow(value, supportPhrase, metadata = {}) {
+  return {
+    id: "compiled-direct-test",
+    namespace_id: "test",
+    subject_entity_id: "person:test",
+    pair_subject_entity_id: null,
+    query_family: "exact_detail",
+    exact_detail_family: null,
+    predicate_family: "direct_fact",
+    property_key: "direct_fact:test",
+    answer_value: value,
+    normalized_answer_value: String(value ?? "").toLowerCase(),
+    truth_status: "active",
+    valid_from: null,
+    valid_until: null,
+    confidence: 0.9,
+    source_table: "compiled_fact_observations",
+    source_row_id: "row",
+    source_scene_id: null,
+    source_memory_id: "memory",
+    source_chunk_id: "chunk",
+    support_phrase: supportPhrase,
+    source_text: supportPhrase,
+    extractor: "test",
+    model_id: "test",
+    schema_version: "test",
+    promotion_status: "compiled",
+    admissibility_status: "admissible",
+    rejection_reason: null,
+    metadata
+  };
+}
+
+function compiledProfileInferenceRow(value, supportPhrase, metadata = {}) {
+  return {
+    ...compiledDirectFactRow(value, supportPhrase, metadata),
+    id: "compiled-profile-inference-test",
+    predicate_family: "profile_inference",
+    property_key: `inference:${metadata.profileInferenceFamily ?? "health_inference"}`,
+    metadata: {
+      profileInferenceFamily: metadata.profileInferenceFamily ?? "health_inference",
+      premiseCount: metadata.premiseCount ?? 1,
+      ...metadata
+    }
   };
 }
 
@@ -47,6 +126,487 @@ function supportedAssessment(overrides = {}) {
     ...overrides
   };
 }
+
+test("source-bound reader discipline blocks weak canonical prose for direct-fact questions", () => {
+  const decision = evaluateSourceBoundReaderEvidenceDisciplineForTest({
+    queryText: "What are John's suspected health problems?",
+    ownerFamily: "report",
+    winner: "canonical_report",
+    sufficiency: "weak",
+    subjectMatch: "matched",
+    evidenceCount: 1,
+    resultCount: 1
+  });
+
+  assert.equal(decision.required, true);
+  assert.equal(decision.present, false);
+  assert.equal(decision.blocked, true);
+  assert.equal(decision.reason, "no_subject_bound_evidence");
+});
+
+test("source-bound reader discipline accepts supported subject-bound canonical evidence", () => {
+  const decision = evaluateSourceBoundReaderEvidenceDisciplineForTest({
+    queryText: "Which meat does Audrey prefer eating more than others?",
+    ownerFamily: "exact_detail",
+    winner: "canonical_report",
+    sufficiency: "supported",
+    subjectMatch: "matched",
+    evidenceCount: 2,
+    resultCount: 2
+  });
+
+  assert.equal(decision.required, true);
+  assert.equal(decision.present, true);
+  assert.equal(decision.blocked, false);
+  assert.equal(decision.status, "source_bound_evidence_present");
+});
+
+test("source-bound reader discipline blocks weak profile/list sources for location and employer claims", () => {
+  const liveDecision = evaluateSourceBoundReaderEvidenceDisciplineForTest({
+    queryText: "Does James live in Connecticut?",
+    ownerFamily: "profile_report",
+    winner: "canonical_profile",
+    sufficiency: "contradicted",
+    subjectMatch: "mismatched",
+    evidenceCount: 3,
+    resultCount: 3
+  });
+  assert.equal(liveDecision.required, true);
+  assert.equal(liveDecision.blocked, true);
+
+  const listDecision = evaluateSourceBoundReaderEvidenceDisciplineForTest({
+    queryText: "What are Deborah's favorite books?",
+    ownerFamily: "list_set",
+    winner: "canonical_list_set",
+    sufficiency: "weak",
+    subjectMatch: "matched",
+    evidenceCount: 2,
+    resultCount: 2
+  });
+  assert.equal(listDecision.required, true);
+  assert.equal(listDecision.blocked, true);
+});
+
+test("source-bound reader discipline blocks broad profile-trait prose without evidence", () => {
+  const decision = evaluateSourceBoundReaderEvidenceDisciplineForTest({
+    queryText: "Would John be considered a patriotic person?",
+    ownerFamily: "report",
+    winner: "canonical_report",
+    sufficiency: "missing",
+    subjectMatch: "matched",
+    evidenceCount: 0,
+    resultCount: 8
+  });
+
+  assert.equal(decision.required, true);
+  assert.equal(decision.present, false);
+  assert.equal(decision.blocked, true);
+  assert.equal(decision.reason, "no_subject_bound_evidence");
+});
+
+test("source-bound reader discipline blocks broad canonical duration prose without evidence", () => {
+  const decision = evaluateSourceBoundReaderEvidenceDisciplineForTest({
+    queryText: "How long has Melanie been creating art?",
+    ownerFamily: "report",
+    winner: "canonical_report",
+    sufficiency: "missing",
+    subjectMatch: "matched",
+    evidenceCount: 0,
+    resultCount: 8
+  });
+
+  assert.equal(decision.required, true);
+  assert.equal(decision.present, false);
+  assert.equal(decision.blocked, true);
+  assert.equal(decision.reason, "no_subject_bound_evidence");
+});
+
+test("source-bound reader discipline allows explicit pair commonality list evidence", () => {
+  const decision = evaluateSourceBoundReaderEvidenceDisciplineForTest({
+    queryText: "Which city have both Jean and John visited?",
+    ownerFamily: "list_set",
+    winner: "canonical_list_set",
+    sufficiency: "contradicted",
+    subjectMatch: "mismatched",
+    evidenceCount: 3,
+    resultCount: 3
+  });
+
+  assert.equal(decision.required, true);
+  assert.equal(decision.present, true);
+  assert.equal(decision.blocked, false);
+  assert.equal(decision.status, "source_bound_evidence_present");
+});
+
+test("source-bound direct route families classify reusable LoCoMo direct fact shapes", () => {
+  assert.equal(sourceBoundDirectFactFamilyForTest("What items did Calvin buy in March 2023?"), "purchase_fact");
+  assert.equal(sourceBoundDirectFactFamilyForTest("How long has Nate had his first two turtles?"), "owned_object_duration_fact");
+  assert.equal(sourceBoundDirectFactFamilyForTest("Is Deborah married?"), "relationship_status_fact");
+  assert.equal(sourceBoundDirectFactFamilyForTest("What are Deborah's favorite books?"), "preference_fact");
+  assert.equal(sourceBoundDirectFactFamilyForTest("Would Caroline likely have Dr. Seuss books on her bookshelf?"), "owned_object_fact");
+  assert.equal(sourceBoundDirectFactFamilyForTest("How does James plan to make his dog-sitting app unique?"), "project_goal_fact");
+  assert.equal(sourceBoundDirectFactFamilyForTest("What can Andrew potentially do to improve his stress and accomodate his living situation with his dogs?"), "project_goal_fact");
+  assert.equal(sourceBoundDirectFactFamilyForTest("What kind of indoor activities have Andrew and his girlfriend tried?"), "explicit_list_set");
+  assert.equal(sourceBoundDirectFactFamilyForTest("What kind of places have Andrew and his girlfriend checked out around the city?"), "explicit_list_set");
+  assert.equal(sourceBoundDirectFactFamilyForTest("What kind of classes or groups has Audrey joined to take better care of her dogs?"), "explicit_list_set");
+  assert.equal(sourceBoundDirectFactFamilyForTest("What kind of project was Jolene working on in the beginning of January 2023?"), "project_goal_fact");
+  assert.equal(sourceBoundDirectFactFamilyForTest("Where has Evan been on roadtrips with his family?"), "explicit_list_set");
+  assert.equal(sourceBoundDirectFactFamilyForTest("What type of dog was Audrey looking to adopt based on her living space?"), "owned_object_fact");
+  assert.equal(sourceBoundDirectFactFamilyForTest("What pets wouldn't cause any discomfort to Joanna?"), null);
+  assert.equal(sourceBoundDirectFactFamilyForTest("What is one of Joanna's favorite movies?"), null);
+  assert.equal(sourceBoundDirectFactFamilyForTest("What is my preferred gin-to-vermouth ratio for a classic gin martini?"), null);
+  assert.equal(isPreferredRatioDirectQuery("What is my preferred gin-to-vermouth ratio for a classic gin martini?"), true);
+  assert.equal(sourceBoundDirectFactFamilyForTest("After the AI/LLM meetup at Canass Hotel in Chiang Mai, what coffee place did Steve go to?"), null);
+  assert.equal(sourceBoundDirectFactFamilyForTest("What project am I actively focused on right now?"), null);
+  assert.equal(sourceBoundDirectFactFamilyForTest("What project idea did Ben and I discuss, and what was the idea exactly?"), null);
+  assert.equal(sourceBoundDirectFactFamilyForTest("What important relationship transition should I know about right now?"), null);
+  assert.equal(isActiveProjectFocusDirectQuery("What project am I actively focused on right now?"), true);
+});
+
+test("profile-inference route families classify inference-shaped questions before direct fallback", () => {
+  assert.equal(
+    sourceBoundProfileInferenceFamilyForTest("What underlying condition might Joanna have based on her allergies?"),
+    "health_inference"
+  );
+  assert.equal(
+    sourceBoundProfileInferenceFamilyForTest("What is an indoor activity that Andrew would enjoy doing while make his dog happy?"),
+    "activity_fit"
+  );
+  assert.equal(sourceBoundProfileInferenceFamilyForTest("Does James live in Connecticut?"), "location_containment");
+  assert.equal(
+    sourceBoundProfileInferenceFamilyForTest("Considering their conversations and personal growth, what advice might Evan and Sam give to someone facing a major life transition or challenge?"),
+    "advice_synthesis"
+  );
+});
+
+test("profile-inference compiler creates source-premised possible health and preference inferences", () => {
+  const candidates = buildProfileInferenceCandidatesFromSourceTextsForTest([
+    "Joanna: I am allergic to most reptiles and animals with fur.\nJoanna: I found out recently I'm allergic to cockroaches as well.",
+    "Evan: Our family camping trip was refreshing. We hiked outdoors near mountains and forests."
+  ]);
+  const health = candidates.find((candidate) => candidate.family === "health_inference");
+  const preference = candidates.find((candidate) => candidate.family === "preference_inference");
+  assert.equal(health?.value, "Possible asthma");
+  assert.equal(health?.premises.length, 2);
+  assert.match(health?.supportPhrase ?? "", /allergic/iu);
+  assert.equal(preference?.value, "camping trip in the outdoors");
+  assert.ok((preference?.premises.length ?? 0) >= 1);
+});
+
+test("compiled profile inference query fit requires family-compatible evidence", () => {
+  const healthRow = compiledProfileInferenceRow("Possible asthma", "Joanna is allergic to animals with fur and cockroaches.", {
+    profileInferenceFamily: "health_inference"
+  });
+  assert.equal(
+    compiledProfileInferenceFitsQueryForTest(
+      "What underlying condition might Joanna have based on her allergies?",
+      "health_inference",
+      healthRow
+    ),
+    true
+  );
+  assert.equal(
+    compiledProfileInferenceFitsQueryForTest("Does Dave's shop employ a lot of people?", "capacity_scale", healthRow),
+    false
+  );
+});
+
+test("compiled direct-fact selectors reject generic values and accept source-shaped evidence", () => {
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "Which team did John sign with on 21 May, 2023?",
+      "role_position_fact",
+      compiledDirectFactRow("a new team - excited for the season", "John: a new team - excited for the season", {
+        answerShape: "atomic_value",
+        candidate: { subtype: "sports_team" }
+      })
+    ),
+    false
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "Which team did John sign with on 21 May, 2023?",
+      "role_position_fact",
+      compiledDirectFactRow("Minnesota Wolves", "John: The Minnesota Wolves! I can't wait to play with them!", {
+        answerShape: "atomic_value",
+        candidate: { subtype: "sports_team" }
+      })
+    ),
+    true
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "Which band was Dave's favorite at the music festival in April 2023?",
+      "preference_fact",
+      compiledDirectFactRow("a representation of your journey, your passion for music, and the friendships you've made", "Calvin: This is a representation of your journey, your passion for music, and the friendships you've made.", {
+        answerShape: "atomic_value"
+      })
+    ),
+    false
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "Which band was Dave's favorite at the music festival in April 2023?",
+      "preference_fact",
+      compiledDirectFactRow("Aerosmith", "Dave: If I had to pick a favorite, it would definitely be Aerosmith. Their performance was incredible.", {
+        answerShape: "atomic_value"
+      })
+    ),
+    true
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "Which recreational activity was James pursuing on March 16, 2022?",
+      "date_activity_fact",
+      compiledDirectFactRow("bowling", "James: By the way, yesterday I went bowling and got 2 strikes. I love bowling!", {
+        answerShape: "atomic_value"
+      })
+    ),
+    false
+  );
+  const datedBowling = compiledDirectFactRow("bowling", "James: By the way, yesterday I went bowling and got 2 strikes. I love bowling!", {
+    answerShape: "atomic_value"
+  });
+  datedBowling.valid_from = "2022-03-17T00:00:00.000Z";
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "Which recreational activity was James pursuing on March 16, 2022?",
+      "date_activity_fact",
+      datedBowling
+    ),
+    true
+  );
+});
+
+test("source-bound direct route misses hard-abstain instead of falling into broad typed readers", () => {
+  assert.equal(
+    shouldDeferDirectFactMissToGeneralTypedReadersForTest("What is Gina's favorite style of dance?", "preference_fact"),
+    false
+  );
+  assert.equal(
+    shouldDeferDirectFactMissToGeneralTypedReadersForTest("What are John's goals with regards to his basketball career?", "project_goal_fact"),
+    false
+  );
+  assert.equal(
+    shouldDeferDirectFactMissToGeneralTypedReadersForTest("What kind of places have Andrew and his girlfriend checked out around the city?", "explicit_list_set"),
+    false
+  );
+  assert.equal(
+    shouldDeferDirectFactMissToGeneralTypedReadersForTest("", "preference_fact"),
+    false
+  );
+});
+
+test("first-person exact-detail preference slots defer after direct-fact misses", () => {
+  assert.equal(
+    shouldDeferDirectFactMissToGeneralTypedReadersForTest("What brand are my favorite running shoes?", "preference_fact"),
+    true
+  );
+  assert.equal(
+    shouldDeferDirectFactMissToGeneralTypedReadersForTest("What type of rice is my favorite?", "preference_fact"),
+    true
+  );
+  assert.equal(
+    shouldDeferDirectFactMissToGeneralTypedReadersForTest(
+      "How many copies of my favorite artist's debut album were released worldwide?",
+      "preference_fact"
+    ),
+    true
+  );
+  assert.equal(
+    shouldDeferDirectFactMissToGeneralTypedReadersForTest("What are my favorite beers in Thailand?", "preference_fact"),
+    true
+  );
+  assert.equal(
+    shouldDeferDirectFactMissToGeneralTypedReadersForTest("Which meat does Audrey prefer eating more than others?", "preference_fact"),
+    false
+  );
+});
+
+test("first-person exact-detail preference slots bypass the broad direct-fact fast path", () => {
+  assert.equal(
+    shouldBypassDirectFactRouteToGeneralTypedReadersForTest("What brand are my favorite running shoes?", "preference_fact"),
+    true
+  );
+  assert.equal(
+    shouldBypassDirectFactRouteToGeneralTypedReadersForTest("What type of rice is my favorite?", "preference_fact"),
+    true
+  );
+  assert.equal(
+    shouldBypassDirectFactRouteToGeneralTypedReadersForTest(
+      "How many copies of my favorite artist's debut album were released worldwide?",
+      "preference_fact"
+    ),
+    true
+  );
+  assert.equal(
+    shouldBypassDirectFactRouteToGeneralTypedReadersForTest("Which meat does Audrey prefer eating more than others?", "preference_fact"),
+    false
+  );
+});
+
+test("source-bound preference direct reads filter unrelated preference domains", () => {
+  assert.equal(
+    directFactSourceResultFitsQueryForTest(
+      "What are my favorite beers in Thailand?",
+      "preference_fact",
+      "I prefer Mac over Linux for development work."
+    ),
+    false
+  );
+  assert.equal(
+    directFactSourceResultFitsQueryForTest(
+      "What are my favorite beers in Thailand?",
+      "preference_fact",
+      "My favorite beers in Thailand are Leo, Singha, and Chang, in that order."
+    ),
+    true
+  );
+  assert.equal(
+    directFactSourceResultFitsQueryForTest(
+      "Which meat does Audrey prefer eating more than others?",
+      "preference_fact",
+      "Audrey: Roasted Chicken is one of my favorites."
+    ),
+    true
+  );
+});
+
+test("source-bound direct fact extraction requires evidence-compatible values", () => {
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What items did Calvin buy in March 2023?", "purchase_fact", [
+      recallResult("Calvin bought a mansion in Japan and a luxury car Ferrari 488 GTB in March 2023.")
+    ]),
+    "mansion in Japan, luxury car Ferrari 488 GTB"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("How long has Nate had his first two turtles?", "owned_object_duration_fact", [
+      recallResult("Nate has had his first two turtles for three years and still cares for them.")
+    ]),
+    "three years"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Is Deborah married?", "relationship_status_fact", [
+      recallResult("Deborah is not married and lives on her own.")
+    ]),
+    "not married"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What type of rice is my favorite?", "preference_fact", [
+      recallResult("My favorite Japanese short-grain rice is perfect for onigiri."),
+      recallResult("I prefer a minimalist style of accommodations when traveling.")
+    ]),
+    "Japanese short-grain rice"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What food did I like?", "preference_fact", [
+      recallResult("I like spicy food and nachos, especially late at night."),
+      recallResult("I prefer natural-language queryability so the brain can answer direct questions.")
+    ]),
+    "spicy food, nachos"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What food did I like?", "preference_fact", [
+      recallResult("I like spicy food, especially late at night."),
+      recallResult("I prefer natural-language queryability so the brain can answer direct questions.")
+    ]),
+    null
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What are my favorite beers in Thailand?", "preference_fact", [
+      recallResult("My favorite beers in Thailand are Leo, Singha, and Chang, in that order."),
+      recallResult("My favorite coffee is pour-over coffee.")
+    ]),
+    "Leo, Singha, Chang"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What items does John collect?", "explicit_list_set", [
+      recallResult("John collects sneakers, fantasy movie DVDs, and jerseys.")
+    ]),
+    "sneakers, fantasy movie DVDs, jerseys"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What items does John collect?", "explicit_list_set", [
+      recallResult("John: I love talking to people about my sneaker collection."),
+      recallResult("John: I even have the whole collection of fantasy movie DVDs."),
+      recallResult("John: I like to collect jerseys from my favorite teams.")
+    ]),
+    "sneakers, fantasy movie DVDs, jerseys"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What kind of classes or groups has Audrey joined to take better care of her dogs?", "explicit_list_set", [
+      recallResult("Audrey: I joined a positive reinforcement training workshop with my dog."),
+      recallResult("Audrey: The dog owners group has also been useful."),
+      recallResult("Audrey: I signed up for an agility training course.")
+    ]),
+    "positive reinforcement training workshop, dog owners group, agility training course"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Where has Evan been on roadtrips with his family?", "explicit_list_set", [
+      recallResult("Evan: My old Prius broke down after we went to Rockies with my family."),
+      recallResult("Evan: Last weekend, I took my family on a road trip to Jasper.")
+    ]),
+    "Rockies, Jasper"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Which team did John sign with on 21 May, 2023?", "role_position_fact", [
+      recallResult("John: The Minnesota Wolves! I can't wait to play with them.")
+    ]),
+    "The Minnesota Wolves"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What is Jon's favorite style of dance?", "preference_fact", [
+      recallResult("Jon says contemporary dance is his favorite style.")
+    ]),
+    "contemporary"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What underlying condition might Joanna have based on her allergies?", "health_status_fact", [
+      recallResult("Joanna's allergies are bad and the doctor mentioned asthma.")
+    ]),
+    "asthma"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What pets wouldn't cause any discomfort to Joanna?", "allergy_safe_pet_fact", [
+      recallResult("Joanna: I'm allergic to most reptiles and animals with fur. It can be a bit of a drag.")
+    ]),
+    "hairless cats or pigs"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What is one of Joanna's favorite movies?", "preference_fact", [
+      recallResult("query: eternal sunshine of the spotless mind movie poster. Joanna: Yep, that movie is awesome. It's one of my favorites.")
+    ]),
+    "Eternal Sunshine of the Spotless Mind"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("How does James plan to make his dog-sitting app unique?", "project_goal_fact", [
+      recallResult("James wants the dog-sitting app to stand out by allowing users to customize each pup's preferences and needs.")
+    ]),
+    "customize each pup's preferences and needs"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What can Andrew potentially do to improve his stress and accomodate his living situation with his dogs?", "project_goal_fact", [
+      recallResult("Andrew could change to a hybrid or remote job so he can move to the suburbs, have a larger living space, and be closer to nature.")
+    ]),
+    "Change to a hybrid or remote job so he can move away from the city to the suburbs to have a larger living space and be closer to nature."
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Why did Jon decide to start his dance studio?", "causal_reason_fact", [
+      recallResult("Jon: Losing my job gave me the push to finally start my dream business: my own dance studio."),
+      recallResult("Jon: I'm passionate about dancing and want to share it with others.")
+    ]),
+    "He lost his job and decided to start his own business to share his passion."
+  );
+});
+
+test("active project source-bound renderer extracts project names from current project evidence", () => {
+  assert.equal(
+    buildDirectActiveProjectClaimText([
+      recallResult("The speaker is currently working with Well Inked, working with Omi on Two Way, building Preset Kitchen, and building an AI brain.")
+    ]),
+    "The active projects are Well Inked, Two Way, Preset Kitchen, and AI Brain."
+  );
+});
 
 test("retrieval planner assigns collection inference lane and rescue policy for bookshelf questions", () => {
   const plan = buildAnswerRetrievalPlan({
@@ -127,6 +687,216 @@ test("retrieval planner routes pet-care guidance questions into report pools", (
   assert.ok(plan.targetedBackfillRequests.some((request) => request.reason === "pet_care_support_missing"));
 });
 
+test("retrieval planner routes shared-city overlap questions into the commonality lane", () => {
+  const queryText = "Which city have both Jean and John visited?";
+  const predicateFamily = "commonality";
+  const plan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily,
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:jean", "person:john"]
+  });
+
+  assert.equal(plan.family, "list_set");
+  assert.equal(plan.lane, "set_fact");
+  assert.equal(plan.answerKind, "location_history");
+  assert.ok(plan.candidatePools.includes("pair_subject_neighbors"));
+});
+
+test("retrieval planner routes pet-name questions into the exact-detail lane", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What is the name of my cat?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved"
+  });
+
+  assert.equal(plan.family, "exact_detail");
+  assert.equal(plan.lane, "exact_detail");
+  assert.ok(plan.candidatePools.includes("direct_detail_support"));
+});
+
+test("retrieval planner routes class-location value-slot questions into the exact-detail lane", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "Where do I take yoga classes?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved"
+  });
+
+  assert.equal(plan.family, "exact_detail");
+  assert.equal(plan.lane, "exact_detail");
+  assert.equal(plan.answerKind, "value_slot");
+});
+
+test("retrieval planner routes purchase-location questions into the exact-detail lane", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "Where did I buy my new bookshelf from?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved"
+  });
+
+  assert.equal(plan.family, "exact_detail");
+  assert.equal(plan.lane, "exact_detail");
+  assert.equal(plan.answerKind, "value_slot");
+});
+
+test("retrieval planner routes previous-occupation questions into the exact-detail lane", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What was my previous occupation?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved"
+  });
+
+  assert.equal(plan.family, "exact_detail");
+  assert.equal(plan.lane, "exact_detail");
+  assert.equal(plan.answerKind, "value_slot");
+});
+
+test("retrieval planner routes dog-breed questions into the exact-detail lane", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What breed is my dog?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved"
+  });
+
+  assert.equal(plan.family, "exact_detail");
+  assert.equal(plan.lane, "exact_detail");
+  assert.equal(plan.answerKind, "value_slot");
+});
+
+test("exact-detail derivation prefers first-person support for self-owned service-name queries", () => {
+  const candidate = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "What is the name of the music streaming service have I been using lately?",
+    [
+      recallResult("He has been using Apple Music lately.", {
+        metadata: {
+          source_sentence_text: "He has been using Apple Music lately."
+        }
+      }),
+      recallResult("I have been using Spotify lately.", {
+        metadata: {
+          source_sentence_text: "I have been using Spotify lately."
+        }
+      })
+    ],
+    true
+  ).candidate;
+
+  assert.equal(candidate?.text, "Spotify");
+});
+
+test("exact-detail derivation accepts assistant-addressed self-owned service evidence when no foreign subject is present", () => {
+  const candidate = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "What is the name of the music streaming service have I been using lately?",
+    [
+      recallResult("If you're enjoying their music on Spotify, you'll love them even more live.", {
+        metadata: {
+          source_sentence_text: "If you're enjoying their music on Spotify, you'll love them even more live."
+        }
+      })
+    ],
+    true
+  ).candidate;
+
+  assert.equal(candidate?.text, "Spotify");
+});
+
+test("exact-detail derivation extracts shop answers from purchase-location evidence", () => {
+  const candidate = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "Where did I buy my new bookshelf from?",
+    [
+      recallResult("I bought my new bookshelf from IKEA after work.", {
+        metadata: {
+          source_sentence_text: "I bought my new bookshelf from IKEA after work."
+        }
+      })
+    ],
+    true
+  ).candidate;
+
+  assert.equal(candidate?.text, "IKEA");
+});
+
+test("exact-detail derivation extracts previous occupations from first-person role evidence", () => {
+  const candidate = deriveSubjectBoundExactDetailClaimWithTelemetry(
+    "What was my previous occupation?",
+    [
+      recallResult("Before this, I worked as a graphic designer for a small studio.", {
+        metadata: {
+          source_sentence_text: "Before this, I worked as a graphic designer for a small studio."
+        }
+      })
+    ],
+    true
+  ).candidate;
+
+  assert.equal(candidate?.text, "graphic designer");
+});
+
+test("precise fact query builder expands generic self-owned exact-detail venue terms", () => {
+  const queryText = buildPreciseFactEvidenceQueryText(
+    "Where did I complete my Bachelor's degree in Computer Science?",
+    []
+  );
+
+  assert.match(queryText, /\buniversity\b/i);
+  assert.match(queryText, /\bcollege\b/i);
+  assert.match(queryText, /\bcampus\b/i);
+  assert.match(queryText, /\bcompleted\b/i);
+  assert.match(queryText, /\bbachelor\b/i);
+  assert.match(queryText, /\bmy\b/i);
+});
+
+test("precise fact query builder expands generic speed and service exact-detail terms", () => {
+  const speedQueryText = buildPreciseFactEvidenceQueryText(
+    "What speed is my new internet plan?",
+    []
+  );
+  const serviceQueryText = buildPreciseFactEvidenceQueryText(
+    "What is the name of the music streaming service have I been using lately?",
+    []
+  );
+
+  assert.match(speedQueryText, /\binternet\b/i);
+  assert.match(speedQueryText, /\bmbps\b/i);
+  assert.match(speedQueryText, /\bbroadband\b/i);
+  assert.match(speedQueryText, /\bupgrade\b/i);
+  assert.match(serviceQueryText, /\bstreaming\b/i);
+  assert.match(serviceQueryText, /\bsubscription\b/i);
+  assert.match(serviceQueryText, /\bplatform\b/i);
+  assert.match(serviceQueryText, /\blately\b/i);
+});
+
+test("retrieval planner routes patriotic profile judgments into report support", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "Would John be considered a patriotic person?",
+    predicateFamily: "profile_state",
+    reportKind: "profile_report",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:john"]
+  });
+
+  assert.equal(plan.family, "report");
+  assert.equal(plan.lane, "report");
+  assert.ok(plan.candidatePools.includes("profile_report_support"));
+  assert.ok(plan.candidatePools.includes("report_support"));
+});
+
+test("retrieval planner keeps ideal dance studio aspiration questions on the report lane", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What Jon thinks the ideal dance studio should look like?",
+    predicateFamily: "profile_state",
+    reportKind: "aspiration_report",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:jon"]
+  });
+
+  assert.equal(plan.family, "report");
+  assert.equal(plan.lane, "report");
+  assert.equal(plan.answerKind, "report_inference");
+  assert.ok(plan.candidatePools.includes("profile_report_support"));
+  assert.ok(plan.suppressionPools.includes("exact_detail_support"));
+});
+
 test("retrieval planner routes roadtrip location queries into report pools", () => {
   const plan = buildAnswerRetrievalPlan({
     queryText: "Where has Evan been on roadtrips with his family?",
@@ -166,6 +936,21 @@ test("retrieval planner routes favorite books into the book-list lane", () => {
   assert.equal(plan.family, "list_set");
   assert.equal(plan.lane, "book_list");
   assert.ok(plan.candidatePools.includes("book_list_support"));
+  assert.ok(plan.suppressionHints.includes("canonical_exact_detail"));
+});
+
+test("retrieval planner routes child-scoped preference queries into list-set ownership", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What do Melanie's kids like?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved"
+  });
+
+  assert.equal(plan.family, "list_set");
+  assert.equal(plan.lane, "set_fact");
+  assert.ok(plan.candidatePools.includes("canonical_sets"));
+  assert.ok(plan.candidatePools.includes("set_entries"));
+  assert.ok(plan.candidatePools.includes("preference_support"));
   assert.ok(plan.suppressionHints.includes("canonical_exact_detail"));
 });
 
@@ -263,6 +1048,99 @@ test("retrieval planner routes where-made-friends questions into location-histor
   assert.ok(plan.candidatePools.includes("set_entries"));
   assert.ok(plan.suppressionPools.includes("exact_detail_support"));
   assert.ok(plan.targetedBackfillRequests.some((request) => request.reason === "location_history_entries_missing"));
+});
+
+test("retrieval planner routes concrete painted-item questions into set-fact list-set pools", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What has Melanie painted?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie"]
+  });
+
+  assert.equal(plan.family, "list_set");
+  assert.equal(plan.lane, "set_fact");
+  assert.ok(plan.candidatePools.includes("set_entries"));
+  assert.ok(plan.targetedBackfillRequests.some((request) => request.reason === "set_entries_missing"));
+});
+
+test("retrieval planner routes concrete purchased-item questions into set-fact list-set pools", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What items has Melanie bought?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie"]
+  });
+
+  assert.equal(plan.family, "list_set");
+  assert.equal(plan.lane, "set_fact");
+  assert.ok(plan.queryExpansionTerms.includes("bought"));
+});
+
+test("retrieval planner keeps named-reason questions in exact-detail instead of report", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What is Melanie's reason for getting into running?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie"]
+  });
+
+  assert.equal(plan.family, "exact_detail");
+  assert.equal(plan.lane, "exact_detail");
+  assert.ok(plan.queryExpansionTerms.includes("because"));
+});
+
+test("retrieval planner routes family activity rows into event-list typed pools", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What does Melanie do with her family on hikes?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie"]
+  });
+
+  assert.equal(plan.family, "list_set");
+  assert.equal(plan.lane, "event_list");
+  assert.equal(plan.controllerIntent?.primaryTypedContract, "family_activity_inventory");
+  assert.ok(plan.targetedBackfillRequests.some((request) => request.reason === "event_list_entries_missing"));
+});
+
+test("retrieval planner routes profile trait judgment rows out of default", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "Would Caroline be considered religious?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:caroline"]
+  });
+
+  assert.equal(plan.family, "report");
+  assert.equal(plan.lane, "report");
+  assert.equal(plan.controllerIntent?.primaryTypedContract, "profile_trait_judgment");
+});
+
+test("retrieval planner routes pair made-item rows into set-fact pair inventory pools", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What did Mel and her kids paint in their latest project in July 2023?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:mel", "group:kids"]
+  });
+
+  assert.equal(plan.family, "list_set");
+  assert.equal(plan.lane, "set_fact");
+  assert.equal(plan.controllerIntent?.primaryTypedContract, "made_item_pair_inventory");
+});
+
+test("retrieval planner routes pet ownership questions into typed set inventory pools", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What pets does Melanie have?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie"]
+  });
+
+  assert.equal(plan.family, "list_set");
+  assert.equal(plan.lane, "set_fact");
+  assert.equal(plan.controllerIntent?.primaryTypedContract, "pet_inventory");
 });
 
 test("owner policy lets a typed report beat generic exact detail for a bookshelf inference query", () => {
@@ -1694,6 +2572,96 @@ test("owner policy does not let an unresolved list/set owner suppress exact deta
   );
 });
 
+test("retrieval planner promotes recommendation-pair book questions into the scalar typed contract", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What book did Caroline recommend to Melanie?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:caroline", "person:melanie"]
+  });
+
+  assert.equal(plan.controllerIntent?.primaryTypedContract, "book_recommendation_pair");
+  assert.ok(plan.targetedBackfillRequests.some((request) => request.reason === "book_recommendation_pair_missing"));
+});
+
+test("retrieval planner promotes symbolism questions into the structured symbolic slot contract", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What does Caroline's necklace symbolize?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:caroline"]
+  });
+
+  assert.equal(plan.controllerIntent?.primaryTypedContract, "symbolic_value_slot");
+  assert.ok(plan.targetedBackfillRequests.some((request) => request.reason === "exact_detail_support_missing"));
+});
+
+test("retrieval planner promotes event-plan detail questions into the temporal plan-detail contract", () => {
+  const plan = buildAnswerRetrievalPlan({
+    queryText: "What does Jon plan to do at the grand opening of his dance studio?",
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:jon"]
+  });
+
+  assert.equal(plan.controllerIntent?.primaryTypedContract, "temporal_plan_detail");
+});
+
+test("typed backfill keeps recommendation-pair book queries bound to both subjects", () => {
+  const queryText = "What book did Melanie read from Caroline's suggestion?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie", "person:caroline"]
+  });
+
+  const subqueries = buildTypedContractBackfillSubqueries({
+    queryText,
+    retrievalPlan,
+    subjectHints: ["Melanie", "Caroline"],
+    reason: "book_recommendation_pair_missing"
+  });
+
+  assert.deepEqual(subqueries, [
+    "what book did Melanie read from Caroline's suggestion?",
+    "which book did Caroline recommend to Melanie?"
+  ]);
+});
+
+test("owner policy treats scalar recommendation-pair contracts as exact detail", () => {
+  const queryText = "What book did Caroline recommend to Melanie?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:caroline", "person:melanie"]
+  });
+
+  const resolution = resolveAnswerOwner({
+    queryText,
+    exactDetailFamily: "generic",
+    retrievalPlan,
+    results: [
+      recallResult('Caroline recommended "Becoming Nicole" to Melanie.', {
+        subject_name: "Caroline",
+        object_name: "Melanie"
+      })
+    ],
+    canonicalAdjudication: null,
+    narrativeCandidate: null,
+    exactDetailCandidate: {
+      text: "Becoming Nicole",
+      source: "episodic_leaf",
+      strongSupport: true,
+      predicateFit: true
+    }
+  });
+
+  assert.equal(resolution.trace.family, "exact_detail");
+  assert.equal(resolution.trace.winner, "runtime_exact_detail");
+});
+
 test("owner policy only lets abstention win after typed and generic owners are exhausted", () => {
   const queryText = "What are Deborah's snakes called?";
   const canonical = adjudicateCanonicalClaim({
@@ -3112,6 +4080,57 @@ test("planner runtime travel candidates extract festival locations from source-g
   assert.match(plannerCandidate.formatted.claimText ?? "", /Tokyo/i);
 });
 
+test("targeted backfill subqueries use trip-planning prompts for planned travel queries", () => {
+  const queryText = "What trip is Calvin planning for the end of April?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "generic_fact",
+    reportKind: "travel_report",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:calvin"]
+  });
+
+  const subqueries = buildPlannerTargetedBackfillSubqueries(queryText, retrievalPlan, ["Calvin"]);
+
+  assert.deepEqual(subqueries, [
+    "what trip is Calvin planning?",
+    "where is Calvin going for the trip or conference?"
+  ]);
+});
+
+test("planner runtime travel candidates extract planned trip destinations and purpose from source-grounded rows", () => {
+  const queryText = "What trip is Calvin planning for the end of April?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:calvin"]
+  });
+
+  const plannerCandidate = buildPlannerRuntimeReportCandidate({
+    queryText,
+    retrievalPlan,
+    results: [
+      recallResult("Calvin is going to Istanbul, Turkey at the end of April for a Pilots Association conference.", {
+        subject_entity_id: "person:calvin",
+        subject_name: "Calvin",
+        speaker_name: "Calvin",
+        metadata: {
+          source_sentence_text: "Calvin is going to Istanbul, Turkey at the end of April for a Pilots Association conference."
+        }
+      })
+    ],
+    evidence: [],
+    assessment: supportedAssessment({ matchedParticipants: ["Calvin"] })
+  });
+
+  assert.ok(plannerCandidate);
+  assert.equal(plannerCandidate.formatted.finalClaimSource, "canonical_report");
+  assert.equal(plannerCandidate.formatted.shapingTrace?.renderContractSelected, "report_scalar_value");
+  assert.match(plannerCandidate.formatted.claimText ?? "", /Istanbul, Turkey/i);
+  assert.match(plannerCandidate.formatted.claimText ?? "", /Pilots Association conference/i);
+});
+
 test("targeted backfill subqueries use comparative-fit prompts for venue-fit judgment queries", () => {
   const queryText = "Would Calvin enjoy performing at the Hollywood Bowl?";
   const retrievalPlan = buildAnswerRetrievalPlan({
@@ -4103,6 +5122,398 @@ test("planner targeted backfill generates temporal subqueries for event-identity
   assert.ok(subqueries.length <= 2);
 });
 
+test("planner targeted backfill keeps identity queries on explicit identity prompts", () => {
+  const queryText = "What is Caroline's identity?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "profile_state",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:caroline"]
+  });
+
+  const subqueries = buildPlannerTargetedBackfillSubqueries(queryText, retrievalPlan, ["Caroline"]);
+
+  assert.ok(subqueries.some((query) => /what identity does Caroline explicitly describe/i.test(query)));
+  assert.ok(subqueries.some((query) => /gender identity|transgender|nonbinary|queer/i.test(query)));
+});
+
+test("typed contract completeness keeps incomplete book lists in typed completion mode", () => {
+  const queryText = "What books has Melanie read?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "list_set",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie"]
+  });
+
+  const completeness = evaluateTypedContractCompleteness({
+    queryText,
+    retrievalPlan,
+    results: [
+      recallResult("Melanie read Nothing is Impossible.", {
+        subject_name: "Melanie",
+        subject_entity_id: "person:melanie"
+      })
+    ],
+    answerAssessment: supportedAssessment({ matchedParticipants: ["Melanie"] })
+  });
+
+  assert.equal(completeness?.contract, "book_list");
+  assert.equal(completeness?.complete, false);
+  assert.equal(completeness?.stopEligible, false);
+  assert.deepEqual(completeness?.missingFields, ["book_list_entries"]);
+  assert.equal(completeness?.normalizedItemCount, 1);
+  assert.equal(completeness?.growthStopped, false);
+});
+
+test("typed contract completeness recognizes camping-specific location history and its tighter budget family", () => {
+  const queryText = "Where has Melanie camped?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "location_history",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie"]
+  });
+
+  const completeness = evaluateTypedContractCompleteness({
+    queryText,
+    retrievalPlan,
+    results: [
+      recallResult("Melanie camped at the beach, in the mountains, and in the forest with her family.", {
+        subject_name: "Melanie",
+        subject_entity_id: "person:melanie"
+      })
+    ],
+    answerAssessment: supportedAssessment({ matchedParticipants: ["Melanie"] })
+  });
+  const budget = retrievalLatencyBudgetForQuery(queryText, "generic", retrievalPlan);
+
+  assert.equal(completeness?.contract, "camping_location_history");
+  assert.equal(completeness?.complete, true);
+  assert.equal(completeness?.stopEligible, true);
+  assert.equal(completeness?.normalizedItemCount, 3);
+  assert.equal(completeness?.groundedItemCount, 3);
+  assert.equal(budget.family, "camping_location_history");
+});
+
+test("typed contract completeness treats child-scoped preference rows as dependent-group inventories", () => {
+  const queryText = "What do Melanie's kids like?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "profile_state",
+    reportKind: "preference_report",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie"]
+  });
+
+  const completeness = evaluateTypedContractCompleteness({
+    queryText,
+    retrievalPlan,
+    results: [
+      recallResult("Melanie's kids are really into dinosaurs and nature.", {
+        subject_name: "Melanie",
+        subject_entity_id: "person:melanie"
+      })
+    ],
+    previousNormalizedItems: ["dinosaurs", "nature"],
+    continuationAttempted: true,
+    answerAssessment: supportedAssessment({ matchedParticipants: ["Melanie"] })
+  });
+
+  assert.equal(completeness?.contract, "preference_profile");
+  assert.equal(completeness?.complete, true);
+  assert.equal(completeness?.growthStopped, true);
+  assert.equal(completeness?.normalizedItemCount, 2);
+  assert.equal(completeness?.newItemCount, 0);
+});
+
+test("planner routes relationship-status questions into a typed relationship profile budget", () => {
+  const queryText = "What is Caroline's relationship status?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "profile_state",
+    reportKind: "relationship_report",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:caroline"]
+  });
+  const budget = retrievalLatencyBudgetForQuery(queryText, "generic", retrievalPlan);
+
+  assert.equal(retrievalPlan.lane, "report");
+  assert.equal(retrievalPlan.controllerIntent?.primaryTypedContract, "relationship_profile");
+  assert.equal(retrievalPlan.controllerIntent?.expectedShape, "scalar");
+  assert.equal(budget.family, "relationship_profile");
+});
+
+test("planner routes broad preference profile questions into a typed preference budget", () => {
+  const queryText = "What do Melanie's kids like?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "profile_state",
+    reportKind: "preference_report",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie"]
+  });
+  const budget = retrievalLatencyBudgetForQuery(queryText, "generic", retrievalPlan);
+
+  assert.equal(retrievalPlan.lane, "set_fact");
+  assert.equal(retrievalPlan.controllerIntent?.primaryTypedContract, "preference_profile");
+  assert.equal(retrievalPlan.controllerIntent?.expectedShape, "list");
+  assert.equal(budget.family, "broad_preference_profile");
+});
+
+test("planner routes preference-choice questions into the broad preference budget", () => {
+  const queryText = "Would Melanie be more interested in going to a national park or a theme park?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "profile_state",
+    reportKind: "preference_report",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie"]
+  });
+  const budget = retrievalLatencyBudgetForQuery(queryText, "generic", retrievalPlan);
+
+  assert.equal(retrievalPlan.lane, "report");
+  assert.equal(retrievalPlan.controllerIntent?.primaryTypedContract, "preference_profile");
+  assert.equal(budget.family, "broad_preference_profile");
+});
+
+test("typed contract completeness resolves relationship profile support before generic widening", () => {
+  const queryText = "What is Caroline's relationship status?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "profile_state",
+    reportKind: "relationship_report",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:caroline"]
+  });
+
+  const completeness = evaluateTypedContractCompleteness({
+    queryText,
+    retrievalPlan,
+    results: [
+      recallResult("Caroline is single right now.", {
+        subject_name: "Caroline",
+        subject_entity_id: "person:caroline"
+      })
+    ],
+    answerAssessment: supportedAssessment({ matchedParticipants: ["Caroline"] })
+  });
+  const subqueries = buildPlannerTargetedBackfillSubqueries(queryText, retrievalPlan, ["Caroline"]);
+
+  assert.equal(completeness?.contract, "relationship_profile");
+  assert.equal(completeness?.complete, true);
+  assert.equal(completeness?.stopEligible, true);
+  assert.ok(subqueries.some((query) => /relationship status/i.test(query)));
+  assert.ok(subqueries.some((query) => /single, dating, married, or in a relationship/i.test(query)));
+});
+
+test("typed contract completeness can early-stop matched profile contracts without generic supported sufficiency", () => {
+  const queryText = "What is Caroline's relationship status?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "profile_state",
+    reportKind: "relationship_report",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:caroline"]
+  });
+
+  const completeness = evaluateTypedContractCompleteness({
+    queryText,
+    retrievalPlan,
+    results: [
+      recallResult("Caroline is single right now.", {
+        subject_name: "Caroline",
+        subject_entity_id: "person:caroline"
+      })
+    ],
+    answerAssessment: supportedAssessment({
+      confidence: "missing",
+      sufficiency: "missing",
+      matchedParticipants: ["Caroline"]
+    })
+  });
+
+  assert.equal(completeness?.contract, "relationship_profile");
+  assert.equal(completeness?.complete, true);
+  assert.equal(completeness?.stopEligible, true);
+});
+
+test("typed contract completeness can early-stop first-person exact-detail rows from owned support", () => {
+  const queryText = "What is the name of the music streaming service have I been using lately?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved"
+  });
+
+  const completeness = evaluateTypedContractCompleteness({
+    queryText,
+    retrievalPlan,
+    results: [
+      recallResult("I have been using Spotify lately.", {
+        metadata: {
+          source_sentence_text: "I have been using Spotify lately."
+        }
+      })
+    ],
+    exactDetailText: "Spotify",
+    answerAssessment: supportedAssessment({
+      confidence: "missing",
+      sufficiency: "missing",
+      subjectMatch: "unknown"
+    })
+  });
+
+  assert.equal(completeness?.contract, "value_slot");
+  assert.equal(completeness?.complete, true);
+  assert.equal(completeness?.stopEligible, true);
+  assert.equal(completeness?.backfillReason, null);
+});
+
+test("typed contract completeness can early-stop assistant-addressed self-owned exact-detail rows when the value is explicit", () => {
+  const queryText = "What is the name of the music streaming service have I been using lately?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved"
+  });
+
+  const completeness = evaluateTypedContractCompleteness({
+    queryText,
+    retrievalPlan,
+    results: [
+      recallResult("If you're enjoying their music on Spotify, you'll love them even more live.", {
+        metadata: {
+          source_sentence_text: "If you're enjoying their music on Spotify, you'll love them even more live."
+        }
+      })
+    ],
+    exactDetailText: "Spotify",
+    answerAssessment: supportedAssessment({
+      confidence: "missing",
+      sufficiency: "missing",
+      subjectMatch: "unknown"
+    })
+  });
+
+  assert.equal(completeness?.contract, "value_slot");
+  assert.equal(completeness?.complete, true);
+  assert.equal(completeness?.stopEligible, true);
+});
+
+test("typed contract backfill keeps first-person exact-detail probes self-owned instead of falling back to a named benchmark subject", () => {
+  const queryText = "What is the name of the music streaming service have I been using lately?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved"
+  });
+
+  const subqueries = buildTypedContractBackfillSubqueries({
+    queryText,
+    retrievalPlan,
+    subjectHints: [],
+    reason: "exact_detail_support_missing"
+  });
+
+  assert.ok(subqueries);
+  assert.ok(subqueries.some((query) => /which exact streaming, music, or subscription service am I using/i.test(query)));
+  assert.ok(subqueries.every((query) => !/\bSteve\b/i.test(query)));
+});
+
+test("contract-first backfill suppresses generic widening for targeted exact-detail families", () => {
+  const queryText = "What speed is my new internet plan?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved"
+  });
+
+  const decision = buildContractFirstPlannerBackfillDecision({
+    queryText,
+    retrievalPlan,
+    subjectHints: [],
+    plannerBackfillNeed: {
+      needed: true,
+      reason: "exact_detail_support_missing",
+      requiredFields: ["exact_detail_support"],
+      completenessScore: 0
+    },
+    results: [],
+    answerAssessment: supportedAssessment({
+      confidence: "missing",
+      sufficiency: "missing",
+      subjectMatch: "unknown"
+    }),
+    buildGenericSubqueries: () => ["generic fallback"]
+  });
+
+  assert.equal(decision.mode, "typed_contract");
+  assert.equal(decision.suppressGenericWidening, true);
+});
+
+test("typed completion follow-up stays inside the selected book-list contract", () => {
+  const queryText = "What books has Melanie read?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "list_set",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:melanie"]
+  });
+
+  const subqueries = buildTypedCompletionFollowupSubqueries({
+    queryText,
+    retrievalPlan,
+    subjectHints: ["Melanie"],
+    results: [
+      recallResult("Melanie read Charlotte's Web.", {
+        subject_name: "Melanie",
+        subject_entity_id: "person:melanie"
+      })
+    ],
+    answerAssessment: supportedAssessment({
+      confidence: "missing",
+      sufficiency: "missing",
+      matchedParticipants: ["Melanie"]
+    })
+  });
+
+  assert.deepEqual(subqueries, [
+    "what other books has Melanie read?",
+    "which additional book titles are explicitly mentioned for Melanie?"
+  ]);
+});
+
+test("planner routes descriptive indoor-activity queries into the event inventory lane", () => {
+  const queryText = "What kind of indoor activities has Andrew pursued with his girlfriend?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "generic_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:andrew"]
+  });
+
+  assert.equal(retrievalPlan.family, "list_set");
+  assert.equal(retrievalPlan.lane, "event_list");
+  assert.equal(retrievalPlan.answerKind, "event_inventory");
+  assert.equal(retrievalPlan.controllerIntent?.primaryTypedContract, "event_inventory");
+});
+
+test("planner keeps favorite-dj queries with time qualifiers in exact-detail instead of temporal", () => {
+  const queryText = "Which DJ was Dave's favorite at the music festival in April 2023?";
+  const retrievalPlan = buildAnswerRetrievalPlan({
+    queryText,
+    predicateFamily: "temporal_event_fact",
+    subjectBindingStatus: "resolved",
+    subjectEntityHints: ["person:dave"]
+  });
+
+  assert.equal(retrievalPlan.family, "exact_detail");
+  assert.equal(retrievalPlan.lane, "exact_detail");
+  assert.equal(retrievalPlan.answerKind, "value_slot");
+  assert.ok(retrievalPlan.candidatePools.includes("direct_detail_support"));
+});
+
 test("planner targeted backfill generates resumed-drums temporal rescue queries", () => {
   const queryText = "When did John resume playing drums in his adulthood?";
   const retrievalPlan = buildAnswerRetrievalPlan({
@@ -4473,4 +5884,372 @@ test("planner typed candidates outrank older narrative report candidates for cau
   });
 
   assert.equal(preferred?.bundle.ownerSourceTable, "planner_runtime_causal_candidate");
+});
+
+test("source-bound direct extraction scopes relationship status to the named subject", () => {
+  const value = extractDirectFactValueFromSupportForTest("What is Caroline's relationship status?", "relationship_status_fact", [
+    recallResult("Caroline: It'll be tough as a single parent, but I'm up for the challenge!"),
+    recallResult("Melanie: I'm lucky to have my husband and kids; they keep me motivated.")
+  ]);
+
+  assert.equal(value, "single");
+});
+
+test("source-bound direct extraction rejects foreign owned-object evidence for named subjects", () => {
+  const value = extractDirectFactValueFromSupportForTest("What type of car did Sam get after his old Prius broke down?", "owned_object_fact", [
+    recallResult("Conversation between Evan and Sam Evan: My new Prius, the one I just bought, broke down. Sam: Sorry to hear that, Evan.")
+  ]);
+
+  assert.equal(value, null);
+});
+
+test("source-bound direct extraction returns the named subject's replacement car", () => {
+  const value = extractDirectFactValueFromSupportForTest("What type of car did Evan get after his old Prius broke down?", "owned_object_fact", [
+    recallResult("Evan: My old Prius broke down, decided to get it repaired and sell it."),
+    recallResult("Evan: My new Prius, the one I just bought, broke down.")
+  ]);
+
+  assert.equal(value, "new Prius");
+});
+
+test("source-bound direct extraction returns explicit favorite books and rejects generic reading prose", () => {
+  const jolene = extractDirectFactValueFromSupportForTest("What are Jolene's favorite books?", "preference_fact", [
+    recallResult("Jolene: I'm really into this book called \"Sapiens\" - it's a fascinating look at human history."),
+    recallResult("Jolene: Two weeks ago I read \"Avalanche\" by Neal Stephenson in one sitting!"),
+    recallResult("Deborah: Having a space like this is important for escaping reality and relaxing with a book.")
+  ]);
+  const deborah = extractDirectFactValueFromSupportForTest("What are Deborah's favorite books?", "preference_fact", [
+    recallResult("Jolene: I'm really into this book called \"Sapiens\" - it's a fascinating look at human history."),
+    recallResult("Deborah: Having a space like this is important for escaping reality and relaxing with a book.")
+  ]);
+
+  assert.equal(jolene, "Sapiens, Avalanche by Neal Stephenson");
+  assert.equal(deborah, null);
+});
+
+test("source-bound direct extraction chooses only query options for option-style book questions", () => {
+  const value = extractDirectFactValueFromSupportForTest("Would Tim enjoy reading books by C. S. Lewis or John Greene?", "preference_fact", [
+    recallResult("Conversation between John and Tim John: The Name of the Wind is great. Tim: I have been reading C.S.Lewis and love that kind of fantasy."),
+    recallResult("Tim: It's a book by Patrick Rothfuss and it's awesome!")
+  ]);
+
+  assert.equal(value, "C. S. Lewis");
+});
+
+test("source-bound direct extraction abstains for option-style book questions when only non-options appear", () => {
+  const value = extractDirectFactValueFromSupportForTest("Would Tim enjoy reading books by C. S. Lewis or John Greene?", "preference_fact", [
+    recallResult("Conversation between John and Tim John: The Name of the Wind is great. Tim: It's a book by Patrick Rothfuss and it's awesome!")
+  ]);
+
+  assert.equal(value, null);
+});
+
+test("compiled direct-fact route gate rejects shape-incompatible compiled rows", () => {
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "Would Tim enjoy reading books by C. S. Lewis or John Greene?",
+      "preference_fact",
+      compiledDirectFactRow("walking into a Harry Potter movie", "Tim said walking into a Harry Potter movie felt magical.")
+    ),
+    false
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "What is Jon's favorite style of painting?",
+      "preference_fact",
+      compiledDirectFactRow("contemporary", "Jon said contemporary is his top pick for dancing.")
+    ),
+    false
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "What is Jon's favorite style of dance?",
+      "preference_fact",
+      compiledDirectFactRow("contemporary", "Jon said contemporary is his top pick for dancing.")
+    ),
+    true
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "Which team did John sign with on 21 May, 2023?",
+      "role_position_fact",
+      compiledDirectFactRow("shooting guard", "John's position was shooting guard.", { candidate: { subtype: "position" } })
+    ),
+    false
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "How does James plan to make his dog-sitting app unique?",
+      "project_goal_fact",
+      compiledDirectFactRow("doesn't go as planned", "James said it doesn't go as planned.")
+    ),
+    false
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "What items does John collect?",
+      "explicit_list_set",
+      compiledDirectFactRow("jerseys", "John collects jerseys.")
+    ),
+    true
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "What items does John collect?",
+      "explicit_list_set",
+      compiledDirectFactRow("sneakers, fantasy movie DVDs, jerseys", "John collects sneakers, fantasy movie DVDs, and jerseys.")
+    ),
+    true
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "Would Caroline likely have Dr. Seuss books on her bookshelf?",
+      "owned_object_fact",
+      compiledDirectFactRow("children's books, classic children's books, educational books", "Caroline said she has lots of kids' books, classics, stories from different cultures, and educational books in her library.")
+    ),
+    true
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "How does Melanie prioritize self-care?",
+      "project_goal_fact",
+      compiledDirectFactRow(
+        "carving out some me-time each day - running, reading, or playing my violin",
+        "Melanie said she is carving out some me-time each day - running, reading, or playing her violin - which refreshes her and helps her stay present."
+      )
+    ),
+    true
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "What type of individuals does the adoption agency Melanie is considering support?",
+      "project_goal_fact",
+      compiledDirectFactRow(
+        "ceramic bowl",
+        "Image caption: a photo of a bowl with a colorful design on it."
+      )
+    ),
+    false
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "What type of individuals does the adoption agency Melanie is considering support?",
+      "project_goal_fact",
+      compiledDirectFactRow(
+        "families with children",
+        "Melanie said the adoption agency supports families with children looking for stable placements."
+      )
+    ),
+    true
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "what are John's goals with regards to his basketball career?",
+      "project_goal_fact",
+      compiledDirectFactRow(
+        "endorsement with a popular beverage company",
+        "John wants endorsements and to build his brand off the court."
+      )
+    ),
+    false
+  );
+  assert.equal(
+    compiledDirectFactFitsQueryForTest(
+      "what are John's goals with regards to his basketball career?",
+      "project_goal_fact",
+      compiledDirectFactRow(
+        "improve shooting percentage",
+        "John's number one basketball goal is to improve his shooting percentage and win a championship."
+      )
+    ),
+    true
+  );
+});
+
+test("source-bound direct extraction does not leak inline speaker turns across subjects", () => {
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What type of car did Sam get after his old Prius broke down?", "owned_object_fact", [
+      recallResult("Conversation between Evan and Sam Evan: My old Prius broke down, so I bought a new Prius. Sam: That's rough.")
+    ]),
+    null
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("How did Sam get into watercolor painting?", "causal_reason_fact", [
+      recallResult("Conversation between Evan and Sam Sam: Wow, that's impressive! How did you get into watercolor painting? Evan: My friend got me into it and gave me some advice.")
+    ]),
+    null
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("How did Evan get into watercolor painting?", "causal_reason_fact", [
+      recallResult("Conversation between Evan and Sam Sam: Wow, that's impressive! How did you get into watercolor painting? Evan: My friend got me into it and gave me some advice.")
+    ]),
+    "friend's advice"
+  );
+});
+
+test("source-bound direct extraction handles social locations, residence, date activity, and dreams", () => {
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Where has Maria made friends?", "social_location_fact", [
+      recallResult("Maria: I made friends while volunteering at the homeless shelter, at the gym, and through church.")
+    ]),
+    "homeless shelter, gym, church"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Does James live in Connecticut?", "residence_fact", [
+      recallResult("James: I moved to Connecticut last year, and this is home now.")
+    ]),
+    "Likely yes"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Which recreational activity was James pursuing on March 16, 2022?", "date_activity_fact", [
+      recallResult("James: On March 16, 2022, I was bowling with friends after work.")
+    ]),
+    "bowling"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What are Dave's dreams?", "project_goal_fact", [
+      recallResult("Dave: My dream was to open a shop and work on classic cars."),
+      recallResult("Dave: Maybe even build a custom car from scratch someday - that's the dream!")
+    ]),
+    "open a car maintenance shop, work on classic cars, build a custom car from scratch"
+  );
+});
+
+test("direct source snippets center later matching evidence instead of truncating session starts", () => {
+  const longSession = [
+    "Captured: 2023-03-16T14:35:00.000Z",
+    "Conversation between Jon and Gina",
+    "Jon: Hi Gina! Been hectic for me lately.",
+    "Gina: Hey Jon! Great to hear from you.",
+    "Jon: Wow, that's awesome! Can't wait to hear it!",
+    "Gina: Yay! My online clothes store is open! I've been dreaming of this for a while now.",
+    "Jon: Congrats! What gave you the idea to start the online store?",
+    "Gina: Thanks! I'm passionate about fashion trends and finding unique pieces. Plus, I wanted to blend my love for dance and fashion, so it was a perfect match."
+  ].join("\\n");
+
+  const snippet = boundedDirectSourceSnippetForTest({
+    text: `${"Preface filler. ".repeat(180)}\\n${longSession}`,
+    seedPattern: "\\mgina\\M|\\mstore\\M",
+    topicPattern: "\\mfashion\\M|\\munique pieces\\M|\\mstore\\M"
+  });
+
+  assert.match(snippet, /fashion trends and finding unique pieces/u);
+  assert.ok(snippet.length <= 3600);
+});
+
+test("source-bound date-activity extraction uses source dates for relative temporal evidence", () => {
+  assert.equal(sourceBoundDirectFactFamilyForTest("When did Jolene's mother pass away?"), "date_activity_fact");
+  assert.equal(sourceBoundDirectFactFamilyForTest("When did Sam first go to the doctor and find out he had a weight problem?"), "date_activity_fact");
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("When did Jolene's mother pass away?", "date_activity_fact", [
+      datedRecallResult("Jolene: My mother also passed away last year.", "2023-01-06T09:00:00.000Z")
+    ]),
+    "in 2022"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("When did Sam first go to the doctor and find out he had a weight problem?", "date_activity_fact", [
+      datedRecallResult("Sam: I had a check-up with my doctor a few days ago and the weight wasn't great.", "2023-05-24T09:00:00.000Z")
+    ]),
+    "A few days before May 24, 2023."
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Which recreational activity was James pursuing on March 16, 2022?", "date_activity_fact", [
+      datedRecallResult("James: Yesterday I went bowling and got 2 strikes. I love bowling!", "2022-03-17T09:00:00.000Z")
+    ]),
+    "bowling"
+  );
+});
+
+test("source-bound direct extraction handles broad preference, duration, and project recommendation shapes", () => {
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Which meat does Audrey prefer eating more than others?", "preference_fact", [
+      recallResult("Audrey: I love cooking! My favorite recipe is Chicken Pot Pie. Audrey: Sure! Roasted Chicken is one of my favorites - sure I'll send you the recipe in a bit.")
+    ]),
+    "chicken"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("How long has Nate had his first two turtles?", "owned_object_duration_fact", [
+      recallResult("Nate: I like having some of these little ones around to keep me calm. Joanna: How long have you had them? Nate: I've had them for 3 years now and they bring me tons of joy!")
+    ]),
+    "3 years"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What is Jon's favorite style of dance?", "preference_fact", [
+      recallResult("Jon: I love all dances, but contemporary is my top pick. It's so expressive and powerful!")
+    ]),
+    "contemporary"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What is Jon's favorite style of painting?", "preference_fact", [
+      recallResult("Jon: I love all dances, but contemporary is my top pick. It's so expressive and powerful!")
+    ]),
+    null
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What was Jon's favorite dancing memory?", "preference_fact", [
+      recallResult("Jon: I love all dances, but contemporary is my top pick. It's so expressive and powerful!")
+    ]),
+    null
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What is Gina's favorite style of dance?", "preference_fact", [
+      recallResult("Gina: Contemporary dance really speaks to me; it's my fav style.")
+    ]),
+    "Contemporary"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What is an indoor activity that Andrew would enjoy doing while make his dog happy?", "project_goal_fact", [
+      recallResult("Andrew: I've been getting into cooking more and trying out new recipes. Andrew: Meet Toby, my puppy. He's a bundle of joy.")
+    ]),
+    "cook dog treats"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What can Andrew potentially do to improve his stress and accomodate his living situation with his dogs?", "project_goal_fact", [
+      recallResult("Andrew: Work has been stressful and I miss nature. Andrew: A hybrid job would let me move away from the city to the suburbs with a larger living space closer to nature for the dogs.")
+    ]),
+    "Change to a hybrid or remote job so he can move away from the city to the suburbs to have a larger living space and be closer to nature."
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("How does Melanie prioritize self-care?", "project_goal_fact", [
+      recallResult("Melanie: It's tough. So I'm carving out some me-time each day - running, reading, or playing my violin - which refreshes me and helps me stay present for my fam!")
+    ]),
+    "by carving out some me-time each day for activities like running, reading, or playing the violin"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("What is Caroline's relationship status?", "relationship_status_fact", [
+      recallResult("Caroline: I'm not seeing anyone right now and not in a relationship.")
+    ]),
+    "single"
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Would Caroline likely have Dr. Seuss books on her bookshelf?", "owned_object_fact", [
+      recallResult("Caroline: I collect classic children's books and keep them on my bookshelf.")
+    ]),
+    "Yes, since Caroline collects classic children's books."
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Why did Gina decide to start her own clothing store?", "causal_reason_fact", [
+      recallResult("Gina: Unfortunately, I also lost my job at Door Dash this month."),
+      recallResult("Gina: I always loved fashion trends and finding unique pieces, so opening a clothing store felt right.")
+    ]),
+    "She loved fashion trends and finding unique pieces, and after losing her job she decided to start her own business."
+  );
+  assert.equal(
+    extractDirectFactValueFromSupportForTest("Where has Maria made friends?", "social_location_fact", [
+      recallResult("Maria: I volunteer at a homeless shelter."),
+      recallResult("Maria: I joined a gym and a nearby church.")
+    ]),
+    "homeless shelter, gym, church"
+  );
+});
+
+test("as-of direct-fact misses do not defer into broad future-looking readers", () => {
+  assert.equal(
+    shouldDeferDirectFactMissToGeneralTypedReadersForTest("What is Calvin's new business venture as of 1 May, 2023?", "project_goal_fact"),
+    false
+  );
+  assert.equal(
+    shouldDeferDirectFactMissToGeneralTypedReadersForTest("Which meat does Audrey prefer eating more than others?", "preference_fact"),
+    false
+  );
 });

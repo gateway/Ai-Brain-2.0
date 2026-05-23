@@ -2,7 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { closePool } from "../db/client.js";
+import { rebuildContractProjectionsNamespace } from "../contract-projections/service.js";
 import { executeMcpTool } from "../mcp/server.js";
+import { anyDefaultProjectionBackedQueryEnabled } from "../retrieval/query-runtime-flags.js";
 import { runAndWriteHumanSyntheticWatchBenchmark } from "./human-synthetic-watch.js";
 import { runAndWriteLifeReplayBenchmark } from "./life-replay.js";
 import { runAndWriteOmiWatchSmokeBenchmark } from "./omi-watch-smoke.js";
@@ -347,7 +349,8 @@ function scenarios(personalNamespaceId: string, syntheticNamespaceId: string, om
         const failures: string[] = [];
         const groundedToKnownOmiPath =
           jsonString(payload).includes("/data/inbox/omi/normalized/2026/03/22/") ||
-          jsonString(payload).includes("/Library/Application Support/AI-Brain/omi-archive/normalized/2026/03/22/");
+          jsonString(payload).includes("/Library/Application Support/AI-Brain/omi-archive/normalized/2026/03/22/") ||
+          jsonString(payload).includes("/benchmark-fixtures/omi-watch-smoke/2026/03/22/");
         failIf(
           !groundedToKnownOmiPath,
           "Expected recap query to ground to the March 22 OMI normalized artifact.",
@@ -930,6 +933,11 @@ export async function runAndWriteMcpSmokeBenchmark(
   const replay = await runAndWriteLifeReplayBenchmark();
   const synthetic = await runAndWriteHumanSyntheticWatchBenchmark();
   const omi = await runAndWriteOmiWatchSmokeBenchmark();
+  if (anyDefaultProjectionBackedQueryEnabled()) {
+    for (const namespaceId of new Set([personalNamespaceId, syntheticNamespaceId, omiNamespaceId])) {
+      await rebuildContractProjectionsNamespace(namespaceId);
+    }
+  }
   const results: McpScenarioResult[] = [];
 
   for (const entry of scenarios(personalNamespaceId, syntheticNamespaceId, omiNamespaceId)) {

@@ -64,6 +64,7 @@ export interface ClassifyTextRequest {
   readonly systemPrompt?: string;
   readonly instruction?: string;
   readonly maxOutputTokens?: number;
+  readonly timeoutMs?: number;
   readonly metadata?: Record<string, unknown>;
 }
 
