@@ -132,12 +132,13 @@ async function prepareVideoFixture(targetUri: string): Promise<string> {
   return targetUri;
 }
 
-function buildProbeQuery(content: string): string {
+function buildProbeQuery(kind: FixtureKind, content: string): string {
   const tokens = (content.match(/[A-Za-z][A-Za-z-]{3,}/g) ?? [])
     .map((token) => token.toLowerCase())
     .filter((token) => !["that", "with", "from", "this", "have", "they", "their", "about", "should", "brain", "agent"].includes(token));
   const picked = [...new Set(tokens)].slice(0, 4);
-  return picked.join(" ");
+  if (picked.length === 0) return "";
+  return `what does the ${kind} artifact say about ${picked.join(" ")}`;
 }
 
 async function latestWorkerRun(workerId: string) {
@@ -335,10 +336,11 @@ export async function runAndWriteMultimodalWorkerSmokeBenchmark(): Promise<{
 
     const probeResults: QueryProbeResult[] = [];
     for (const [index, row] of derivations.entries()) {
-      const probeQuery = buildProbeQuery(row.content_text);
+      const kind = fixtureResults[index]?.kind ?? "image";
+      const probeQuery = buildProbeQuery(kind, row.content_text);
       if (!probeQuery) {
         probeResults.push({
-          kind: fixtureResults[index]?.kind ?? "image",
+          kind,
           probeQuery: "",
           latencyMs: 0,
           passed: false,
@@ -362,7 +364,7 @@ export async function runAndWriteMultimodalWorkerSmokeBenchmark(): Promise<{
         probeFailures.push("query returned no evidence items");
       }
       probeResults.push({
-        kind: fixtureResults[index]?.kind ?? "image",
+        kind,
         probeQuery,
         latencyMs,
         passed: probeFailures.length === 0,
