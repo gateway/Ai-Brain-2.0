@@ -5423,7 +5423,11 @@ export async function getTypedMediaResults(query: RecallQuery): Promise<readonly
         AND ($2::timestamptz IS NULL OR occurred_at >= $2::timestamptz)
         AND ($3::timestamptz IS NULL OR occurred_at <= $3::timestamptz)
         AND ($4::text[] IS NULL OR subject_name = ANY($4::text[]))
-        AND ($5::text IS NULL OR normalized_media_title LIKE '%' || $5 || '%')
+        AND (
+          $5::text IS NULL
+          OR normalized_media_title LIKE '%' || $5 || '%'
+          OR $5 LIKE '%' || normalized_media_title || '%'
+        )
       ORDER BY occurred_at DESC NULLS LAST, created_at DESC
       LIMIT 24
     `,
