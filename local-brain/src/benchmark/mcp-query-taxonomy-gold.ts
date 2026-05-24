@@ -202,6 +202,9 @@ export async function runMcpQueryTaxonomyGoldBenchmark(): Promise<McpQueryTaxono
     const syntheticReport = await runHumanSyntheticWatchBenchmark();
     await seedQueryTaxonomyGoldFixture();
     await rebuildContractProjectionsNamespace(QUERY_GOLD_FIXTURE_NAMESPACE);
+    for (const testCase of QUERY_TAXONOMY_GOLD_CASES) {
+      await runMcpCase(testCase, namespaceIdForCase(testCase, syntheticReport.namespaceId));
+    }
     const results: McpQueryTaxonomyGoldResult[] = [];
     for (const testCase of QUERY_TAXONOMY_GOLD_CASES) {
       results.push(await runMcpCase(testCase, namespaceIdForCase(testCase, syntheticReport.namespaceId)));

@@ -842,39 +842,41 @@ function deriveSourceGroundedTemporalClaimText(
     if (!sourceReferenceInstant) {
       continue;
     }
-    for (const sentence of helpers.extractSentenceCandidates(sourceText)) {
-      const relativeCue = extractRelativeTemporalCue(sentence, helpers);
-      if (!relativeCue) {
-        continue;
-      }
-      const { eventOverlap } = temporalOverlapScore(queryTermsForRelativeLeaves, sentence);
-      if (eventOverlap < 2) {
-        continue;
-      }
-      if (/\bstart(?:ed|ing)?\b/iu.test(queryText) && /\blast week\b/iu.test(sentence)) {
+    if (!queryEventKey && !isCareerHighMonthQuery) {
+      for (const sentence of helpers.extractSentenceCandidates(sourceText)) {
+        const relativeCue = extractRelativeTemporalCue(sentence, helpers);
+        if (!relativeCue) {
+          continue;
+        }
+        const { eventOverlap } = temporalOverlapScore(queryTermsForRelativeLeaves, sentence);
+        if (eventOverlap < 2) {
+          continue;
+        }
+        if (/\bstart(?:ed|ing)?\b/iu.test(queryText) && /\blast week\b/iu.test(sentence)) {
+          temporalCandidates.push({
+            label: formatUtcMonthLabel(sourceReferenceInstant),
+            score:
+              60 +
+              eventOverlap * 3 +
+              (/^[A-Z][A-Za-z0-9'’&.-]{1,40}:\s*/u.test(sentence) ? 1.2 : 0),
+            relativeClaimText: null
+          });
+          continue;
+        }
+        const label = inferRelativeTemporalAnswerLabel(sentence, sourceReferenceInstant, sourceReferenceInstant);
+        if (!label) {
+          continue;
+        }
         temporalCandidates.push({
-          label: formatUtcMonthLabel(sourceReferenceInstant),
+          label,
           score:
-            60 +
+            40 +
             eventOverlap * 3 +
-            (/^[A-Z][A-Za-z0-9'’&.-]{1,40}:\s*/u.test(sentence) ? 1.2 : 0),
+            (/^[A-Z][A-Za-z0-9'’&.-]{1,40}:\s*/u.test(sentence) ? 1.2 : 0) +
+            (/\byesterday\b|\blast year\b/iu.test(sentence) ? 1.4 : 0),
           relativeClaimText: null
         });
-        continue;
       }
-      const label = inferRelativeTemporalAnswerLabel(sentence, sourceReferenceInstant, sourceReferenceInstant);
-      if (!label) {
-        continue;
-      }
-      temporalCandidates.push({
-        label,
-        score:
-          40 +
-          eventOverlap * 3 +
-          (/^[A-Z][A-Za-z0-9'’&.-]{1,40}:\s*/u.test(sentence) ? 1.2 : 0) +
-          (/\byesterday\b|\blast year\b/iu.test(sentence) ? 1.4 : 0),
-        relativeClaimText: null
-      });
     }
     if (isFirstTravelQuery && scoreFirstTravelLocationEvidence(queryText, sourceText) <= 0) {
       continue;

@@ -15,10 +15,10 @@ jobs:
         working-directory: local-brain
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -27,7 +27,7 @@ jobs:
             brain-console/package-lock.json
 
       - name: Install local-brain dependencies
-        run: npm install
+        run: npm ci --include=optional
 
       - name: Build local-brain
         run: npm run build
@@ -57,10 +57,10 @@ jobs:
         working-directory: brain-console
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -69,7 +69,7 @@ jobs:
             brain-console/package-lock.json
 
       - name: Install brain-console dependencies
-        run: npm install
+        run: npm ci --include=optional
 
       - name: Lint brain-console
         run: npm run lint

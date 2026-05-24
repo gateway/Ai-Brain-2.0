@@ -6,6 +6,7 @@ import {
   getTypedMediaResults,
   parseMediaTitleFromSentence
 } from "../dist/typed-memory/service.js";
+import { queryRows } from "../dist/db/client.js";
 
 test("parseMediaTitleFromSentence canonicalizes Eternal Sunshine from sidecar metadata", () => {
   const title = parseMediaTitleFromSentence(
@@ -118,6 +119,17 @@ test("getTypedMediaResults recovers a trailing unmatched quoted title", async (t
       return;
     }
     throw error;
+  }
+
+  if (results.length === 0) {
+    const [fixtureCount] = await queryRows(
+      "SELECT COUNT(*)::int AS count FROM episodic_memory WHERE namespace_id = $1",
+      ["debug_locomo_conv42_focus"]
+    );
+    if (!fixtureCount || fixtureCount.count === 0) {
+      t.skip("Database-backed typed media query requires the debug_locomo_conv42_focus fixture namespace");
+      return;
+    }
   }
 
   assert.ok(results.some((row) => row.provenance.media_title === "Eternal Sunshine of the Spotless Mind"));

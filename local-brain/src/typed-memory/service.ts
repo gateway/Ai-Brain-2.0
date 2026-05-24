@@ -738,18 +738,56 @@ function inferTaskStatusReasonFromText(text: string): string | null {
   return null;
 }
 
+function normalizeTaskStatementText(text: string): string {
+  return normalizeWhitespace(text)
+    .replace(/^[-\s]*\[[^\]]+\]\s*(?:User|Speaker|Assistant|System):\s*/iu, "")
+    .replace(/^[-\s]*(?:User|Speaker|Assistant|System):\s*/iu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function isLikelyActionableTaskText(text: string): boolean {
+  const normalized = normalizeTaskStatementText(text);
+  if (normalized.length < 8 || /\?$/.test(normalized) || isMetadataLikeSentence(normalized)) {
+    return false;
+  }
+  const lowered = normalized.toLowerCase();
+  if (
+    /\b(?:if\s+you|you\s+(?:need|should|must|have)\s+to|people\s+(?:without|who|that)|one\s+person\s+can|what\s+they\s+should|the\s+(?:current\s+)?models?|summarizer|context\s+window|coding\s+systems)\b/u.test(
+      lowered
+    )
+  ) {
+    return false;
+  }
+  return (
+    /\b(?:i|we)\s+(?:need|have|should|must|want|wanna|plan|planned|am\s+trying|are\s+trying|would\s+like)\s+to\b/u.test(lowered) ||
+    /\b(?:i'll|i\s+will|we'll|we\s+will)\b/u.test(lowered) ||
+    /\b(?:remember\s+to|blocked\s+on|waiting\s+on|stuck\s+on|cancel(?:ed|led)|done|finished|completed)\b/u.test(lowered) ||
+    /^(?:need|finish|review|add|write|update|rebuild|rerun|run|fix|clean|verify|document|ship|release|publish|schedule|book|call|email)\b/u.test(
+      lowered
+    )
+  );
+}
+
+function taskDisplayTitleFromText(text: string): string {
+  const normalized = normalizeTaskStatementText(text);
+  const embeddedAction =
+    normalized.match(/\b(?:i'll\s+need\s+to\s+)?i\s+(?:need\s+to|wanna|want\s+to|should|have\s+to)\s+([^.!?]+)/iu)?.[1]?.trim() ??
+    null;
+  const cleaned = (embeddedAction ?? normalized)
+    .replace(/^(?:and\s+)?(?:i|we)\s+(?:need|have|should|must|want|wanna|plan|planned|am\s+trying|are\s+trying|would\s+like)\s+to\s+/iu, "")
+    .replace(/^(?:and\s+)?(?:i'll|i\s+will|we'll|we\s+will)\s+/iu, "")
+    .replace(/\b(?:i'll\s+need\s+to|i\s+need\s+to|i\s+wanna|i\s+want\s+to)\s+/iu, "")
+    .replace(/[.]+$/u, "")
+    .trim();
+  return trimSentenceForTitle(cleaned || normalizeTaskStatementText(text), 140);
+}
+
 function extractInlineTaskFragments(text: string): readonly { text: string; status: TaskLifecycleStatus }[] {
   const fragments: Array<{ text: string; status: TaskLifecycleStatus }> = [];
   for (const sentence of extractSentenceCandidates(text)) {
-    const normalized = normalizeWhitespace(sentence);
-    if (normalized.length < 10 || /\?$/.test(normalized) || isMetadataLikeSentence(normalized)) {
-      continue;
-    }
-    if (
-      !/\b(?:need to|have to|must|should|remember to|plan to|trying to|want to|blocked on|waiting on|stuck on|cancel(?:ed|led)|done|finished|completed)\b/iu.test(
-        normalized
-      )
-    ) {
+    const normalized = normalizeTaskStatementText(sentence);
+    if (!isLikelyActionableTaskText(normalized)) {
       continue;
     }
     fragments.push({
@@ -3592,7 +3630,7 @@ export async function rebuildTypedMemoryNamespace(
 
     if (!isLikelyOmiNormalizedSourceUri(row.artifact_uri)) {
       for (const item of extractInlineTaskFragments(row.content)) {
-        const title = trimSentenceForTitle(item.text.replace(/\.$/u, ""));
+        const title = taskDisplayTitleFromText(item.text);
         const dueHint = dueHintFromText(item.text) ?? null;
         taskRows.push({
           sourceMemoryId: row.memory_id,
@@ -4753,15 +4791,22 @@ async function loadTypedTaskRows(query: RecapQuery): Promise<readonly TaskItemRo
     `,
     [query.namespaceId, scopeMode === "source_scope" ? status ?? null : null, start ?? null, end ?? null, latestSourceUri]
   );
-  return collapseTaskLifecycleRows(rows, scopeMode, status, query.query, query.referenceNow);
+  const qualityFilteredRows = rows.filter((row) => {
+    const sourceKind = typeof row.metadata?.source_kind === "string" ? row.metadata.source_kind : "";
+    if (sourceKind !== "inline_task_statement") {
+      return true;
+    }
+    return isLikelyActionableTaskText(`${row.title}. ${row.description ?? ""}`);
+  });
+  return collapseTaskLifecycleRows(qualityFilteredRows, scopeMode, status, query.query, query.referenceNow);
 }
 
 export async function getTypedTaskItems(query: RecapQuery): Promise<readonly RecapTaskItem[]> {
   const rows = await loadTypedTaskRows(query);
 
   return rows.map((row) => ({
-    title: row.title,
-    description: row.description ?? row.title,
+    title: taskDisplayTitleFromText(row.title),
+    description: normalizeTaskStatementText(row.description ?? row.title),
     assigneeGuess: row.assignee_guess ?? undefined,
     project: row.project_name ?? undefined,
     dueHint: row.due_hint ?? undefined,
@@ -4785,11 +4830,13 @@ export async function getTypedTaskItems(query: RecapQuery): Promise<readonly Rec
 
 export async function getTypedTaskResults(query: RecapQuery): Promise<readonly RecallResult[]> {
   const rows = await loadTypedTaskRows(query);
-  return rows.map((row, index) =>
-    buildTypedRecallResult(
-      `${row.source_memory_id ?? "task"}:${index}:${normalizeName(row.title)}`,
+  return rows.map((row, index) => {
+    const displayTitle = taskDisplayTitleFromText(row.title);
+    const displayDescription = normalizeTaskStatementText(row.description ?? row.title);
+    return buildTypedRecallResult(
+      `${row.source_memory_id ?? "task"}:${index}:${normalizeName(displayTitle)}`,
       query.namespaceId,
-      `${row.title}.${row.description && row.description !== row.title ? ` ${row.description}` : ""}${row.project_name ? ` Project: ${row.project_name}.` : ""}${row.due_hint ? ` Due hint: ${row.due_hint}.` : ""}${row.status ? ` Status: ${row.status}.` : ""}${
+      `${displayTitle}.${displayDescription && displayDescription !== displayTitle ? ` ${displayDescription}` : ""}${row.project_name ? ` Project: ${row.project_name}.` : ""}${row.due_hint ? ` Due hint: ${row.due_hint}.` : ""}${row.status ? ` Status: ${row.status}.` : ""}${
         row.metadata && typeof row.metadata.status_reason === "string" ? ` Status reason: ${row.metadata.status_reason}.` : ""
       }`,
       taskEffectiveAt(row) || row.occurred_at,
@@ -4798,8 +4845,8 @@ export async function getTypedTaskResults(query: RecapQuery): Promise<readonly R
       row.source_uri,
       "task_item",
       {
-        title: row.title,
-        description: row.description,
+        title: displayTitle,
+        description: displayDescription,
         project_name: row.project_name,
         due_hint: row.due_hint,
         status: row.status,
@@ -4813,8 +4860,8 @@ export async function getTypedTaskResults(query: RecapQuery): Promise<readonly R
         source_confidence: taskSourceConfidence(row),
         source_table: "task_items"
       }
-    )
-  );
+    );
+  });
 }
 
 function extractTemporalScopeQueryTerms(queryText: string): readonly string[] {
@@ -5376,7 +5423,11 @@ export async function getTypedMediaResults(query: RecallQuery): Promise<readonly
         AND ($2::timestamptz IS NULL OR occurred_at >= $2::timestamptz)
         AND ($3::timestamptz IS NULL OR occurred_at <= $3::timestamptz)
         AND ($4::text[] IS NULL OR subject_name = ANY($4::text[]))
-        AND ($5::text IS NULL OR normalized_media_title LIKE '%' || $5 || '%')
+        AND (
+          $5::text IS NULL
+          OR normalized_media_title LIKE '%' || $5 || '%'
+          OR $5 LIKE '%' || normalized_media_title || '%'
+        )
       ORDER BY occurred_at DESC NULLS LAST, created_at DESC
       LIMIT 24
     `,

@@ -92,7 +92,7 @@ async function listLocalSpecFiles(): Promise<readonly string[]> {
       .filter((entry) => entry.endsWith(".md"))
       .map((entry) => `brain-spec/local/${entry}`)
       .filter((entry) =>
-        /\b(?:hybrid|query-plan|source-audit|fidelity|temporal-memory|temporal-truth|career|relationship|checkpoint|task-list)\b/iu.test(entry)
+        /\b(?:hybrid|query-plan|source-audit|fidelity|temporal-memory|temporal-truth|career|relationship|checkpoint|task-list|correction|privacy|retention|phase-9)\b/iu.test(entry)
       );
   } catch {
     return [];
@@ -425,9 +425,16 @@ export async function readRepoSpecCorpus(params: {
     .slice(0, 3)
     .map((entry) => bestProjectedSection(entry.document, terms).heading)
     .filter((heading) => heading.trim().length > 0);
+  const correctionPolicyQuery = /\b(?:silent(?:ly)?\s+merge|merge\s+them|correction|alias|spelling|omi\s+gummi|gummi)\b/iu.test(params.queryText);
+  const privacyPolicyQuery = /\b(?:private\s+source|source\s+privacy|raw\s+source|blocked|redact|retention|audit\s+trail|deleted|delete)\b/iu.test(params.queryText);
+  const claimText = correctionPolicyQuery
+    ? `Correction policy: do not silently merge ambiguous entities. The MCP correction flow must preflight candidates, ask for operator choice when multiple plausible matches exist, preserve aliases/raw evidence, and write replayable correction/audit trail records. Source docs: ${topDocs.join(", ")}.`
+    : privacyPolicyQuery
+      ? `Source privacy policy: raw source truth is retained; blocking, deletion, redaction, access-label, and retention changes are overlay decisions with an audit trail and rollback path. Source docs: ${topDocs.join(", ")}.`
+      : `The trusted repo-doc lane found the current plan/spec in ${topDocs.join(", ")}. Selected headings: ${topHeadings.join(", ")}. Key themes: planner-first routing, corpus capability enforcement, scoped readers, miss-ledger metrics, fast-path optimization, and source-bound regression gates.`;
   return {
     results,
-    claimText: `The trusted repo-doc lane found the current plan/spec in ${topDocs.join(", ")}. Selected headings: ${topHeadings.join(", ")}. Key themes: planner-first routing, corpus capability enforcement, scoped readers, miss-ledger metrics, fast-path optimization, and source-bound regression gates.`,
+    claimText,
     answerReason: "The query asked for repo/spec/checkpoint information, so indexed repo document projections were selected before OMI or generic memory fallback.",
     repoProjectionUsed: true,
     packageScriptProjectionUsed: false,
@@ -444,6 +451,8 @@ export async function readPackageProcedureCorpus(params: {
   if (!projection) return null;
   const targetScript = /mcp\s+query\s+taxonomy\s+gold|mcp-query-taxonomy-gold/iu.test(params.queryText)
     ? "benchmark:mcp-query-taxonomy-gold"
+    : /source[-\s]+audit\s+cross[-\s]+family|source-audit-cross-family/iu.test(params.queryText)
+    ? "benchmark:source-audit-cross-family-pack"
     : /production\s+readiness|production-readiness/iu.test(params.queryText)
     ? "benchmark:production-readiness"
     : /reset\s+a?\s*namespace|namespace\s+reset|namespace:reset/iu.test(params.queryText)

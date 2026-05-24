@@ -3,6 +3,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { closePool } from "../db/client.js";
+import { buildIngestionRouterV2Packet } from "../ingest/router-v2.js";
 import { ingestArtifact } from "../ingest/worker.js";
 import { executeMcpTool } from "../mcp/server.js";
 import { rebuildTypedMemoryNamespace } from "../typed-memory/service.js";
@@ -62,6 +63,8 @@ export interface MultiSourceIngestionPackReport {
   readonly passed: boolean;
   readonly metrics: {
     readonly sourceKindCoverageCount: number;
+    readonly sourceCapabilityCoverageRate: number;
+    readonly unsupportedSourceCapabilityCount: number;
     readonly crossSourceTemporalPassRate: number;
     readonly crossSourceTaskPassRate: number;
     readonly crossSourceDossierPassRate: number;
@@ -141,6 +144,41 @@ function fixtures(): readonly FixtureFile[] {
         source_kind_family: "pdf_document",
         source_url: "https://arxiv.org/abs/2602.02007",
         source_pdf_url: "https://arxiv.org/pdf/2602.02007"
+      }
+    },
+    {
+      relativePath: "screenshots/phase-14-whiteboard.png",
+      sourceType: "image",
+      capturedAt: "2026-05-23T08:12:00.000Z",
+      body: "PNG placeholder for benchmark screenshot OCR fixture.\n",
+      sidecarText: [
+        "Screenshot OCR: Phase 14 whiteboard.",
+        "The board says: build hierarchical chunking, source capability profiles, and document retrieval quality gates.",
+        "It also says: verify screenshot text routes through image OCR and never becomes vector-only truth."
+      ].join("\n"),
+      metadata: {
+        phase: "14",
+        source_kind_family: "screenshot_ocr",
+        document_extraction_provider: "sidecar_text_extraction",
+        privacy_label: "work"
+      }
+    },
+    {
+      relativePath: "threads/phase-14-email-thread.txt",
+      sourceType: "text",
+      capturedAt: "2026-05-23T08:13:00.000Z",
+      body: [
+        "From: Steve",
+        "To: AI Brain Team",
+        "Subject: Phase 14 document ingestion",
+        "",
+        "We need the ingestion pilot to cover email-like threads, PDFs, screenshots, task exports, calendar exports, and repo specs.",
+        "The acceptance criteria are source capability coverage, no silent unsupported binary ingest, and source trails on every supported answer."
+      ].join("\n"),
+      metadata: {
+        phase: "14",
+        source_kind_family: "email_thread",
+        privacy_label: "work"
       }
     },
     {
@@ -387,13 +425,51 @@ async function runScenario(namespaceId: string, scenario: Scenario): Promise<Row
   };
 }
 
-function metricsFromRows(rows: readonly Row[], sourceKindCoverageCount: number): MultiSourceIngestionPackReport["metrics"] {
+function sourceCapabilityMetrics(rootPath: string, files: readonly FixtureFile[]): {
+  readonly sourceCapabilityCoverageRate: number;
+  readonly unsupportedSourceCapabilityCount: number;
+} {
+  const packets = files.map((fixture) => {
+    const inputUri = path.join(rootPath, fixture.relativePath);
+    return buildIngestionRouterV2Packet({
+      namespaceId: "source_capability_preview",
+      sourceType: fixture.sourceType,
+      sourceUri: inputUri,
+      capturedAt: fixture.capturedAt,
+      rawText: fixture.sidecarText ?? fixture.body,
+      metadata: {
+        extracted_text_path: fixture.sidecarText ? `${inputUri}.txt` : undefined,
+        ...(fixture.metadata ?? {})
+      }
+    });
+  });
+  const covered = packets.filter(
+    (packet) =>
+      packet.sourceCapabilityProfile.quality.provenanceComplete &&
+      packet.sourceCapabilityProfile.authoritativeFor.length > 0 &&
+      packet.sourceCapabilityProfile.quality.hasTextContent
+  ).length;
+  return {
+    sourceCapabilityCoverageRate: rate(covered, packets.length),
+    unsupportedSourceCapabilityCount: packets.filter(
+      (packet) => packet.sourceCapabilityProfile.sourceKind === "unsupported_binary" || packet.sourceCapabilityProfile.unsupportedCapabilities.length > 0
+    ).length
+  };
+}
+
+function metricsFromRows(
+  rows: readonly Row[],
+  sourceKindCoverageCount: number,
+  capabilityMetrics: ReturnType<typeof sourceCapabilityMetrics>
+): MultiSourceIngestionPackReport["metrics"] {
   const taskRows = rows.filter((row) => row.sourceKindFamily === "task");
   const temporalRows = rows.filter((row) => row.sourceKindFamily === "temporal");
   const dossierRows = rows.filter((row) => row.sourceKindFamily === "dossier");
   const supportedRows = rows.filter((row) => row.evidenceCount > 0);
   return {
     sourceKindCoverageCount,
+    sourceCapabilityCoverageRate: capabilityMetrics.sourceCapabilityCoverageRate,
+    unsupportedSourceCapabilityCount: capabilityMetrics.unsupportedSourceCapabilityCount,
     crossSourceTemporalPassRate: rate(temporalRows.filter((row) => row.passed).length, temporalRows.length),
     crossSourceTaskPassRate: rate(taskRows.filter((row) => row.passed).length, taskRows.length),
     crossSourceDossierPassRate: rate(dossierRows.filter((row) => row.passed).length, dossierRows.length),
@@ -431,6 +507,8 @@ function toMarkdown(report: MultiSourceIngestionPackReport): string {
     `- namespaceId: ${report.namespaceId}`,
     `- passed: ${report.passed}`,
     `- sourceKindCoverageCount: ${report.metrics.sourceKindCoverageCount}`,
+    `- sourceCapabilityCoverageRate: ${report.metrics.sourceCapabilityCoverageRate}`,
+    `- unsupportedSourceCapabilityCount: ${report.metrics.unsupportedSourceCapabilityCount}`,
     `- crossSourceTemporalPassRate: ${report.metrics.crossSourceTemporalPassRate}`,
     `- crossSourceTaskPassRate: ${report.metrics.crossSourceTaskPassRate}`,
     `- crossSourceDossierPassRate: ${report.metrics.crossSourceDossierPassRate}`,
@@ -468,7 +546,8 @@ export async function runAndWriteMultiSourceIngestionPack(): Promise<{
   }
 
   const sourceKindCoverageCount = new Set(files.map((fixture) => fixture.sourceType)).size;
-  const metrics = metricsFromRows(rows, sourceKindCoverageCount);
+  const capabilityMetrics = sourceCapabilityMetrics(rootPath, files);
+  const metrics = metricsFromRows(rows, sourceKindCoverageCount, capabilityMetrics);
   const report: MultiSourceIngestionPackReport = {
     generatedAt: new Date().toISOString(),
     benchmark: "multi_source_ingestion_pack",
@@ -485,7 +564,9 @@ export async function runAndWriteMultiSourceIngestionPack(): Promise<{
     sampleCount: rows.length,
     passed:
       rows.every((row) => row.passed) &&
-      metrics.sourceKindCoverageCount >= 4 &&
+      metrics.sourceKindCoverageCount >= 6 &&
+      metrics.sourceCapabilityCoverageRate >= 0.95 &&
+      metrics.unsupportedSourceCapabilityCount === 0 &&
       metrics.crossSourceTemporalPassRate >= 0.95 &&
       metrics.crossSourceTaskPassRate >= 0.95 &&
       metrics.crossSourceDossierPassRate >= 0.95 &&

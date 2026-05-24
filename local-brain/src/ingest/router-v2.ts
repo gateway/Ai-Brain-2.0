@@ -9,6 +9,7 @@ import {
 } from "../taxonomy/retrieval-domain-registry.js";
 import type { SourceType } from "../types.js";
 import { buildSourceEnvelopeAdapterOutput, type SourceEnvelope, type SourceEnvelopeAdapterOutput, type SourceEnvelopeType } from "./source-envelope.js";
+import { buildSourceCapabilityProfile, type SourceCapabilityProfile } from "./source-capability.js";
 
 export type IngestionRouterV2SourceRoute =
   | SourceEnvelopeType
@@ -83,6 +84,7 @@ export interface IngestionRouterV2Packet {
   readonly primaryRetrievalDomain: RetrievalDomain;
   readonly retrievalDomainCandidates: readonly RetrievalDomain[];
   readonly sourceIntelligence: SourceIntelligenceRouting;
+  readonly sourceCapabilityProfile: SourceCapabilityProfile;
   readonly enrichment: {
     readonly packetVersion: "ingestion_enrichment_packet_v1";
     readonly sourceIntelligenceProfile: SourceIntelligenceProfile;
@@ -133,6 +135,7 @@ export interface IngestionRouterV2Packet {
     readonly emptyOrBoilerplateChunkCount: number;
     readonly jsonValid: boolean;
     readonly promotionSafetyViolations: readonly string[];
+    readonly sourceCapabilityUnsupportedCount: number;
   };
 }
 
@@ -182,8 +185,12 @@ export function classifyIngestionSourceRoute(input: {
   const monitoredSourceType = normalize(metadataString(input.metadata, "monitored_source_type"));
   const benchmarkDataset = normalize(metadataString(input.metadata, "benchmark_dataset"));
   const sourceTypeHint = normalize(metadataString(input.metadata, "source_type_hint"));
+  const hasTextProxy = Boolean(metadataString(input.metadata, "extracted_text")) || Boolean(metadataString(input.metadata, "extracted_text_path"));
 
   if (explicit === "audio" || explicit === "video" || explicit === "image") {
+    if (hasTextProxy) {
+      return { sourceRoute: "generic_text", envelopeSourceType: "generic_text" };
+    }
     return { sourceRoute: "unsupported_binary", envelopeSourceType: null };
   }
   if (explicit === "transcript" || sourceTypeHint === "asr") {
@@ -528,6 +535,14 @@ export function buildIngestionRouterV2Packet(input: IngestionRouterV2Input): Ing
       }
     : null;
   const adapter = envelope ? buildSourceEnvelopeAdapterOutput(envelope) : null;
+  const sourceCapabilityProfile = buildSourceCapabilityProfile({
+    sourceType: input.sourceType,
+    sourceRoute: classification.sourceRoute,
+    envelopeSourceType: classification.envelopeSourceType,
+    sourceIntelligence,
+    adapter,
+    metadata: input.metadata
+  });
   const tokenEstimates = adapter?.extractionUnits.map((unit) => unit.tokenEstimate) ?? [];
   const promotionSafetyViolations: string[] = [];
   if (adapter && !adapter.metrics.provenanceComplete) {
@@ -548,6 +563,7 @@ export function buildIngestionRouterV2Packet(input: IngestionRouterV2Input): Ing
     primaryRetrievalDomain,
     retrievalDomainCandidates,
     sourceIntelligence,
+    sourceCapabilityProfile,
     enrichment: {
       packetVersion: "ingestion_enrichment_packet_v1",
       sourceIntelligenceProfile: sourceIntelligence.sourceIntelligenceProfile,
@@ -583,7 +599,8 @@ export function buildIngestionRouterV2Packet(input: IngestionRouterV2Input): Ing
       inputTokenMax: adapter?.metrics.inputTokenMax ?? 0,
       emptyOrBoilerplateChunkCount: adapter?.metrics.emptyOrBoilerplateChunkCount ?? 0,
       jsonValid: true,
-      promotionSafetyViolations
+      promotionSafetyViolations,
+      sourceCapabilityUnsupportedCount: sourceCapabilityProfile.unsupportedCapabilities.length
     }
   };
 }
@@ -606,6 +623,11 @@ export function ingestionRouterV2Metadata(packet: IngestionRouterV2Packet): Reco
     retrieval_domain_candidates: packet.retrievalDomainCandidates,
     source_intelligence_reason: packet.sourceIntelligence.reason,
     source_intelligence_policy: packet.sourceIntelligence.extractionPolicy,
+    source_capability_profile: packet.sourceCapabilityProfile,
+    source_capability_kind: packet.sourceCapabilityProfile.sourceKind,
+    source_capability_authoritative_for: packet.sourceCapabilityProfile.authoritativeFor,
+    source_capability_expected_read_models: packet.sourceCapabilityProfile.expectedReadModels,
+    source_capability_unsupported: packet.sourceCapabilityProfile.unsupportedCapabilities,
     candidate_families: packet.sourceIntelligence.candidateFamilies,
     candidate_buffer_kind: packet.sourceIntelligence.candidateBufferKind,
     chunk_count: packet.metrics.chunkCount,
@@ -633,6 +655,7 @@ export function ingestionRouterV2Metadata(packet: IngestionRouterV2Packet): Reco
     rejection_reasons: packet.enrichment.rejectionReasons,
     enrichment_cache_signature: packet.enrichment.cacheIdentity.signature,
     enrichment_cache_identity: packet.enrichment.cacheIdentity,
-    promotion_safety_violations: packet.metrics.promotionSafetyViolations
+    promotion_safety_violations: packet.metrics.promotionSafetyViolations,
+    source_capability_unsupported_count: packet.metrics.sourceCapabilityUnsupportedCount
   };
 }

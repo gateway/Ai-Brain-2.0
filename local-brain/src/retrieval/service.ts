@@ -6464,7 +6464,8 @@ function isHabitConstraintQueryText(queryText: string): boolean {
   return (
     /\bwhat\s+(?:habits?\s+or\s+constraints?|constraints?\s+or\s+habits?)\b/i.test(queryText) ||
     /\bwhat\s+habits?\s+matter\s+right\s+now\b/i.test(queryText) ||
-    /\bwhat\s+constraints?\s+matter\s+right\s+now\b/i.test(queryText)
+    /\bwhat\s+constraints?\s+matter\s+right\s+now\b/i.test(queryText) ||
+    /\b(?:can|should|could)\s+i\s+(?:have|eat|drink)\b[\s\S]{0,80}\b(?:now|current|constraint|dinner|lunch|breakfast)\b/i.test(queryText)
   );
 }
 
@@ -14979,6 +14980,51 @@ function dueHintFromText(text: string): string | undefined {
   return typeof match === "string" ? match.trim() : undefined;
 }
 
+function normalizeTaskFragmentForDisplay(text: string): string {
+  return normalizeWhitespace(text)
+    .replace(/^[-\s]*\[[^\]]+\]\s*(?:User|Speaker|Assistant|System):\s*/iu, "")
+    .replace(/^[-\s]*(?:User|Speaker|Assistant|System):\s*/iu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function isLikelyPersonalActionTaskFragment(text: string): boolean {
+  const normalized = normalizeTaskFragmentForDisplay(text);
+  if (normalized.length < 8 || /\?$/.test(normalized)) {
+    return false;
+  }
+  const lowered = normalized.toLowerCase();
+  if (
+    /\b(?:if\s+you|you\s+(?:need|should|must|have)\s+to|people\s+(?:without|who|that)|one\s+person\s+can|what\s+they\s+should|the\s+(?:current\s+)?models?|summarizer|context\s+window|coding\s+systems)\b/u.test(
+      lowered
+    )
+  ) {
+    return false;
+  }
+  return (
+    /\b(?:i|we)\s+(?:need|have|should|must|want|wanna|plan|planned|am\s+trying|are\s+trying|would\s+like)\s+to\b/u.test(lowered) ||
+    /\b(?:i'll|i\s+will|we'll|we\s+will)\b/u.test(lowered) ||
+    /\b(?:remember\s+to|blocked\s+on|waiting\s+on|stuck\s+on|cancel(?:ed|led)|done|finished|completed)\b/u.test(lowered) ||
+    /^(?:need|finish|review|add|write|update|rebuild|rerun|run|fix|clean|verify|document|ship|release|publish|schedule|book|call|email|message|send|pull|capture)\b/u.test(
+      lowered
+    )
+  );
+}
+
+function taskTitleFromFragment(text: string): string {
+  const normalized = normalizeTaskFragmentForDisplay(text);
+  const embeddedAction =
+    normalized.match(/\b(?:i'll\s+need\s+to\s+)?i\s+(?:need\s+to|wanna|want\s+to|should|have\s+to)\s+([^.!?]+)/iu)?.[1]?.trim() ??
+    null;
+  const cleaned = (embeddedAction ?? normalized)
+    .replace(/^(?:and\s+)?(?:i|we)\s+(?:need|have|should|must|want|wanna|plan|planned|am\s+trying|are\s+trying|would\s+like)\s+to\s+/iu, "")
+    .replace(/^(?:and\s+)?(?:i'll|i\s+will|we'll|we\s+will)\s+/iu, "")
+    .replace(/\b(?:i'll\s+need\s+to|i\s+need\s+to|i\s+wanna|i\s+want\s+to)\s+/iu, "")
+    .replace(/[.]+$/u, "")
+    .trim();
+  return trimSentenceForTitle(cleaned || normalizeTaskFragmentForDisplay(text));
+}
+
 function parseTaskItems(results: readonly RecallResult[], focus: RecapFocus): readonly RecapTaskItem[] {
   const items: RecapTaskItem[] = [];
   const seen = new Set<string>();
@@ -14989,30 +15035,32 @@ function parseTaskItems(results: readonly RecallResult[], focus: RecapFocus): re
       const checklistFragment = /^\w/u.test(sentence) && !/[.!?]$/u.test(sentence);
       if (
         !checklistFragment &&
-        !/\b(need to|needs to|should|must|todo|to do|follow up|follow-up|action item|remember to|update|write|finish|message|send|review|ship|fix|re-run|rerun|capture|pull)\b/i.test(
-          sentence
-        )
+        !/\b(need to|needs to|should|must|todo|to do|follow up|follow-up|action item|remember to|update|write|finish|message|send|review|ship|fix|re-run|rerun|capture|pull)\b/i.test(sentence)
       ) {
         continue;
       }
 
       for (const fragment of splitTaskFragments(sentence)) {
-        const title = trimSentenceForTitle(fragment);
+        if (!checklistFragment && !isLikelyPersonalActionTaskFragment(fragment)) {
+          continue;
+        }
+        const cleanedFragment = normalizeTaskFragmentForDisplay(fragment);
+        const title = taskTitleFromFragment(cleanedFragment);
         const key = title.toLowerCase();
         if (seen.has(key)) {
           continue;
         }
         seen.add(key);
 
-        const assigneeMatch = fragment.match(/\b(Steve|Dan|Jules|Rina|Omar|Theo|Lauren|Mia|Alex|Eve)\b/u)?.[1];
-        const project = focus.projects.find((value) => fragment.toLowerCase().includes(value.toLowerCase())) ?? focus.projects[0];
+        const assigneeMatch = cleanedFragment.match(/\b(Steve|Dan|Jules|Rina|Omar|Theo|Lauren|Mia|Alex|Eve)\b/u)?.[1];
+        const project = focus.projects.find((value) => cleanedFragment.toLowerCase().includes(value.toLowerCase())) ?? focus.projects[0];
 
         items.push({
           title,
-          description: fragment,
+          description: cleanedFragment,
           assigneeGuess: assigneeMatch,
           project,
-          dueHint: dueHintFromText(fragment),
+          dueHint: dueHintFromText(cleanedFragment),
           statusGuess: "open",
           lifecycleStatus: "open",
           evidenceIds: [result.memoryId]
@@ -28484,7 +28532,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         return preferredProfileRouteResponse;
       }
     }
-    if (queryContract.contractName !== "source_audit") {
+    if (queryContract.contractName !== "source_audit" && !isHabitConstraintQueryText(queryText)) {
       const aliasCurrentStateProjectionResponse = await buildAliasCurrentStateProjectionResponse(query, queryText, limit, queryContract); if (aliasCurrentStateProjectionResponse) return aliasCurrentStateProjectionResponse; const recapProfileProjectionResponse = await buildRecapProfileProjectionResponse(query, queryText, limit, queryContract); if (recapProfileProjectionResponse) return recapProfileProjectionResponse;
       const continuityProjectionResponse = await buildContinuityCurrentStateProjectionResponse(query, queryText, limit, queryContract);
       if (continuityProjectionResponse) {
@@ -36211,7 +36259,10 @@ export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtracti
       };
     }
   }
-  if (taskScopeMode === "source_scope" || memoryPlan.taskScope === "travel") {
+  if (
+    (taskScopeMode === "source_scope" && /\b(?:most\s+recent|latest|last)\s+(?:omi\s+)?note\b/iu.test(query.query)) ||
+    memoryPlan.taskScope === "travel"
+  ) {
     const typedTasks = await getTypedTaskItems(query);
     const typedTaskResults = typedTasks.length > 0 ? await getTypedTaskResults(query) : [];
     const scopedTasks = memoryPlan.taskScope === "travel" ? filterTravelTaskItems(typedTasks) : typedTasks;
@@ -36249,6 +36300,49 @@ export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtracti
           ...memoryQueryPlanTelemetry(memoryPlan)
         },
         tasks: scopedTasks.slice(0, 12)
+      };
+    }
+  }
+  if (
+    memoryPlan.intent === "task_list" &&
+    memoryPlan.taskScope !== "none" &&
+    !/\b(?:query\s+contract|this\s+note|action\s+items?)\b/iu.test(query.query)
+  ) {
+    const typedTasks = await getTypedTaskItems(query);
+    const typedTaskResults = typedTasks.length > 0 ? await getTypedTaskResults(query) : [];
+    if (typedTasks.length > 0 && typedTaskResults.length > 0) {
+      const resolvedWindow = resolveRecapWindow(query);
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "task_extraction",
+        resolvedWindow,
+        focus: buildRecapFocus(query),
+        confidence: "confident",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: buildEvidenceBundle(typedTaskResults),
+        retrievalPlan: {
+          intent: "task_extraction",
+          probes: [query.query],
+          groupedBy: "result_order",
+          queryDecompositionApplied: false,
+          queryDecompositionSubqueries: [],
+          scopeMode: "lifecycle_scope",
+          sourceConstraintUri: undefined,
+          usedEventWindow: Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd),
+          usedCapturedAtOnly: false,
+          ...buildSingleStageLatencyMeta({
+            stageName: "typed_task_extraction_general_fast_path",
+            startedAt: extractionStartedAt,
+            candidateCount: typedTasks.length,
+            rowsScanned: typedTaskResults.length,
+            earlyStopReason: "typed_task_support_selected_before_recap_pipeline",
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        tasks: typedTasks.slice(0, 12)
       };
     }
   }

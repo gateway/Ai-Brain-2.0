@@ -4,8 +4,8 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS btree_gin;
+CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 -- Target local upgrades after native bring-up is proven.
--- CREATE EXTENSION IF NOT EXISTS timescaledb;
 -- CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE;
 -- CREATE EXTENSION IF NOT EXISTS ai;

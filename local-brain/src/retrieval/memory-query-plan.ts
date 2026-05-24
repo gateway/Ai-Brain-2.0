@@ -199,7 +199,7 @@ function extractProjects(queryText: string): readonly string[] {
 function detectSourceScope(queryText: string): MemoryQueryPlanSourceScope {
   if (/\b(?:most\s+recent|latest|last)\s+(?:omi\s+)?note\b/iu.test(queryText)) return "latest_omi_note";
   if (/\brecent\b[\s\S]{0,80}\bnotes?\b/iu.test(queryText)) return "recent_notes";
-  if (/\b(?:source|sources|evidence|where\s+did\s+(?:that|the)?(?:\s+answer)?\s*come\s+from|come\s+from|audit)\b/iu.test(queryText)) return "source_audit_target";
+  if (isSourceAuditQuery(queryText)) return "source_audit_target";
   return "none";
 }
 
@@ -287,8 +287,15 @@ function detectTimeWindow(queryText: string): MemoryQueryPlanTimeWindow | null {
   return null;
 }
 
+function isSourceAuditQuery(queryText: string): boolean {
+  return (
+    /\b(?:where\s+did\s+(?:that|the)?(?:\s+answer)?\s*come\s+from|come\s+from|came\s+from|provenance|show\s+(?:me\s+)?(?:the\s+)?sources?|list\s+(?:the\s+)?sources?|source\s+trail|evidence\s+for|audit\s+that\s+answer)\b/iu.test(queryText) ||
+    /\b(?:sources|evidence)\b[\s\S]{0,60}\b(?:answer|claim|section|where|came|from)\b/iu.test(queryText)
+  );
+}
+
 function detectSourceAuditTarget(queryText: string, people: readonly string[], places: readonly string[], projects: readonly string[]): MemoryQueryPlanSourceAuditTarget | null {
-  if (!/\b(?:source|sources|evidence|where\s+did\s+(?:that|the)?(?:\s+answer)?\s*come\s+from|come\s+from|audit)\b/iu.test(queryText)) {
+  if (!isSourceAuditQuery(queryText)) {
     return null;
   }
   let family: MemoryQueryPlanSourceAuditTarget["family"] = "unknown";
@@ -310,6 +317,18 @@ function detectIntent(params: {
 }): MemoryQueryPlanIntent {
   const { queryText, contractName, people, places, projects, sourceAuditTarget } = params;
   if (sourceAuditTarget) return "source_audit";
+  if (
+    /\b(?:silent(?:ly)?\s+merge|merge\s+them|correction|alias|spelling|omi\s+gummi|gummi)\b/iu.test(queryText) &&
+    /\b(?:should|policy|multiple|candidate|merge|separate|audit)\b/iu.test(queryText)
+  ) {
+    return "document_spec";
+  }
+  if (
+    /\b(?:private\s+source|source\s+privacy|raw\s+source|blocked|redact|retention|audit\s+trail|deleted|delete)\b/iu.test(queryText) &&
+    /\b(?:should|policy|retained|retain|deleted|delete|audit|blocked)\b/iu.test(queryText)
+  ) {
+    return "document_spec";
+  }
   if (/\bhow\s+do\s+i\s+run\b|\b(?:command|benchmark|npm\s+run|script|cli)\b/iu.test(queryText)) return "procedure_command";
   if (
     /\b(?:current\s+)?(?:spec|plan|checkpoint|task\s+list|changelog|implementation\s+plan|engineering\s+plan)\b/iu.test(queryText) &&

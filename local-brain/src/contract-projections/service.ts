@@ -15,6 +15,12 @@ import {
   extractAtomicExactDetailValue,
   inferExactDetailFamilyFromSource
 } from "../retrieval/exact-detail-fact-keys.js";
+import {
+  evaluateProjectionPromotion,
+  projectionReplaySignature,
+  type ProjectionConflictStatus,
+  type ProjectionCorrectionOverlayStatus
+} from "./promotion-policy.js";
 
 type JsonRecord = Record<string, unknown>;
 const PROFILE_REPORT_PROJECTION_VERSION = "profile_report_projection_v1";
@@ -87,6 +93,10 @@ export interface ContractProjectionShadow {
   readonly projectionVersion: string;
   readonly queryFamily?: string | null;
   readonly authoritativeSource?: string | null;
+  readonly promotionPolicyId?: string;
+  readonly replaySignature?: string;
+  readonly conflictStatus?: ProjectionConflictStatus;
+  readonly correctionOverlayStatus?: ProjectionCorrectionOverlayStatus;
 }
 
 export interface ContractProjectionRuntimeDecision {
@@ -104,6 +114,10 @@ export interface ContractProjectionRuntimeDecision {
   readonly activeSupportCount: number;
   readonly supersededSupportFilteredCount: number;
   readonly temporalExactness: "exact" | "bounded" | "inferred" | null;
+  readonly promotionPolicyId?: string;
+  readonly replaySignature?: string;
+  readonly conflictStatus?: ProjectionConflictStatus;
+  readonly correctionOverlayStatus?: ProjectionCorrectionOverlayStatus;
 }
 
 interface CanonicalEntityReportRow {
@@ -4447,6 +4461,30 @@ export async function loadContractProjectionShadow(params: {
   const entries = await loadProjectionEntries(head.id);
   const requiredFields = readStringArray(head.required_fields);
   const fulfilledFields = readStringArray(head.fulfilled_fields);
+  const promotion = evaluateProjectionPromotion({
+    contractName: head.contract_name,
+    projectionKind: head.projection_kind,
+    completenessScore: head.completeness_score,
+    supportCount: head.support_count,
+    requiredFields,
+    fulfilledFields,
+    truthStatus: head.truth_status
+  });
+  const replaySignature = projectionReplaySignature({
+    contractName: head.contract_name,
+    projectionKind: head.projection_kind,
+    bundleKey: head.bundle_key,
+    truthStatus: head.truth_status,
+    completenessScore: head.completeness_score,
+    supportCount: head.support_count,
+    entryCount: entries.length,
+    summaryText: head.summary_text,
+    projectionVersion: head.projection_version,
+    requiredFields,
+    fulfilledFields,
+    conflictStatus: promotion.conflictStatus,
+    correctionOverlayStatus: promotion.correctionOverlayStatus
+  });
   return {
     contractName: head.contract_name,
     projectionKind: head.projection_kind,
@@ -4455,10 +4493,7 @@ export async function loadContractProjectionShadow(params: {
     bundleKey: head.bundle_key,
     completenessScore: head.completeness_score,
     complete: requiredFields.length === 0 || requiredFields.every((field) => fulfilledFields.includes(field)),
-    stopEligible:
-      head.truth_status !== "superseded" &&
-      head.completeness_score >= 0.85 &&
-      (requiredFields.length === 0 || requiredFields.every((field) => fulfilledFields.includes(field))),
+    stopEligible: promotion.stopEligible,
     answerGranularity: head.answer_granularity,
     supportCount: head.support_count,
     entryCount: entries.length,
@@ -4468,7 +4503,11 @@ export async function loadContractProjectionShadow(params: {
     truthStatus: head.truth_status,
     projectionVersion: head.projection_version,
     queryFamily: head.query_family,
-    authoritativeSource: head.authoritative_source
+    authoritativeSource: head.authoritative_source,
+    promotionPolicyId: promotion.policyId,
+    replaySignature,
+    conflictStatus: promotion.conflictStatus,
+    correctionOverlayStatus: promotion.correctionOverlayStatus
   };
 }
 
@@ -4515,6 +4554,30 @@ export async function loadContractProjectionRuntime(params: {
   const fulfilledFields = readStringArray(head.fulfilled_fields);
   const filteredEntries = entries.filter((entry) => entry.truth_status !== "superseded");
   const complete = requiredFields.length === 0 || requiredFields.every((field) => fulfilledFields.includes(field));
+  const promotion = evaluateProjectionPromotion({
+    contractName: head.contract_name,
+    projectionKind: head.projection_kind,
+    completenessScore: head.completeness_score,
+    supportCount: head.support_count,
+    requiredFields,
+    fulfilledFields,
+    truthStatus: head.truth_status
+  });
+  const replaySignature = projectionReplaySignature({
+    contractName: head.contract_name,
+    projectionKind: head.projection_kind,
+    bundleKey: head.bundle_key,
+    truthStatus: head.truth_status,
+    completenessScore: head.completeness_score,
+    supportCount: head.support_count,
+    entryCount: entries.length,
+    summaryText: head.summary_text,
+    projectionVersion: head.projection_version,
+    requiredFields,
+    fulfilledFields,
+    conflictStatus: promotion.conflictStatus,
+    correctionOverlayStatus: promotion.correctionOverlayStatus
+  });
   return {
     results: buildProjectionResults({
       namespaceId: params.namespaceId,
@@ -4522,10 +4585,7 @@ export async function loadContractProjectionRuntime(params: {
       entries: filteredEntries,
       claimText
     }),
-    stopEligible:
-      head.truth_status !== "superseded" &&
-      head.completeness_score >= 0.85 &&
-      complete,
+    stopEligible: promotion.stopEligible,
     reason: "The query was answered from deterministic contract projections before broad retrieval.",
     contractName: head.contract_name,
     projectionKind: head.projection_kind,
@@ -4540,6 +4600,10 @@ export async function loadContractProjectionRuntime(params: {
     temporalExactness:
       head.exactness === "exact" || head.exactness === "bounded" || head.exactness === "inferred"
         ? head.exactness
-        : null
+        : null,
+    promotionPolicyId: promotion.policyId,
+    replaySignature,
+    conflictStatus: promotion.conflictStatus,
+    correctionOverlayStatus: promotion.correctionOverlayStatus
   };
 }

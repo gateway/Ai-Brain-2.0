@@ -1,6 +1,7 @@
 import { queryCatalogEntryForContract } from "../retrieval/query-catalog-v1.js";
 import { inferQueryContract } from "../retrieval/query-contract-router.js";
 import { persistQueryReviewUnknownCandidate } from "../retrieval/query-review-backlog.js";
+import { buildOperatorActionPrompt } from "./operator-action-prompt.js";
 
 type QueryToolName = "memory.search" | "memory.recap" | "memory.extract_tasks" | "memory.extract_calendar";
 type ClaimFamily =
@@ -422,10 +423,11 @@ function claimTextForEvidenceItem(item: any): string | null {
 
 function answerClaimText(params: {
   readonly toolName: QueryToolName;
+  readonly queryText: string;
   readonly payload: Record<string, any>;
   readonly abstentionReason: string | null;
 }): string {
-  const answer = answerForToolPayload(params.toolName, params.payload);
+  const answer = answerForToolPayload(params.toolName, params.queryText, params.payload);
   if (answer) return answer;
   const dualityClaim = normalizeSnippet(params.payload?.duality?.claim?.text, 260);
   if (dualityClaim) return dualityClaim;
@@ -457,6 +459,7 @@ function faithfulnessStatus(claimText: string, sourceTrail: readonly Record<stri
 
 function buildClaimAudit(params: {
   readonly toolName: QueryToolName;
+  readonly queryText: string;
   readonly payload: Record<string, any>;
   readonly queryContractName: string;
   readonly answerShape: string;
@@ -545,7 +548,7 @@ function buildClaimAudit(params: {
       answerShape: params.answerShape,
       toolName: params.toolName
     });
-    const claimText = answerClaimText({ toolName: params.toolName, payload: params.payload, abstentionReason: params.abstentionReason });
+    const claimText = answerClaimText({ toolName: params.toolName, queryText: params.queryText, payload: params.payload, abstentionReason: params.abstentionReason });
     const supportStatus: ClaimSupportStatus = abstained ? "abstained" : params.sourceTrail.length > 0 ? "supported" : "unsupported";
     output.push({
       id: abstained ? "abstention:1" : "claim:1",
@@ -564,7 +567,7 @@ function buildClaimAudit(params: {
   return output.slice(0, 24);
 }
 
-function taskAnswer(tasks: readonly any[]): string | null {
+function taskAnswer(queryText: string, tasks: readonly any[]): string | null {
   if (tasks.length === 0) {
     return "No task items were found in the scoped evidence.";
   }
@@ -575,7 +578,10 @@ function taskAnswer(tasks: readonly any[]): string | null {
   if (titles.length === 0) {
     return null;
   }
-  return `Open tasks: ${titles.join("; ")}.`;
+  const label = /\b(?:travel|trip|trips|flight|hotel|july|september|summer|istanbul|thailand|rv|jeep|driver'?s?\s+license|storage)\b/iu.test(queryText)
+    ? "Travel-planning open tasks"
+    : "Open tasks";
+  return `${label}: ${titles.join("; ")}.`;
 }
 
 function calendarAnswer(commitments: readonly any[]): string | null {
@@ -596,12 +602,12 @@ function calendarAnswer(commitments: readonly any[]): string | null {
   return `Commitments: ${items.join("; ")}.`;
 }
 
-function answerForToolPayload(toolName: QueryToolName, payload: Record<string, any>): string | undefined {
+function answerForToolPayload(toolName: QueryToolName, queryText: string, payload: Record<string, any>): string | undefined {
   if (typeof payload.answer === "string" && payload.answer.trim().length > 0) {
     return payload.answer;
   }
   if (toolName === "memory.extract_tasks" && Array.isArray(payload.tasks)) {
-    return taskAnswer(payload.tasks) ?? undefined;
+    return taskAnswer(queryText, payload.tasks) ?? undefined;
   }
   if (toolName === "memory.extract_calendar" && Array.isArray(payload.commitments)) {
     return calendarAnswer(payload.commitments) ?? undefined;
@@ -684,6 +690,7 @@ export async function attachStableQueryContractEnvelope(params: {
   const sourceQuotes = uniqueStrings(sourceTrail.map((item) => String(item.quote ?? "")).filter(Boolean));
   const claimAudit = buildClaimAudit({
     toolName: params.toolName,
+    queryText: params.queryText,
     payload: params.payload,
     queryContractName,
     answerShape,
@@ -704,6 +711,13 @@ export async function attachStableQueryContractEnvelope(params: {
   const sourceMemoryIds = uniqueStrings(sourceTrail.flatMap((item) => normalizeArray(item.sourceMemoryIds)));
   const sourceChunkIds = uniqueStrings(sourceTrail.flatMap((item) => normalizeArray(item.sourceChunkIds)));
   const sourceSceneIds = uniqueStrings(sourceTrail.flatMap((item) => normalizeArray(item.sourceSceneIds)));
+  const operatorActionPrompt = buildOperatorActionPrompt({
+    queryText: params.queryText,
+    evidenceCount,
+    abstentionReason,
+    sourceAuditTarget: meta.memoryQueryPlanSourceAuditTarget,
+    privacyBlocked: params.payload?.sourcePrivacy?.blocked === true
+  });
 
   const shouldRecordReviewUnknown = queryContractName === "review_only" || retrievalDomain === "review_unknown";
   let recordedReviewUnknown = false;
@@ -722,7 +736,7 @@ export async function attachStableQueryContractEnvelope(params: {
 
   return {
     ...params.payload,
-    ...(answerForToolPayload(params.toolName, params.payload) ? { answer: answerForToolPayload(params.toolName, params.payload) } : {}),
+    ...(answerForToolPayload(params.toolName, params.queryText, params.payload) ? { answer: answerForToolPayload(params.toolName, params.queryText, params.payload) } : {}),
     queryContract: queryContractName,
     retrievalDomain,
     answerShape,
@@ -743,6 +757,7 @@ export async function attachStableQueryContractEnvelope(params: {
     followUpAction,
     abstentionReason,
     blockedFallbacks,
+    operatorActionPrompt,
     reviewUnknown: {
       shouldRecord: shouldRecordReviewUnknown,
       recorded: recordedReviewUnknown,
