@@ -84,6 +84,7 @@
     "benchmark:relationship-continuity-projection-coverage": "npm run build && node dist/cli/benchmark-relationship-continuity-projection-coverage.js",
     "benchmark:relationship-map-projection-coverage": "npm run build && node dist/cli/benchmark-relationship-map-projection-coverage.js",
     "benchmark:benchmark-reliability-audit": "npm run build && node dist/cli/benchmark-benchmark-reliability-audit.js",
+    "benchmark:clean-main-smoke-stack": "npm run build && node dist/cli/benchmark-clean-main-smoke-stack.js",
     "benchmark:projection-state-sentinel": "npm run build && node dist/cli/benchmark-projection-state-sentinel.js",
     "benchmark:human-query-contract-routing": "npm run build && node dist/cli/benchmark-human-query-contract-routing.js",
     "benchmark:query-taxonomy-gold": "npm run build && node dist/cli/benchmark-query-taxonomy-gold.js",

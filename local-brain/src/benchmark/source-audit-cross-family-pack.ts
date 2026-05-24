@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { attachStableQueryContractEnvelope } from "../mcp/query-contract-envelope.js";
 import { presentHumanReadableQueryResult } from "../mcp/query-presenter.js";
+import { queryTimeModelCallsFromPayload } from "./query-benchmark-utils.js";
 import { buildBenchmarkRuntimeMetadata, type BenchmarkRuntimeMetadata } from "./runtime-metadata.js";
 
 type ToolName = "memory.search" | "memory.recap" | "memory.extract_tasks" | "memory.extract_calendar";
@@ -359,7 +360,7 @@ async function runScenario(scenario: Scenario): Promise<SourceAuditCrossFamilyRo
     citationFaithfulnessScore: Number(citationFaithfulness(audit).toFixed(4)),
     wrongFamily,
     wrongShape,
-    queryTimeModelCalls: 0,
+    queryTimeModelCalls: queryTimeModelCallsFromPayload(payload),
     latencyMs,
     answer: rendered.answer,
     missingTerms: missing,
