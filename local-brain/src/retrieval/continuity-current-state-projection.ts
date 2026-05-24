@@ -99,6 +99,7 @@ function extractContinuityRoutineItems(value: string): string[] {
 }
 
 function buildContinuityProjectionClaimText(
+  queryText: string,
   heads: readonly ContinuityProjectionHeadRow[],
   entries: readonly ContinuityProjectionEntryRow[]
 ): string {
@@ -136,7 +137,14 @@ function buildContinuityProjectionClaimText(
       })
   );
   const sections = [
-    projectNames.length > 0 ? `Warm start for Steve: Current focus includes ${projectNames.join(", ")}.` : null,
+    projectNames.length > 0 && /\b(?:versus|vs\.?|side\s+projects?|just\s+a\s+side)\b/iu.test(queryText)
+      ? `Active / current work: ${projectNames.join(", ")}.`
+      : projectNames.length > 0
+        ? `Warm start for Steve: Current focus includes ${projectNames.join(", ")}.`
+        : null,
+    projectNames.length > 0 && /\b(?:versus|vs\.?|side\s+projects?|just\s+a\s+side)\b/iu.test(queryText)
+      ? "Side-project status: no source-bound side-project classification was selected; treat unsupported project-status labels as gaps instead of guessing."
+      : null,
     nextActions.length > 0 ? `Carry forward: ${nextActions.join(", ")}.` : null,
     routineItems.length > 0 ? `Current daily routine: ${routineItems.join(", ")}.` : null,
     projectNames.includes("Well Inked") || projectNames.includes("Two Way")
@@ -286,7 +294,7 @@ export async function buildContinuityCurrentStateProjectionResponse(
   return buildDirectSourceSearchResponse({
     query,
     results,
-    claimText: buildContinuityProjectionClaimText(projection.heads, projection.entries),
+    claimText: buildContinuityProjectionClaimText(queryText, projection.heads, projection.entries),
     stageName: "continuity_current_state_projection",
     startedAt,
     answerReason:

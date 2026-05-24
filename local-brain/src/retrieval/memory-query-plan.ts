@@ -317,6 +317,18 @@ function detectIntent(params: {
 }): MemoryQueryPlanIntent {
   const { queryText, contractName, people, places, projects, sourceAuditTarget } = params;
   if (sourceAuditTarget) return "source_audit";
+  if (
+    /\b(?:silent(?:ly)?\s+merge|merge\s+them|correction|alias|spelling|omi\s+gummi|gummi)\b/iu.test(queryText) &&
+    /\b(?:should|policy|multiple|candidate|merge|separate|audit)\b/iu.test(queryText)
+  ) {
+    return "document_spec";
+  }
+  if (
+    /\b(?:private\s+source|source\s+privacy|raw\s+source|blocked|redact|retention|audit\s+trail|deleted|delete)\b/iu.test(queryText) &&
+    /\b(?:should|policy|retained|retain|deleted|delete|audit|blocked)\b/iu.test(queryText)
+  ) {
+    return "document_spec";
+  }
   if (/\bhow\s+do\s+i\s+run\b|\b(?:command|benchmark|npm\s+run|script|cli)\b/iu.test(queryText)) return "procedure_command";
   if (
     /\b(?:current\s+)?(?:spec|plan|checkpoint|task\s+list|changelog|implementation\s+plan|engineering\s+plan)\b/iu.test(queryText) &&

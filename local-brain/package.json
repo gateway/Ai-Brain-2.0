@@ -170,6 +170,7 @@
     "benchmark:source-audit-cross-family-pack": "npm run build && node dist/cli/benchmark-source-audit-cross-family-pack.js",
     "benchmark:adversarial-negative-answer-pack": "npm run build && node dist/cli/benchmark-adversarial-negative-answer-pack.js",
     "benchmark:mixed-source-human-query-audit-pack": "npm run build && node dist/cli/benchmark-mixed-source-human-query-audit-pack.js",
+    "benchmark:mcp-human-query-audit-100": "npm run build && node dist/cli/benchmark-mcp-human-query-audit-100.js",
     "benchmark:report-completeness-audit-pack": "npm run build && node dist/cli/benchmark-report-completeness-audit-pack.js",
     "benchmark:mcp-ops-readiness-pack": "npm run build && node dist/cli/benchmark-mcp-ops-readiness-pack.js",
     "benchmark:operator-dashboard": "npm run build && node dist/cli/benchmark-operator-dashboard.js",
