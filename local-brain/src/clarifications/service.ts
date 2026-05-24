@@ -1299,41 +1299,39 @@ async function recordCorrectionReferenceAudit(client: PoolClient, input: Correct
   const sourceEntityId = input.sourceEntityId ?? null;
   const targetEntityId = input.targetEntityId ?? null;
   const sameEntityRetained = Boolean(sourceEntityId && targetEntityId && sourceEntityId === targetEntityId);
-  const [relationshipRefs, selfBindingRefs, priorRefs] = sourceEntityId
-    ? await Promise.all([
-        client.query<{ readonly total: string }>(
-          `
-            SELECT count(*)::text AS total
-            FROM relationship_memory
-            WHERE namespace_id = $1
-              AND (subject_entity_id = $2::uuid OR object_entity_id = $2::uuid)
-          `,
-          [input.namespaceId, sourceEntityId]
-        ),
-        client.query<{ readonly total: string }>(
-          `
-            SELECT count(*)::text AS total
-            FROM namespace_self_bindings
-            WHERE namespace_id = $1
-              AND entity_id = $2::uuid
-          `,
-          [input.namespaceId, sourceEntityId]
-        ),
-        client.query<{ readonly total: string }>(
-          `
-            SELECT count(*)::text AS total
-            FROM relationship_priors
-            WHERE namespace_id = $1
-              AND (entity_a_id = $2::uuid OR entity_b_id = $2::uuid)
-          `,
-          [input.namespaceId, sourceEntityId]
-        )
-      ])
-    : [
-        { rows: [{ total: "0" }] },
-        { rows: [{ total: "0" }] },
-        { rows: [{ total: "0" }] }
-      ];
+  const relationshipRefs = sourceEntityId
+    ? await client.query<{ readonly total: string }>(
+        `
+          SELECT count(*)::text AS total
+          FROM relationship_memory
+          WHERE namespace_id = $1
+            AND (subject_entity_id = $2::uuid OR object_entity_id = $2::uuid)
+        `,
+        [input.namespaceId, sourceEntityId]
+      )
+    : { rows: [{ total: "0" }] };
+  const selfBindingRefs = sourceEntityId
+    ? await client.query<{ readonly total: string }>(
+        `
+          SELECT count(*)::text AS total
+          FROM namespace_self_bindings
+          WHERE namespace_id = $1
+            AND entity_id = $2::uuid
+        `,
+        [input.namespaceId, sourceEntityId]
+      )
+    : { rows: [{ total: "0" }] };
+  const priorRefs = sourceEntityId
+    ? await client.query<{ readonly total: string }>(
+        `
+          SELECT count(*)::text AS total
+          FROM relationship_priors
+          WHERE namespace_id = $1
+            AND (entity_a_id = $2::uuid OR entity_b_id = $2::uuid)
+        `,
+        [input.namespaceId, sourceEntityId]
+      )
+    : { rows: [{ total: "0" }] };
   const relationshipSourceRefCount = Number(relationshipRefs.rows[0]?.total ?? "0");
   const selfBindingSourceRefCount = Number(selfBindingRefs.rows[0]?.total ?? "0");
   const relationshipPriorSourceRefCount = Number(priorRefs.rows[0]?.total ?? "0");
