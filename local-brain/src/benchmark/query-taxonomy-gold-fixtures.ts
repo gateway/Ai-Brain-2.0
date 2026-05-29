@@ -31,7 +31,7 @@ function goldCases(prefix: string, cases: readonly Omit<QueryGoldCase, "id">[]):
 export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
   ...goldCases("relationship_chronology", [
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "what happened between Lauren and me?",
       expectedDomain: "relationship_social",
@@ -42,7 +42,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "what is my history with Lauren?",
       expectedDomain: "relationship_social",
@@ -53,7 +53,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "what went on with Lauren?",
       expectedDomain: "relationship_social",
@@ -64,7 +64,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "tell me our history with Lauren",
       expectedDomain: "relationship_social",
@@ -75,7 +75,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "how has my relationship with Lauren changed recently?",
       expectedDomain: "relationship_social",
@@ -86,7 +86,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "What is Steve's history with Lauren?",
       expectedDomain: "relationship_social",
@@ -99,7 +99,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
   ]),
   ...goldCases("relationship_map", [
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "Who is Lauren to me?",
       expectedDomain: "relationship_social",
@@ -110,7 +110,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "Who is Dan to me?",
       expectedDomain: "relationship_social",
@@ -121,7 +121,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "how do I know Ben?",
       expectedDomain: "relationship_social",
@@ -132,7 +132,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "who is Gumee in my life?",
       expectedDomain: "relationship_social",
@@ -143,7 +143,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "who is Tim to me?",
       expectedDomain: "relationship_social",
@@ -154,7 +154,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "what is Dan associated with in my life?",
       expectedDomain: "relationship_social",
@@ -290,7 +290,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "synthetic",
       toolName: "memory.search",
       query: "what coffee does Steve prefer now?",
       expectedDomain: "project_current_state",
@@ -417,7 +417,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "synthetic",
       toolName: "memory.search",
       query: "When did Steve and Lauren stop talking?",
       expectedDomain: "temporal_history",
@@ -428,7 +428,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "synthetic",
       toolName: "memory.search",
       query: "When did Lauren leave Thailand?",
       expectedDomain: "temporal_history",
@@ -441,7 +441,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
   ]),
   ...goldCases("list_collection", [
     {
-      namespaceKind: "personal",
+      namespaceKind: "synthetic",
       toolName: "memory.search",
       query: "who are Steve's friends?",
       expectedDomain: "list_collection",
@@ -452,24 +452,24 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
-      query: "what movies does Steve like?",
+      query: "what movies have I talked about recently?",
       expectedDomain: "list_collection",
       expectedContract: "list_set",
       expectedAnswerShape: "list",
-      expectedFinalClaimSources: ["compiled_list_sets", "typed_list_support", "alias_current_state_projection"],
+      expectedFinalClaimSources: ["compiled_list_sets", "typed_list_support", "alias_current_state_projection", "exact_detail_candidate"],
       expectedTerms: ["Sinners"],
       minimumEvidence: 1
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "What movies have I talked about?",
       expectedDomain: "list_collection",
       expectedContract: "list_set",
       expectedAnswerShape: "list",
-      expectedFinalClaimSources: ["compiled_list_sets", "typed_list_support", "alias_current_state_projection"],
+      expectedFinalClaimSources: ["compiled_list_sets", "typed_list_support", "alias_current_state_projection", "exact_detail_candidate"],
       expectedTerms: ["movie"],
       minimumEvidence: 1
     },
@@ -690,7 +690,7 @@ export const QUERY_TAXONOMY_GOLD_CASES: readonly QueryGoldCase[] = [
       shouldAbstain: true
     },
     {
-      namespaceKind: "personal",
+      namespaceKind: "fixture",
       toolName: "memory.search",
       query: "what happened between me and them?",
       expectedDomain: "review_unknown",
@@ -913,6 +913,18 @@ export async function seedQueryTaxonomyGoldFixture(namespaceId = QUERY_GOLD_FIXT
       ].join("\n")
     });
 
+    const movieMemory = await insertArtifactMemory({
+      uri: "query-gold://movies",
+      sessionId: "query-gold-movies",
+      occurredAt: "2026-05-17T00:06:30Z",
+      content: [
+        "# Movie Preferences",
+        "",
+        "Steve talked about movies recently and said he likes Sinners.",
+        "The movie notes also mention Texas Chainsaw Massacre as a comparison point."
+      ].join("\n")
+    });
+
     await insertArtifactMemory({
       uri: "query-gold://engineering-note",
       sessionId: "query-gold-engineering-note",
@@ -927,11 +939,46 @@ export async function seedQueryTaxonomyGoldFixture(namespaceId = QUERY_GOLD_FIXT
       ].join("\n")
     });
 
-    await ensureEntity("Steve Tietze", "self");
+    const steveEntityId = await ensureEntity("Steve Tietze", "self");
     await ensureEntity("Dan", "person");
     await ensureEntity("Ben", "person");
     await ensureEntity("Gumee", "person");
     await ensureEntity("Lauren", "person");
+    await ensureEntity("Tim", "person");
+
+    await client.query(
+      `
+        INSERT INTO media_mentions (
+          namespace_id, source_memory_id, artifact_id, subject_entity_id, subject_name,
+          media_title, normalized_media_title, media_kind, mention_kind, context_text, occurred_at, provenance, metadata
+        )
+        VALUES (
+          $1, $2::uuid, $3::uuid, $4::uuid, 'Steve Tietze',
+          'Sinners', 'sinners', 'movie', 'liked', $5, '2026-05-17T00:06:30Z'::timestamptz,
+          jsonb_build_object('source_quote', $5::text, 'benchmark_seed', true),
+          jsonb_build_object('benchmark_seed', true)
+        )
+        ON CONFLICT DO NOTHING
+      `,
+      [namespaceId, movieMemory.memoryId, movieMemory.artifactId, steveEntityId, "Steve talked about movies recently and said he likes Sinners."]
+    );
+
+    await client.query(
+      `
+        INSERT INTO preference_facts (
+          namespace_id, source_memory_id, artifact_id, subject_entity_id, subject_name,
+          predicate, object_text, normalized_object_text, domain, occurred_at, context_text, provenance, metadata
+        )
+        VALUES (
+          $1, $2::uuid, $3::uuid, $4::uuid, 'Steve Tietze',
+          'likes', 'Sinners', 'sinners', 'media', '2026-05-17T00:06:30Z'::timestamptz, $5,
+          jsonb_build_object('source_quote', $5::text, 'benchmark_seed', true),
+          jsonb_build_object('benchmark_seed', true)
+        )
+        ON CONFLICT DO NOTHING
+      `,
+      [namespaceId, movieMemory.memoryId, movieMemory.artifactId, steveEntityId, "Steve talked about movies recently and said he likes Sinners."]
+    );
 
     await insertRelationshipCandidate({
       subject: "Steve Tietze",
@@ -960,6 +1007,13 @@ export async function seedQueryTaxonomyGoldFixture(namespaceId = QUERY_GOLD_FIXT
       object: "Lauren",
       snippet: "Lauren is Steve's friend and still part of his social world.",
       occurredAt: "2026-05-17T00:13:00Z"
+    });
+    await insertRelationshipCandidate({
+      subject: "Steve Tietze",
+      predicate: "friend_of",
+      object: "Tim",
+      snippet: "Tim is Steve's friend from the Chiang Mai circle.",
+      occurredAt: "2026-05-17T00:13:30Z"
     });
     await insertRelationshipCandidate({
       subject: "Dan",
