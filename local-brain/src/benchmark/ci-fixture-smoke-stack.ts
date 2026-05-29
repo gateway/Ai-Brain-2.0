@@ -69,7 +69,10 @@ const STACK_STEPS: readonly CiFixtureSmokeStep[] = [
   {
     id: "relationship_friend_set_pack",
     scriptName: "benchmark:relationship-friend-set-pack",
-    reason: "Relationship friend-set, place filter, and subject-binding gate."
+    reason: "Fixture-safe relationship friend-set, mutual/grouped shape, and subject-binding gate.",
+    env: {
+      BRAIN_RELATIONSHIP_FRIEND_SET_SCOPE: "fixture"
+    }
   },
   {
     id: "mcp_correction_propagation_pack",
@@ -77,9 +80,9 @@ const STACK_STEPS: readonly CiFixtureSmokeStep[] = [
     reason: "MCP correction inbox, no-silent-merge, audit trail, and projection propagation gate."
   },
   {
-    id: "cross_corpus_mcp_query_audit_100",
-    scriptName: "benchmark:cross-corpus-mcp-query-audit-100",
-    reason: "CI-safe cross-corpus MCP audit over public fixtures plus deterministic docs/Codex fixtures."
+    id: "multi_source_ingestion_pack",
+    scriptName: "benchmark:multi-source-ingestion-pack",
+    reason: "CI-safe multi-source ingestion and retrieval coverage over deterministic source fixtures."
   }
 ];
 

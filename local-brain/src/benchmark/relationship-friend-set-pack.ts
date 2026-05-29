@@ -40,6 +40,8 @@ interface FriendSetScenario {
   readonly minimumEvidence: number;
 }
 
+type RelationshipFriendSetScope = "full" | "fixture";
+
 export interface RelationshipFriendSetRow {
   readonly id: string;
   readonly namespaceId: string;
@@ -202,6 +204,17 @@ const SCENARIOS: readonly FriendSetScenario[] = [
     minimumEvidence: 3
   }
 ];
+
+function relationshipFriendSetScope(): RelationshipFriendSetScope {
+  return process.env.BRAIN_RELATIONSHIP_FRIEND_SET_SCOPE === "fixture" ? "fixture" : "full";
+}
+
+function scenariosForScope(scope: RelationshipFriendSetScope): readonly FriendSetScenario[] {
+  if (scope === "fixture") {
+    return SCENARIOS.filter((scenario) => scenario.namespaceId === QUERY_GOLD_FIXTURE_NAMESPACE);
+  }
+  return SCENARIOS;
+}
 
 function outputDir(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../benchmark-results");
@@ -380,10 +393,12 @@ export async function runAndWriteRelationshipFriendSetPack(): Promise<{
   const previousFlags = projectionRuntimeFlags();
   applyProjectionRuntimeFlags();
   try {
+    const scope = relationshipFriendSetScope();
+    const scenarios = scenariosForScope(scope);
     await seedQueryTaxonomyGoldFixture();
     await rebuildContractProjectionsNamespace(QUERY_GOLD_FIXTURE_NAMESPACE);
     const results: RelationshipFriendSetRow[] = [];
-    for (const scenario of SCENARIOS) {
+    for (const scenario of scenarios) {
       results.push(await runScenario(scenario));
     }
     const generatedAt = new Date().toISOString();
@@ -394,8 +409,8 @@ export async function runAndWriteRelationshipFriendSetPack(): Promise<{
         benchmarkMode: "sampled",
         sampleControls: {
           fixtureFirst: true,
-          scenarioCount: SCENARIOS.length,
-          personalSmoke: true
+          scenarioCount: scenarios.length,
+          personalSmoke: scope === "full"
         }
       }),
       sampleCount: results.length,
