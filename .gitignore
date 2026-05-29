@@ -22,7 +22,10 @@
 /local-brain/dist/
 /local-brain/node_modules/
 /local-brain/cache/
-/local-brain/config/
+/local-brain/config/*
+!/local-brain/config/taxonomy/
+/local-brain/config/taxonomy/*
+!/local-brain/config/taxonomy/memory_taxonomy.v1.json
 /local-brain/logs/
 /local-brain/eval-results/
 /local-brain/benchmark-results/

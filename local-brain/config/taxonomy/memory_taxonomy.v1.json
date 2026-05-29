@@ -1,0 +1,210 @@
+{
+  "version": "memory_taxonomy_v1",
+  "core_object_types": [
+    "PERSON",
+    "PLACE",
+    "ORGANIZATION",
+    "OBJECT",
+    "CREATIVE_WORK",
+    "EVENT",
+    "PERIOD",
+    "TEMPORAL_REFERENCE",
+    "RELATIONSHIP",
+    "CLAIM",
+    "TASK",
+    "PROJECT",
+    "DOCUMENT_OR_MEDIA",
+    "UNKNOWN_CANDIDATE"
+  ],
+  "domains": {
+    "personal": {
+      "families": ["current_state", "owns", "preference", "identity", "temporal_event", "venue", "purchase", "explicit_list_set"]
+    },
+    "family": {
+      "families": ["relationship_edge", "relationship_status", "life_event", "support_or_care"]
+    },
+    "health": {
+      "families": ["health_status", "health_event", "support_or_care"]
+    },
+    "work": {
+      "families": ["role", "completed_on", "current_state", "relationship_edge", "duration", "task_status"]
+    },
+    "education": {
+      "families": ["completed_on", "venue", "credential", "life_period"]
+    },
+    "travel": {
+      "families": ["lives_in", "visited", "temporal_event", "venue", "duration"]
+    },
+    "task_ops": {
+      "families": ["task_status", "task_due", "task_owner", "project_support"]
+    },
+    "project_ops": {
+      "families": ["project_support", "causal_reason", "tool_or_substrate", "role", "current_state"]
+    },
+    "finance": {
+      "families": ["current_state", "transaction", "account_status", "price"]
+    },
+    "media": {
+      "families": ["preference", "owns", "creative_work", "explicit_list_set"]
+    },
+    "daily_life": {
+      "families": ["routine", "time_of_day", "habit", "current_state", "temporal_event", "belief_stance"]
+    },
+    "identity_values": {
+      "families": ["profile_trait", "civic_identity", "religious_identity", "political_orientation", "personality_trait", "allyship_support", "value_stance"]
+    },
+    "legal": {
+      "families": ["legal_status", "completed_on", "document"]
+    },
+    "technical": {
+      "families": ["project_support", "tool_or_substrate", "capacity", "speed"]
+    },
+    "sensitive_private": {
+      "families": ["health_status", "legal_status", "relationship_edge"]
+    },
+    "unknown": {
+      "families": ["unclassified_observation"]
+    }
+  },
+  "families": {
+    "lives_in": {
+      "subtypes": ["current_residence", "past_residence", "base_location"]
+    },
+    "owns": {
+      "subtypes": ["owned_object", "pet", "vehicle", "device", "media_item"]
+    },
+    "preference": {
+      "subtypes": ["explicit_preference", "food_preference", "book_preference", "style_preference", "activity_preference", "preference_uncertain"]
+    },
+    "purchase": {
+      "subtypes": ["purchased_object", "acquired_object", "purchase_event", "purchase_date_context"]
+    },
+    "explicit_list_set": {
+      "subtypes": ["explicit_items", "explicit_preferences", "explicit_none", "explicit_places", "explicit_activities"]
+    },
+    "health_status": {
+      "subtypes": ["diagnosis", "mental_health_context", "neurodevelopmental_context", "health_support", "health_uncertain"]
+    },
+    "completed_on": {
+      "subtypes": ["credential_completed", "task_completed", "event_completed"]
+    },
+    "current_state": {
+      "subtypes": ["service_name", "brand", "count", "speed", "capacity", "pet_name", "breed", "belief_stance"]
+    },
+    "speed": {
+      "subtypes": ["network_speed", "internet_speed", "plan_speed"]
+    },
+    "capacity": {
+      "subtypes": ["storage_capacity", "memory_capacity", "device_capacity", "plan_capacity"]
+    },
+    "temporal_event": {
+      "subtypes": ["exact_date", "bounded_interval", "departure", "arrival", "duration", "first_occurrence"]
+    },
+    "relationship_edge": {
+      "subtypes": ["friend", "coworker", "family_member", "partner", "advisor", "mentor"]
+    },
+    "relationship_status": {
+      "subtypes": ["married", "partnered", "single", "divorced", "engaged", "status_uncertain"]
+    },
+    "task_status": {
+      "subtypes": ["todo", "in_progress", "blocked", "done", "deferred"]
+    },
+    "task_due": {
+      "subtypes": ["exact_due_date", "relative_due_date", "routine_due"]
+    },
+    "task_owner": {
+      "subtypes": ["self_owned", "other_owned", "shared"]
+    },
+    "project_support": {
+      "subtypes": ["project_goal", "project_type", "project_feature", "project_tool", "project_substrate", "project_status"]
+    },
+    "causal_reason": {
+      "subtypes": ["decision_reason", "business_reason", "personal_reason", "supporting_cause", "reason_uncertain"]
+    },
+    "tool_or_substrate": {
+      "subtypes": ["database", "framework", "model", "service", "index"]
+    },
+    "venue": {
+      "subtypes": ["school", "shop", "workplace", "event_place", "city", "country"]
+    },
+    "credential": {
+      "subtypes": ["degree", "certification", "course", "program"]
+    },
+    "role": {
+      "subtypes": ["job_title", "project_role", "family_role", "community_role"]
+    },
+    "time_of_day": {
+      "subtypes": ["routine_time", "start_time", "stop_time"]
+    },
+    "duration": {
+      "subtypes": ["event_duration", "stay_duration", "habit_duration"]
+    },
+    "creative_work": {
+      "subtypes": ["performance_title", "recipe_title", "book_title", "media_title", "song_title"]
+    },
+    "price": {
+      "subtypes": ["purchase_price", "amount_spent", "money_amount", "expense_amount"]
+    },
+    "belief_stance": {
+      "subtypes": ["previous_stance", "current_stance", "belief", "opinion"]
+    },
+    "profile_trait": {
+      "subtypes": ["civic_identity", "religious_identity", "political_orientation", "personality_trait", "allyship_support", "value_stance", "trait_uncertain"]
+    },
+    "civic_identity": {
+      "subtypes": ["patriotic", "national_pride", "civic_service"]
+    },
+    "religious_identity": {
+      "subtypes": ["religious", "spiritual", "atheist", "agnostic", "belief_uncertain"]
+    },
+    "political_orientation": {
+      "subtypes": ["political_leaning", "issue_stance", "local_issue_focus"]
+    },
+    "personality_trait": {
+      "subtypes": ["trait_label", "likely_trait", "trait_uncertain"]
+    },
+    "allyship_support": {
+      "subtypes": ["ally", "supportive", "advocacy", "community_support"]
+    },
+    "value_stance": {
+      "subtypes": ["belief", "opinion", "current_stance", "previous_stance"]
+    },
+    "unclassified_observation": {
+      "subtypes": ["unknown_reviewable"]
+    }
+  },
+  "temporal_types": [
+    "exact_date",
+    "month_year",
+    "year",
+    "year_range",
+    "season",
+    "date_range",
+    "duration",
+    "recency",
+    "routine_time",
+    "event_relative",
+    "relative_to_source_date",
+    "relative_to_birth_date",
+    "relative_to_known_event",
+    "relative_to_unknown_event",
+    "life_period_reference",
+    "relative_order_only",
+    "vague_past",
+    "unknown"
+  ],
+  "statuses": [
+    "approved",
+    "mapped_to_parent",
+    "repaired",
+    "generic_reviewable",
+    "needs_taxonomy_review",
+    "unsupported",
+    "diagnostic_only"
+  ],
+  "review_rules": {
+    "suggested_taxonomy_min_evidence_count": 3,
+    "suggested_taxonomy_min_distinct_sources": 2,
+    "unknown_authoritative_allowed": false
+  }
+}
