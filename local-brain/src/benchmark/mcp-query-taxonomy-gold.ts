@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { rebuildContractProjectionsNamespace } from "../contract-projections/service.js";
 import { closePool, queryRows } from "../db/client.js";
 import { executeMcpTool } from "../mcp/server.js";
+import { rebuildRepoProcedureProjection } from "../retrieval/repo-corpus-reader.js";
 import {
   QUERY_GOLD_FIXTURE_NAMESPACE,
   QUERY_TAXONOMY_GOLD_CASES,
@@ -202,6 +203,7 @@ export async function runMcpQueryTaxonomyGoldBenchmark(): Promise<McpQueryTaxono
     const syntheticReport = await runHumanSyntheticWatchBenchmark();
     await seedQueryTaxonomyGoldFixture();
     await rebuildContractProjectionsNamespace(QUERY_GOLD_FIXTURE_NAMESPACE);
+    await rebuildRepoProcedureProjection();
     for (const testCase of QUERY_TAXONOMY_GOLD_CASES) {
       await runMcpCase(testCase, namespaceIdForCase(testCase, syntheticReport.namespaceId));
     }
