@@ -1,7 +1,7 @@
 "use client";
 
 import type { ChangeEvent } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Mic, Square, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -79,15 +79,13 @@ function pickRecorderMimeType(): string | undefined {
 }
 
 function AudioWaveformPreview({ file }: { readonly file: File }) {
-  const [objectUrl, setObjectUrl] = useState<string>();
+  const objectUrl = useMemo(() => URL.createObjectURL(file), [file]);
   const [bars, setBars] = useState<readonly number[]>();
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
   useEffect(() => {
-    const url = URL.createObjectURL(file);
-    setObjectUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [objectUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -133,7 +131,6 @@ function AudioWaveformPreview({ file }: { readonly file: File }) {
       }
     }
 
-    setStatus("loading");
     void decodeWaveform();
 
     return () => {
