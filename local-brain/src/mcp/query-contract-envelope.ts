@@ -606,6 +606,9 @@ function answerForToolPayload(toolName: QueryToolName, queryText: string, payloa
   if (typeof payload.answer === "string" && payload.answer.trim().length > 0) {
     return payload.answer;
   }
+  if (payload.followUpAction === "route_to_clarifications" && typeof payload.clarificationHint?.suggestedPrompt === "string") {
+    return payload.clarificationHint.suggestedPrompt;
+  }
   if (toolName === "memory.extract_tasks" && Array.isArray(payload.tasks)) {
     return taskAnswer(queryText, payload.tasks) ?? undefined;
   }
@@ -654,6 +657,8 @@ export async function attachStableQueryContractEnvelope(params: {
   const followUpAction =
     typeof meta.followUpAction === "string"
       ? meta.followUpAction
+      : typeof params.payload?.followUpAction === "string"
+        ? params.payload.followUpAction
       : typeof params.payload?.duality?.followUpAction === "string"
         ? params.payload.duality.followUpAction
         : "none";
@@ -661,6 +666,10 @@ export async function attachStableQueryContractEnvelope(params: {
   const abstentionReason =
     typeof meta.queryContractFallbackBlockedReason === "string"
       ? meta.queryContractFallbackBlockedReason
+      : typeof params.payload?.clarificationHint?.reason === "string"
+        ? params.payload.clarificationHint.reason
+      : typeof meta.temporalAmbiguityReason === "string"
+        ? meta.temporalAmbiguityReason
       : evidenceCount === 0
         ? String((params.payload?.meta?.answerAssessment as any)?.reason ?? "no_authoritative_evidence")
         : null;

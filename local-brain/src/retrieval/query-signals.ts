@@ -829,13 +829,15 @@ export function isPreciseFactDetailQuery(queryText: string): boolean {
 
   return (
     /\bhow\s+long\b/i.test(normalized) ||
+    /\bhow\s+much\s+time\b/i.test(normalized) ||
+    /\b(?:commute|each\s+way)\b/i.test(normalized) ||
     /\bhow\s+many\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\b/i.test(normalized) ||
     /\b(?:what|which)\s+(?:team|club|organization|company|employer)\b/i.test(normalized) ||
     /\b(?:what|which)\s+(?:position|role|title|job)\b/i.test(normalized) ||
     /\bwhat\s+is\b[^?!.]{0,80}\b(?:position|role|title|job)\b/i.test(normalized) ||
     /\badopt(?:ed|ion)?\b/i.test(normalized) ||
     /\bwhat\s+are\s+the\s+names?\b/i.test(normalized) ||
-    /\bwhat\s+(?:play|movie|film|show|book|song|title)\b/i.test(normalized) ||
+    /\b(?:what|which)\s+(?:play|production|performance|movie|film|show|book|song|title)\b/i.test(normalized) ||
     /\bfavorite\s+movie\s+trilog(?:y|ies)\b/i.test(normalized) ||
     /\bhobbies?\b/i.test(normalized) ||
     /\bwhat\s+(?:martial arts?|color)\b/i.test(normalized) ||

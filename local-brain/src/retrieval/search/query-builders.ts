@@ -647,11 +647,13 @@ export function buildPreciseFactEvidenceQueryText(queryText: string, plannerTerm
     expanded.add("each");
     expanded.add("way");
   }
-  if (/\bplay\b/.test(lowered)) {
+  if (/\b(?:play|production|performance|theater|theatre)\b/.test(lowered)) {
     expanded.add("play");
     expanded.add("production");
+    expanded.add("performance");
     expanded.add("theater");
     expanded.add("theatre");
+    expanded.add("community");
   }
   if (/\bplaylist|spotify\b/.test(lowered)) {
     expanded.add("playlist");

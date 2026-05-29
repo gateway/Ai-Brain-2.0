@@ -10,6 +10,29 @@ on:
 jobs:
   local-brain:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ai_brain_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ai_brain_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BRAIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ai_brain_ci
+      BRAIN_BENCHMARK_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ai_brain_ci
+      BRAIN_LEXICAL_PROVIDER: fts
+      BRAIN_RUNTIME_VECTOR_ACTIVATION_MODE: "off"
+      BRAIN_BENCHMARK_VECTOR_ACTIVATION_MODE: "off"
+      BRAIN_EXTRACTION_ASSISTANT_ENABLED: "false"
+      BRAIN_RELATION_IE_ENABLED: "false"
+      BRAIN_TIMESCALE_MAX_TUPLES_DECOMPRESSED_PER_DML_TRANSACTION: "0"
     defaults:
       run:
         working-directory: local-brain
@@ -32,6 +55,9 @@ jobs:
       - name: Build local-brain
         run: npm run build
 
+      - name: Run database migrations
+        run: npm run migrate
+
       - name: Exact-answer review
         run: npm run test:exact-answer-control
 
@@ -49,6 +75,19 @@ jobs:
 
       - name: Causal chain review
         run: npm run test:causal-chain-review
+
+      - name: CI fixture smoke stack
+        run: npm run benchmark:ci-fixture-smoke-stack
+
+      - name: Upload local-brain benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-brain-benchmark-results
+          path: |
+            local-brain/benchmark-results/*.json
+            local-brain/benchmark-results/*.md
+          if-no-files-found: ignore
 
   brain-console:
     runs-on: ubuntu-latest

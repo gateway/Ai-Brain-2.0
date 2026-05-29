@@ -43,6 +43,7 @@ const DASHBOARD_TARGETS: readonly { readonly label: string; readonly prefix: str
   { label: "Source privacy retention", prefix: "source-privacy-retention-pack" },
   { label: "MCP correction propagation", prefix: "mcp-correction-propagation-pack" },
   { label: "Multi-source ingestion", prefix: "multi-source-ingestion-pack" },
+  { label: "Ingestion quality ledger", prefix: "ingestion-quality-ledger-pack" },
   { label: "Multimodal worker smoke", prefix: "multimodal-worker-smoke" },
   { label: "CEO demo readiness", prefix: "ceo-demo-readiness-pack" }
 ];

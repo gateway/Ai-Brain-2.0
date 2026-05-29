@@ -25,7 +25,7 @@ type ResidualOwner =
   | "presenter_shape"
   | "latency_tail";
 
-interface Scenario {
+export interface PersonalOmiHardQueryScenario {
   readonly id: string;
   readonly toolName: ToolName;
   readonly query: string;
@@ -38,7 +38,7 @@ interface Scenario {
   readonly maxLatencyMs?: number;
 }
 
-interface Row extends Scenario {
+interface Row extends PersonalOmiHardQueryScenario {
   readonly finalClaimSource: string | null;
   readonly queryContract: string | null;
   readonly retrievalDomain: string | null;
@@ -64,7 +64,7 @@ interface Row extends Scenario {
   readonly passed: boolean;
 }
 
-const SCENARIOS: readonly Scenario[] = [
+export const PERSONAL_OMI_HARD_QUERY_SCENARIOS: readonly PersonalOmiHardQueryScenario[] = [
   {
     id: "relationship_place_friends_chiang_mai",
     toolName: "memory.search",
@@ -342,7 +342,7 @@ function hasLatencyTelemetryMismatch(latencyMs: number, timedTotalMs: number | n
 }
 
 function classifyQuality(params: {
-  readonly scenario: Scenario;
+  readonly scenario: PersonalOmiHardQueryScenario;
   readonly evidenceCount: number;
   readonly sourceTrailCount: number;
   readonly claimAuditCount: number;
@@ -360,7 +360,7 @@ function classifyQuality(params: {
 }
 
 function classifyResidual(params: {
-  readonly scenario: Scenario;
+  readonly scenario: PersonalOmiHardQueryScenario;
   readonly quality: Row["quality"];
   readonly evidenceCount: number;
   readonly sourceTrailCount: number;
@@ -382,7 +382,7 @@ function classifyResidual(params: {
   return "presenter_shape";
 }
 
-async function runScenario(scenario: Scenario): Promise<Row> {
+async function runScenario(scenario: PersonalOmiHardQueryScenario): Promise<Row> {
   const startedAt = performance.now();
   const wrapped = (await executeMcpTool(scenario.toolName, {
     namespace_id: "personal",
@@ -510,7 +510,7 @@ export async function runAndWritePersonalOmiHardQueryAudit30(): Promise<{
   readonly output: { readonly jsonPath: string; readonly markdownPath: string };
 }> {
   const rows: Row[] = [];
-  for (const scenario of SCENARIOS) {
+  for (const scenario of PERSONAL_OMI_HARD_QUERY_SCENARIOS) {
     process.stderr.write(`[personal-omi-hard-query-audit-30] running ${scenario.id}\n`);
     rows.push(await runScenario(scenario));
   }

@@ -795,6 +795,25 @@ function extractLocationPlacesFromText(queryText: string, text: string): readonl
         values.add(normalized);
       }
     }
+    for (const match of workingText.matchAll(
+      /\b(?:music\s+festival|festival|concert)\b[^.!?\n]{0,120}?\b(?:it\s+was\s+)?at\s+(?:the\s+)?([^.!?\n]+)/giu
+    )) {
+      const normalized = normalize(
+        (match[1] ?? "")
+          .replace(/\bon\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,\s*\d{4})?\b.*$/iu, "")
+          .replace(/\bin\s+\d{4}\b.*$/iu, "")
+          .replace(/\b(?:what a show|you've already attended this one|recently)\b.*$/iu, "")
+          .replace(/[.?!,;:]+$/u, "")
+      );
+      if (
+        normalized &&
+        !genericTravelVenueLabels.has(normalized.toLowerCase()) &&
+        !genericTravelNonPlaceLabels.has(normalized.toLowerCase())
+      ) {
+        clauseValues.push(normalized);
+        values.add(normalized);
+      }
+    }
   }
   for (const [label, pattern] of [
     ["homeless shelter", /\bhomeless shelter\b/iu],

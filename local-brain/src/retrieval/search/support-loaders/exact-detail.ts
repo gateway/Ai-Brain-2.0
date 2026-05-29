@@ -71,11 +71,11 @@ function buildExactDetailScopeFilter(
   exactFamily: ReturnType<typeof inferExactDetailQuestionFamily>,
   documentExpr: string
 ): string {
-  if (/\bhow\s+long\b/i.test(queryText)) {
+  if (/\b(?:how\s+long|how\s+much\s+time|commute|each\s+way)\b/i.test(queryText)) {
     return `${documentExpr} ~* '(commute|each way|minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)'`;
   }
-  if (/\bwhat\s+(?:play|movie|film|show|book|song|title)\b/i.test(queryText)) {
-    return `${documentExpr} ~* '(play|movie|film|show|book|song|title|attended|watched|read|called|production of|saw)'`;
+  if (/\b(?:what|which)\s+(?:play|production|performance|movie|film|show|book|song|title)\b/i.test(queryText)) {
+    return `${documentExpr} ~* '(play|production|performance|theater|theatre|movie|film|show|book|song|title|attended|watched|read|called|production of|saw)'`;
   }
   if (/\bwhere\b/i.test(queryText) && /\bclass|classes|yoga\b/i.test(queryText)) {
     return `${documentExpr} ~* '(class|classes|yoga|studio|near|at|to)'`;
@@ -139,7 +139,7 @@ export function loadPreciseFactSupportRows(params: {
     .slice(0, 10);
   const preciseDocument = "coalesce(em.metadata->>'source_turn_text', em.metadata->>'source_sentence_text', em.content)";
   const match = helpers.buildFocusedLikeMatchClause(4, terms, preciseDocument);
-  const durationBonus = /\bhow\s+long\b/i.test(queryText)
+  const durationBonus = /\b(?:how\s+long|how\s+much\s+time|commute|each\s+way)\b/i.test(queryText)
     ? `CASE WHEN ${preciseDocument} ~* '\\m\\d+\\s+(minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\\M' THEN 3 ELSE 0 END`
     : "0";
   const commuteBonus = /\bcommute\b/i.test(queryText)

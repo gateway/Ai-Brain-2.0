@@ -1,10 +1,11 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { closePool } from "../db/client.js";
 import { executeMcpTool } from "../mcp/server.js";
 import { runAndWriteMultiSourceIngestionPack } from "./multi-source-ingestion-pack.js";
+import { runOmiLatestSync } from "./omi-latest-sync.js";
 import { payloadEvidenceCount, queryTimeModelCallsFromPayload } from "./query-benchmark-utils.js";
 
 type ToolName = "memory.search" | "memory.extract_tasks" | "memory.extract_calendar";
@@ -67,6 +68,55 @@ function normalizeComparable(value: string): string {
 
 function hasComparableTerm(payloadText: string, term: string): boolean {
   return ` ${normalizeComparable(payloadText)} `.includes(` ${normalizeComparable(term)} `);
+}
+
+function expectedTermsForPhrase(phrase: string): readonly string[] {
+  const stopwords = new Set([
+    "the",
+    "and",
+    "with",
+    "from",
+    "that",
+    "this",
+    "then",
+    "they",
+    "also",
+    "need",
+    "needs",
+    "after",
+    "before",
+    "unit"
+  ]);
+  return [
+    ...new Set(
+      normalizeComparable(phrase)
+        .split(" ")
+        .filter((token) => token.length >= 4 && !stopwords.has(token))
+        .slice(0, 4)
+    )
+  ];
+}
+
+function rawOmiPathForNormalizedPath(normalizedPath: string): string {
+  if (!normalizedPath.includes("/normalized/") || !normalizedPath.endsWith(".md")) {
+    throw new Error(`Could not derive raw OMI path from normalized path: ${normalizedPath}`);
+  }
+  return normalizedPath.replace("/normalized/", "/raw/").replace(/\.md$/u, ".json");
+}
+
+async function latestOmiTaskExpectedTerms(namespaceId = "personal"): Promise<readonly string[]> {
+  const sync = await runOmiLatestSync({
+    namespaceId,
+    skipCompiler: true
+  });
+  const rawPath = rawOmiPathForNormalizedPath(sync.report.latestFile.absolutePath);
+  const raw = JSON.parse(await readFile(rawPath, "utf8")) as {
+    readonly structured?: {
+      readonly action_items?: readonly { readonly description?: string | null }[];
+    } | null;
+  };
+  const firstActionItem = raw.structured?.action_items?.find((item) => typeof item.description === "string" && item.description.trim().length > 0);
+  return firstActionItem ? expectedTermsForPhrase(firstActionItem.description ?? "") : [];
 }
 
 function answerPreview(payload: any): string {
@@ -325,6 +375,13 @@ const MULTI_SOURCE_SEEDS: readonly AuditSeed[] = [
   }
 ];
 
+async function buildPersonalSeeds(): Promise<readonly AuditSeed[]> {
+  const latestTaskExpectedTerms = await latestOmiTaskExpectedTerms();
+  return PERSONAL_SEEDS.map((seed) =>
+    seed.id === "tasks_latest_note" && latestTaskExpectedTerms.length > 0 ? { ...seed, expectedTerms: latestTaskExpectedTerms } : seed
+  );
+}
+
 async function runAuditRow(seed: AuditSeed, variantIndex: number, namespaceId: string, query: string): Promise<AuditRow> {
   const startedAt = performance.now();
   try {
@@ -461,17 +518,7 @@ export async function runAndWriteMcpHumanQueryAudit100(): Promise<{
   readonly report: any;
   readonly output: { readonly jsonPath: string; readonly markdownPath: string };
 }> {
-  const multiSource = await runAndWriteMultiSourceIngestionPack();
-  const multiSourceNamespaceId = multiSource.report.namespaceId;
-  const rows: AuditRow[] = [];
-  const seeds = [...PERSONAL_SEEDS, ...MULTI_SOURCE_SEEDS];
-  for (const seed of seeds) {
-    const namespaceId = seed.namespaceKind === "personal" ? "personal" : multiSourceNamespaceId;
-    const variants = queryVariants(seed.query);
-    for (let index = 0; index < variants.length; index += 1) {
-      rows.push(await runAuditRow(seed, index, namespaceId, variants[index]!));
-    }
-  }
+  const { rows, multiSourceNamespaceId, multiSourceIngestionArtifact } = await runMcpHumanQueryAuditRows();
   const generatedAt = new Date().toISOString();
   const metrics = metricsFromRows(rows);
   const report = {
@@ -486,7 +533,7 @@ export async function runAndWriteMcpHumanQueryAudit100(): Promise<{
       metrics.supportedMissingClaimAuditRows === 0 &&
       metrics.queryTimeModelCalls === 0,
     multiSourceNamespaceId,
-    multiSourceIngestionArtifact: multiSource.output.jsonPath,
+    multiSourceIngestionArtifact,
     metrics,
     results: rows
   };
@@ -497,6 +544,38 @@ export async function runAndWriteMcpHumanQueryAudit100(): Promise<{
   await writeFile(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   await writeFile(markdownPath, toMarkdown(report), "utf8");
   return { report, output: { jsonPath, markdownPath } };
+}
+
+export async function runMcpHumanQueryAuditRows(options: { readonly rowLimit?: number } = {}): Promise<{
+  readonly rows: readonly AuditRow[];
+  readonly multiSourceNamespaceId: string;
+  readonly multiSourceIngestionArtifact: string;
+}> {
+  const multiSource = await runAndWriteMultiSourceIngestionPack();
+  const multiSourceNamespaceId = multiSource.report.namespaceId;
+  const rows: AuditRow[] = [];
+  const personalSeeds = await buildPersonalSeeds();
+  const seeds = [...personalSeeds, ...MULTI_SOURCE_SEEDS];
+  for (const seed of seeds) {
+    const namespaceId = seed.namespaceKind === "personal" ? "personal" : multiSourceNamespaceId;
+    const variants = queryVariants(seed.query);
+    for (let index = 0; index < variants.length; index += 1) {
+      if (typeof options.rowLimit === "number" && rows.length >= options.rowLimit) {
+        return {
+          rows,
+          multiSourceNamespaceId,
+          multiSourceIngestionArtifact: multiSource.output.jsonPath
+        };
+      }
+      rows.push(await runAuditRow(seed, index, namespaceId, variants[index]!));
+    }
+  }
+
+  return {
+    rows,
+    multiSourceNamespaceId,
+    multiSourceIngestionArtifact: multiSource.output.jsonPath
+  };
 }
 
 export async function runMcpHumanQueryAudit100Cli(): Promise<void> {

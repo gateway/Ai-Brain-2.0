@@ -268,7 +268,7 @@ function isAspirationQuery(queryText: string): boolean {
 }
 
 function isTravelReportQuery(queryText: string): boolean {
-  return /\broadtrips?\b|\btrip\b|\btravel\b|\bfestival\b|\bwhere has\b|\bwhere did\b.*\broadtrip\b/iu.test(queryText);
+  return /\broadtrips?\b|\btrip\b|\btravel\b|\bvacation\b|\bdestination\b|\bfestival\b|\bwhere has\b|\bwhere did\b.*\broadtrip\b/iu.test(queryText);
 }
 
 function isConcreteSetFactQuery(queryText: string): boolean {
@@ -488,6 +488,9 @@ function isConcreteExactDetailQuery(queryText: string, predicateFamily: Canonica
   if (/\bhow\s+long\b/iu.test(normalized) && /\b(?:have|has|had)\b/iu.test(normalized)) {
     return true;
   }
+  if (/\bcommute\b/iu.test(normalized) && /\b(?:how\s+much\s+time|how\s+long|duration|each\s+day|each\s+way|minutes?|hours?)\b/iu.test(normalized)) {
+    return true;
+  }
   if ((/\bcompany\b|\bbrand\b|\bsponsor\b/iu.test(normalized)) && /\bendorsement\b/iu.test(normalized)) {
     return true;
   }
@@ -548,7 +551,7 @@ function isConcreteExactDetailQuery(queryText: string, predicateFamily: Canonica
     /^\s*(what|which|who|where)\b/iu.test(normalized) &&
     (
       /^\s*what did\b(?!.*\brealiz)/iu.test(normalized) ||
-      /\b(kind|type|color|colors|name|names|country|city|movie|movies|book|books|series|trilogy|band|bands|dj|game|games|pet|pets|item|items|flower|flowers|bird|birds|car|cars|hobbies|pastry|pastries)\b/iu.test(normalized) ||
+      /\b(kind|type|color|colors|name|names|country|city|play|production|performance|theater|theatre|movie|movies|book|books|series|trilogy|band|bands|dj|game|games|pet|pets|item|items|flower|flowers|bird|birds|car|cars|hobbies|pastry|pastries)\b/iu.test(normalized) ||
       /\bfavorite\s+(movie|movies|book|books|series|trilogy|band|dj|game|games|memory)\b/iu.test(normalized)
     )
   );

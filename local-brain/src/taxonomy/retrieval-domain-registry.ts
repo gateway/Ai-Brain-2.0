@@ -24,6 +24,10 @@ export type QueryContractNameForRegistry =
   | "profile_report"
   | "project_definition"
   | "document_lookup"
+  | "codex_session_report"
+  | "engineering_memory_packet"
+  | "workflow_pattern_report"
+  | "codex_source_audit"
   | "task_list"
   | "procedure_lookup"
   | "source_audit"
@@ -138,7 +142,7 @@ export const RETRIEVAL_DOMAIN_SPECS: readonly RetrievalDomainSpec[] = [
     description: "Engineering specs, architecture plans, implementation requirements, and decision records.",
     allowedSourceRoutes: ["markdown", "pdf", "watched_source", "generic_text"],
     allowedTaxonomyProfiles: ["document_summary", "direct_fact", "task_ops", "review_only"],
-    allowedQueryContracts: ["document_lookup", "profile_report", "list_set"],
+    allowedQueryContracts: ["document_lookup", "codex_session_report", "engineering_memory_packet", "workflow_pattern_report", "codex_source_audit", "profile_report", "list_set"],
     allowedAnswerShapes: ["report", "list", "scalar", "procedure"],
     allowedReadModels: ["document_section_projection", "compiled_direct_fact"],
     requiredEvidence: { sourceQuote: true, sourceRowId: true, subjectBinding: false },
@@ -231,6 +235,10 @@ const QUERY_CONTRACT_PRIMARY_DOMAIN: Readonly<Record<QueryContractNameForRegistr
   profile_report: "personal_memory",
   project_definition: "project_definition",
   document_lookup: "document_knowledge",
+  codex_session_report: "engineering_specs",
+  engineering_memory_packet: "engineering_specs",
+  workflow_pattern_report: "engineering_specs",
+  codex_source_audit: "engineering_specs",
   task_list: "task_ops",
   procedure_lookup: "procedural_memory",
   source_audit: "source_audit",

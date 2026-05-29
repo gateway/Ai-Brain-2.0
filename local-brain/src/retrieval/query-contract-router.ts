@@ -13,6 +13,10 @@ export type QueryContractName =
   | "profile_report"
   | "project_definition"
   | "document_lookup"
+  | "codex_session_report"
+  | "engineering_memory_packet"
+  | "workflow_pattern_report"
+  | "codex_source_audit"
   | "task_list"
   | "procedure_lookup"
   | "source_audit"
@@ -769,6 +773,8 @@ export function inferQueryContract(queryText: string): QueryContract {
   }
 
   if (
+    /\b(?:ingestion|tagging|extraction|source\s+kind|source\s+type|quality\s+issues?|quality\s+ledger|failed\s+to\s+produce|missing\s+(?:task\s+)?projections?|temporal\s+windows?|fix\s+next\s+in\s+ingestion\s+quality)\b/iu.test(normalized) ||
+    /\b(?:parser[_\s-]?chunking[_\s-]?quality[_\s-]?defect|parent[_\s-]?child[_\s-]?context[_\s-]?missing|temporal[_\s-]?validity[_\s-]?conflict|task[_\s-]?projection[_\s-]?missing|event[_\s-]?projection[_\s-]?missing)\b/iu.test(normalized) ||
     /\b(?:what\s+does\s+(?:this|the)\s+(?:spec|plan|doc|document)|what\s+changed\s+in\s+this\s+plan|summarize\s+this\s+(?:spec|plan|doc|document)|what\s+does\s+router\s+v2|what\s+does\s+the\s+plan\s+say\s+about|what\s+response\s+fields?\s+must|what\s+must\b[\s\S]{0,80}\bqueries?\s+do)\b/iu.test(
       normalized
     ) ||

@@ -71,6 +71,7 @@ type CanonicalTaskLifecycleStatus = TaskLifecycleStatus | "stale_open" | "recent
 const OPEN_TASK_STALE_NO_DUE_DAYS = 30;
 const OPEN_TASK_PAST_DUE_GRACE_DAYS = 7;
 const RECENTLY_CLOSED_TASK_DAYS = 14;
+const UNIVERSAL_TASK_EVENT_PROJECTION_VERSION = "universal_task_event_projection_v1";
 
 interface TaskItemRow {
   readonly title: string;
@@ -253,6 +254,71 @@ function uniqueStrings(values: readonly string[]): string[] {
 
 function normalizeName(value: string): string {
   return normalizeEntityLookupName(value);
+}
+
+function canonicalProjectionEdgeIds(params: {
+  readonly projectionFamily: "task" | "event";
+  readonly sourceMemoryId?: string | null;
+  readonly artifactId?: string | null;
+  readonly sourceUri?: string | null;
+  readonly temporalKey?: string | null;
+}): readonly string[] {
+  return uniqueStrings([
+    params.sourceMemoryId ? `memory:${params.sourceMemoryId}` : "",
+    params.artifactId ? `artifact:${params.artifactId}` : "",
+    params.sourceUri ? `source:${normalizeName(params.sourceUri)}` : "",
+    params.temporalKey ? `${params.projectionFamily}:${normalizeName(params.temporalKey)}` : ""
+  ]);
+}
+
+function canonicalTaskEventProjectionMetadata(params: {
+  readonly projectionFamily: "task" | "event";
+  readonly sourceKind: string;
+  readonly sourceMemoryId?: string | null;
+  readonly artifactId?: string | null;
+  readonly sourceUri?: string | null;
+  readonly capturedAt?: string | null;
+  readonly occurredAt?: string | null;
+  readonly validTimeStart?: string | null;
+  readonly validTimeEnd?: string | null;
+  readonly relativePath?: string | null;
+  readonly parentSourceSectionId?: string | null;
+  readonly temporalKey?: string | null;
+  readonly sourceKindFamily?: string | null;
+  readonly sourceMetadata?: Record<string, unknown> | null;
+}): Record<string, unknown> {
+  const sourceCaptureTime = params.capturedAt ?? params.occurredAt ?? undefined;
+  const parentSourceSectionId =
+    params.parentSourceSectionId ??
+    (params.relativePath ? `source_section:${normalizeName(params.relativePath)}` : null);
+  const temporalEdgeIds = canonicalProjectionEdgeIds(params);
+  return {
+    canonical_projection_version: UNIVERSAL_TASK_EVENT_PROJECTION_VERSION,
+    projection_family: params.projectionFamily,
+    source_kind: params.sourceKind,
+    source_kind_family: params.sourceKindFamily ?? undefined,
+    source_memory_id: params.sourceMemoryId ?? undefined,
+    source_artifact_id: params.artifactId ?? undefined,
+    source_uri: params.sourceUri ?? undefined,
+    source_capture_time: sourceCaptureTime,
+    projection_transaction_time: sourceCaptureTime,
+    valid_time_start: params.validTimeStart ?? sourceCaptureTime,
+    valid_time_end: params.validTimeEnd ?? params.validTimeStart ?? sourceCaptureTime,
+    temporal_edge_ids: temporalEdgeIds,
+    temporal_edge_key: params.temporalKey ? normalizeName(params.temporalKey) : temporalEdgeIds[temporalEdgeIds.length - 1],
+    parent_source_section_id: parentSourceSectionId ?? undefined,
+    relative_path: params.relativePath ?? undefined,
+    document_parser_provider: params.sourceMetadata?.document_parser_provider,
+    document_parser_version: params.sourceMetadata?.document_parser_version,
+    document_chunking_strategy: params.sourceMetadata?.document_chunking_strategy,
+    child_chunk_id: params.sourceMetadata?.child_chunk_id,
+    source_envelope_chunk_id: params.sourceMetadata?.source_envelope_chunk_id,
+    parent_source_uri: params.sourceMetadata?.parent_source_uri,
+    section_heading: params.sourceMetadata?.section_heading,
+    page_number: params.sourceMetadata?.page_number,
+    layout_warning_kinds: params.sourceMetadata?.layout_warning_kinds,
+    layout_warning_count: params.sourceMetadata?.layout_warning_count
+  };
 }
 
 function escapeRegexLiteral(value: string): string {
@@ -742,6 +808,7 @@ function normalizeTaskStatementText(text: string): string {
   return normalizeWhitespace(text)
     .replace(/^[-\s]*\[[^\]]+\]\s*(?:User|Speaker|Assistant|System):\s*/iu, "")
     .replace(/^[-\s]*(?:User|Speaker|Assistant|System):\s*/iu, "")
+    .replace(/^(?:action\s+items?|tasks?|todo|to[- ]?do):\s*/iu, "")
     .replace(/\s+/gu, " ")
     .trim();
 }
@@ -3123,6 +3190,11 @@ function deriveTaskLifecycleMetadata(params: {
   readonly createdFromSourceAt?: string | null;
   readonly updatedFromSourceAt?: string | null;
   readonly completedAt?: string | null;
+  readonly sourceMemoryId?: string | null;
+  readonly artifactId?: string | null;
+  readonly sourceUri?: string | null;
+  readonly sourceKindFamily?: string | null;
+  readonly sourceMetadata?: Record<string, unknown> | null;
 }): Record<string, unknown> {
   const temporalReference = params.capturedAt ?? params.occurredAt ?? undefined;
   const dueWindow = params.dueHint
@@ -3131,11 +3203,27 @@ function deriveTaskLifecycleMetadata(params: {
         referenceNow: temporalReference
       })
     : null;
+  const taskActionKey = canonicalizeTaskActionKey(`${params.title}. ${params.description}`);
   return {
+    ...canonicalTaskEventProjectionMetadata({
+      projectionFamily: "task",
+      sourceKind: params.sourceKind,
+      sourceMemoryId: params.sourceMemoryId,
+      artifactId: params.artifactId,
+      sourceUri: params.sourceUri,
+      capturedAt: params.capturedAt,
+      occurredAt: params.occurredAt,
+      validTimeStart: dueWindow?.startAt ?? params.createdFromSourceAt ?? params.capturedAt ?? params.occurredAt ?? null,
+      validTimeEnd: dueWindow?.endAt ?? params.completedAt ?? dueWindow?.startAt ?? params.createdFromSourceAt ?? params.capturedAt ?? params.occurredAt ?? null,
+      temporalKey: taskActionKey,
+      relativePath: params.relativePath,
+      sourceKindFamily: params.sourceKindFamily,
+      sourceMetadata: params.sourceMetadata
+    }),
     source_kind: params.sourceKind,
     owner_subject: params.ownerSubject ?? undefined,
     status_reason: params.statusReason ?? undefined,
-    task_action_key: canonicalizeTaskActionKey(`${params.title}. ${params.description}`),
+    task_action_key: taskActionKey,
     due_window_start: dueWindow?.startAt ?? undefined,
     due_window_end: dueWindow?.endAt ?? undefined,
     created_from_source_at: params.createdFromSourceAt ?? params.capturedAt ?? params.occurredAt ?? undefined,
@@ -3464,9 +3552,14 @@ export async function rebuildTypedMemoryNamespace(
           statusReason: item.completed ? "completed" : null,
           sourceKind: "omi_structured_action_item",
           relativePath: seed.relativePath,
+          sourceMemoryId: seed.sourceMemoryId,
+          artifactId: seed.artifactId,
+          sourceUri: seed.artifactUri,
+          sourceKindFamily: "omi",
           createdFromSourceAt: typeof item.created_at === "string" ? item.created_at : null,
           updatedFromSourceAt: typeof item.updated_at === "string" ? item.updated_at : null,
-          completedAt: completedAt ?? (item.completed ? sourceOccurredAt : null)
+          completedAt: completedAt ?? (item.completed ? sourceOccurredAt : null),
+          sourceMetadata: null
         })
       });
     }
@@ -3486,6 +3579,21 @@ export async function rebuildTypedMemoryNamespace(
         day: window.day,
         provenance: structuredProvenance,
         metadata: {
+          ...canonicalTaskEventProjectionMetadata({
+            projectionFamily: "event",
+            sourceKind: "omi_structured_event",
+            sourceMemoryId: seed.sourceMemoryId,
+            artifactId: seed.artifactId,
+            sourceUri: seed.artifactUri,
+            capturedAt: sourceCapturedAt,
+            occurredAt: sourceOccurredAt,
+            validTimeStart: window.startAt ?? sourceOccurredAt,
+            validTimeEnd: window.endAt ?? window.startAt ?? sourceOccurredAt,
+            temporalKey: title,
+            relativePath: seed.relativePath,
+            sourceKindFamily: "omi",
+            sourceMetadata: null
+          }),
           source_kind: "omi_structured_event",
           captured_at: sourceCapturedAt ?? undefined,
           occurred_at: sourceOccurredAt ?? undefined,
@@ -3623,7 +3731,12 @@ export async function rebuildTypedMemoryNamespace(
           statusReason: item.completed ? "completed" : null,
           sourceKind: "checklist",
           relativePath: typeof row.metadata?.relative_path === "string" ? row.metadata.relative_path : null,
-          completedAt: item.completed ? row.occurred_at : null
+          sourceMemoryId: row.memory_id,
+          artifactId: row.artifact_id,
+          sourceUri: row.artifact_uri,
+          sourceKindFamily: typeof row.metadata?.source_kind_family === "string" ? row.metadata.source_kind_family : null,
+          completedAt: item.completed ? row.occurred_at : null,
+          sourceMetadata: row.metadata
         })
       });
     }
@@ -3656,7 +3769,12 @@ export async function rebuildTypedMemoryNamespace(
             statusReason: inferTaskStatusReasonFromText(item.text),
             sourceKind: "inline_task_statement",
             relativePath: typeof row.metadata?.relative_path === "string" ? row.metadata.relative_path : null,
-            completedAt: item.status === "completed" ? row.occurred_at : null
+            sourceMemoryId: row.memory_id,
+            artifactId: row.artifact_id,
+            sourceUri: row.artifact_uri,
+            sourceKindFamily: typeof row.metadata?.source_kind_family === "string" ? row.metadata.source_kind_family : null,
+            completedAt: item.status === "completed" ? row.occurred_at : null,
+            sourceMetadata: row.metadata
           })
         });
       }
@@ -3700,6 +3818,21 @@ export async function rebuildTypedMemoryNamespace(
         day: date.day ?? null,
         provenance: sharedProvenance,
         metadata: {
+          ...canonicalTaskEventProjectionMetadata({
+            projectionFamily: "event",
+            sourceKind: "explicit_date_mention",
+            sourceMemoryId: row.memory_id,
+            artifactId: row.artifact_id,
+            sourceUri: row.artifact_uri,
+            capturedAt: row.captured_at,
+            occurredAt: row.occurred_at,
+            validTimeStart: exactDateStart ?? row.occurred_at,
+            validTimeEnd: exactDateEnd ?? exactDateStart ?? row.occurred_at,
+            temporalKey: date.spanText,
+            relativePath: typeof row.metadata?.relative_path === "string" ? row.metadata.relative_path : null,
+            sourceKindFamily: typeof row.metadata?.source_kind_family === "string" ? row.metadata.source_kind_family : null,
+            sourceMetadata: row.metadata
+          }),
           source_kind: "explicit_date_mention",
           captured_at: row.captured_at ?? undefined,
           occurred_at: row.occurred_at ?? undefined,
@@ -3726,6 +3859,21 @@ export async function rebuildTypedMemoryNamespace(
           day: null,
           provenance: sharedProvenance,
           metadata: {
+            ...canonicalTaskEventProjectionMetadata({
+              projectionFamily: "event",
+              sourceKind: "temporal_commitment_sentence",
+              sourceMemoryId: row.memory_id,
+              artifactId: row.artifact_id,
+              sourceUri: row.artifact_uri,
+              capturedAt: row.captured_at,
+              occurredAt: row.occurred_at,
+              validTimeStart: commitment.windowStart ?? row.occurred_at,
+              validTimeEnd: commitment.windowEnd ?? commitment.windowStart ?? row.occurred_at,
+              temporalKey: commitment.title,
+              relativePath: typeof row.metadata?.relative_path === "string" ? row.metadata.relative_path : null,
+              sourceKindFamily: typeof row.metadata?.source_kind_family === "string" ? row.metadata.source_kind_family : null,
+              sourceMetadata: row.metadata
+            }),
             source_kind: "temporal_commitment_sentence",
             captured_at: row.captured_at ?? undefined,
             occurred_at: row.occurred_at ?? undefined,
@@ -4759,8 +4907,12 @@ function collapseTaskLifecycleRows(
   return collapsed.filter((row) => row.status === statusFilter);
 }
 
-async function loadTypedTaskRows(query: RecapQuery): Promise<readonly TaskItemRow[]> {
-  const { start, end } = resolveQueryTimeRange(query);
+async function loadTypedTaskRows(
+  query: RecapQuery,
+  options: { readonly ignoreInferredTimeWindow?: boolean; readonly limit?: number } = {}
+): Promise<readonly TaskItemRow[]> {
+  const resolvedRange = options.ignoreInferredTimeWindow ? { start: null, end: null } : resolveQueryTimeRange(query);
+  const { start, end } = resolvedRange;
   const scopeMode = detectTemporalScopeMode(query);
   const status = taskStatusFilterFromQuery(query.query);
   const latestSourceUri =
@@ -4783,13 +4935,29 @@ async function loadTypedTaskRows(query: RecapQuery): Promise<readonly TaskItemRo
       FROM task_items
       WHERE namespace_id = $1
         AND ($2::text IS NULL OR status = $2)
-        AND ($3::timestamptz IS NULL OR COALESCE(completed_at, occurred_at) >= $3::timestamptz)
-        AND ($4::timestamptz IS NULL OR COALESCE(completed_at, occurred_at) <= $4::timestamptz)
+        AND (
+          $3::timestamptz IS NULL OR COALESCE(
+            completed_at,
+            NULLIF(metadata->>'updated_from_source_at', '')::timestamptz,
+            NULLIF(metadata->>'created_from_source_at', '')::timestamptz,
+            NULLIF(metadata->>'captured_at', '')::timestamptz,
+            occurred_at
+          ) >= $3::timestamptz
+        )
+        AND (
+          $4::timestamptz IS NULL OR COALESCE(
+            completed_at,
+            NULLIF(metadata->>'updated_from_source_at', '')::timestamptz,
+            NULLIF(metadata->>'created_from_source_at', '')::timestamptz,
+            NULLIF(metadata->>'captured_at', '')::timestamptz,
+            occurred_at
+          ) <= $4::timestamptz
+        )
         AND ($5::text IS NULL OR provenance->>'source_uri' = $5)
       ORDER BY COALESCE(completed_at, occurred_at) DESC NULLS LAST, created_at DESC
-      LIMIT 32
+      LIMIT $6
     `,
-    [query.namespaceId, scopeMode === "source_scope" ? status ?? null : null, start ?? null, end ?? null, latestSourceUri]
+    [query.namespaceId, scopeMode === "source_scope" ? status ?? null : null, start ?? null, end ?? null, latestSourceUri, options.limit ?? 32]
   );
   const qualityFilteredRows = rows.filter((row) => {
     const sourceKind = typeof row.metadata?.source_kind === "string" ? row.metadata.source_kind : "";
@@ -4855,6 +5023,91 @@ export async function getTypedTaskResults(query: RecapQuery): Promise<readonly R
         owner_subject: row.metadata?.owner_subject,
         due_window_start: row.metadata?.due_window_start,
         due_window_end: row.metadata?.due_window_end,
+        source_kind: row.metadata?.source_kind,
+        source_kind_family: row.metadata?.source_kind_family,
+        canonical_projection_version: row.metadata?.canonical_projection_version,
+        projection_family: row.metadata?.projection_family,
+        source_uri: row.metadata?.source_uri,
+        source_capture_time: row.metadata?.source_capture_time,
+        valid_time_start: row.metadata?.valid_time_start,
+        valid_time_end: row.metadata?.valid_time_end,
+        temporal_edge_ids: row.metadata?.temporal_edge_ids,
+        temporal_edge_key: row.metadata?.temporal_edge_key,
+        parent_source_section_id: row.metadata?.parent_source_section_id,
+        age_days: taskAgeDays(row, query.referenceNow),
+        last_mentioned_at: taskLastMentionedAt(row),
+        source_confidence: taskSourceConfidence(row),
+        source_table: "task_items"
+      }
+    );
+  });
+}
+
+export async function getTypedTaskItemsForEventLinking(query: RecapQuery): Promise<readonly RecapTaskItem[]> {
+  const rows = await loadTypedTaskRows(query, { ignoreInferredTimeWindow: true, limit: 64 });
+
+  return rows.map((row) => ({
+    title: taskDisplayTitleFromText(row.title),
+    description: normalizeTaskStatementText(row.description ?? row.title),
+    assigneeGuess: row.assignee_guess ?? undefined,
+    project: row.project_name ?? undefined,
+    dueHint: row.due_hint ?? undefined,
+    statusGuess: row.status,
+    lifecycleStatus: canonicalTaskLifecycleStatus(row, query.referenceNow),
+    statusReason:
+      row.metadata && typeof row.metadata.status_reason === "string" ? row.metadata.status_reason : undefined,
+    ownerSubject:
+      row.metadata && typeof row.metadata.owner_subject === "string" ? row.metadata.owner_subject : undefined,
+    dueWindowStart:
+      row.metadata && typeof row.metadata.due_window_start === "string" ? row.metadata.due_window_start : undefined,
+    dueWindowEnd:
+      row.metadata && typeof row.metadata.due_window_end === "string" ? row.metadata.due_window_end : undefined,
+    ageDays: taskAgeDays(row, query.referenceNow),
+    lastMentionedAt: taskLastMentionedAt(row),
+    sourceConfidence: taskSourceConfidence(row),
+    sourceTrail: row.source_uri ? [row.source_uri] : [],
+    evidenceIds: row.source_memory_id ? [row.source_memory_id] : []
+  }));
+}
+
+export async function getTypedTaskResultsForEventLinking(query: RecapQuery): Promise<readonly RecallResult[]> {
+  const rows = await loadTypedTaskRows(query, { ignoreInferredTimeWindow: true, limit: 64 });
+  return rows.map((row, index) => {
+    const displayTitle = taskDisplayTitleFromText(row.title);
+    const displayDescription = normalizeTaskStatementText(row.description ?? row.title);
+    return buildTypedRecallResult(
+      `${row.source_memory_id ?? "task"}:${index}:${normalizeName(displayTitle)}`,
+      query.namespaceId,
+      `${displayTitle}.${displayDescription && displayDescription !== displayTitle ? ` ${displayDescription}` : ""}${row.project_name ? ` Project: ${row.project_name}.` : ""}${row.due_hint ? ` Due hint: ${row.due_hint}.` : ""}${row.status ? ` Status: ${row.status}.` : ""}${
+        row.metadata && typeof row.metadata.status_reason === "string" ? ` Status reason: ${row.metadata.status_reason}.` : ""
+      }`,
+      taskEffectiveAt(row) || row.occurred_at,
+      row.artifact_id,
+      row.source_memory_id,
+      row.source_uri,
+      "task_item",
+      {
+        title: displayTitle,
+        description: displayDescription,
+        project_name: row.project_name,
+        due_hint: row.due_hint,
+        status: row.status,
+        lifecycle_status: canonicalTaskLifecycleStatus(row, query.referenceNow),
+        status_reason: row.metadata?.status_reason,
+        owner_subject: row.metadata?.owner_subject,
+        due_window_start: row.metadata?.due_window_start,
+        due_window_end: row.metadata?.due_window_end,
+        source_kind: row.metadata?.source_kind,
+        source_kind_family: row.metadata?.source_kind_family,
+        canonical_projection_version: row.metadata?.canonical_projection_version,
+        projection_family: row.metadata?.projection_family,
+        source_uri: row.metadata?.source_uri,
+        source_capture_time: row.metadata?.source_capture_time,
+        valid_time_start: row.metadata?.valid_time_start,
+        valid_time_end: row.metadata?.valid_time_end,
+        temporal_edge_ids: row.metadata?.temporal_edge_ids,
+        temporal_edge_key: row.metadata?.temporal_edge_key,
+        parent_source_section_id: row.metadata?.parent_source_section_id,
         age_days: taskAgeDays(row, query.referenceNow),
         last_mentioned_at: taskLastMentionedAt(row),
         source_confidence: taskSourceConfidence(row),
@@ -4959,10 +5212,16 @@ async function loadTypedCalendarRows(query: RecapQuery): Promise<readonly Calend
           OR metadata ? 'temporal_anchor_reference'
         )
         AND ($4::text IS NULL OR provenance->>'source_uri' = $4)
-      ORDER BY occurred_at DESC NULLS LAST, created_at DESC
-      LIMIT 16
+      ORDER BY
+        CASE
+          WHEN $5::boolean = true AND metadata->>'source_kind_family' = 'calendar_export' THEN 0
+          ELSE 1
+        END,
+        occurred_at DESC NULLS LAST,
+        created_at DESC
+      LIMIT 48
     `,
-    [query.namespaceId, start ?? null, end ?? null, latestSourceUri]
+    [query.namespaceId, start ?? null, end ?? null, latestSourceUri, /\bcalendar\s+exports?\b/iu.test(query.query)]
   );
   if ((start || end) || scopeMode !== "event_window_scope") {
     return rows;
@@ -5061,6 +5320,16 @@ export async function getTypedCalendarResults(query: RecapQuery): Promise<readon
         duration_text: row.metadata?.duration_text,
         duration_seconds_approx: row.metadata?.duration_seconds_approx,
         source_kind: row.metadata?.source_kind,
+        source_kind_family: row.metadata?.source_kind_family,
+        canonical_projection_version: row.metadata?.canonical_projection_version,
+        projection_family: row.metadata?.projection_family,
+        source_uri: row.metadata?.source_uri,
+        source_capture_time: row.metadata?.source_capture_time,
+        valid_time_start: row.metadata?.valid_time_start,
+        valid_time_end: row.metadata?.valid_time_end,
+        temporal_edge_ids: row.metadata?.temporal_edge_ids,
+        temporal_edge_key: row.metadata?.temporal_edge_key,
+        parent_source_section_id: row.metadata?.parent_source_section_id,
         captured_at: row.occurred_at
       }
     );

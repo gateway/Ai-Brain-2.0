@@ -80,6 +80,17 @@ function isBoilerplate(text: string): boolean {
   );
 }
 
+type RawSourceChunk = {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+  readonly metadata: {
+    readonly heading?: string | null;
+    readonly page?: number;
+    readonly ocr_risk?: boolean;
+  };
+};
+
 function splitByBudget(text: string, maxChars: number): readonly { readonly text: string; readonly start: number; readonly end: number }[] {
   const normalized = text.replace(/\r\n/gu, "\n");
   const chunks: Array<{ text: string; start: number; end: number }> = [];
@@ -195,12 +206,39 @@ function lineRecordChunks(text: string): readonly { readonly text: string; reado
 function rawChunksForEnvelope(envelope: SourceEnvelope): readonly SourceEnvelopeChunk[] {
   const id = sourceId(envelope);
   const rawText = normalizeWhitespace(envelope.rawText);
+  const chunkingStrategy =
+    envelope.sourceType === "markdown"
+      ? "markdown_heading_section_v1"
+      : envelope.sourceType === "pdf"
+        ? "pdf_page_section_v1"
+        : envelope.sourceType === "generic_text" && String(envelope.formatMetadata.source_kind_family ?? "").toLowerCase().includes("ocr")
+          ? "ocr_block_section_v1"
+          : envelope.sourceType === "task_list"
+            ? "task_export_record_v1"
+            : envelope.sourceType === "calendar"
+              ? "calendar_export_event_v1"
+              : "bounded_text_chunk_v1";
+  const parserProvider =
+    typeof envelope.formatMetadata.document_extraction_provider === "string"
+      ? envelope.formatMetadata.document_extraction_provider
+      : envelope.sourceType === "pdf" || chunkingStrategy === "ocr_block_section_v1"
+        ? "text_proxy"
+        : "native_text";
   const baseMetadata = {
     ...envelope.formatMetadata,
     source_envelope_version: "source_envelope_v1",
-    author_hint: envelope.authorHint
+    author_hint: envelope.authorHint,
+    document_parser_provider: parserProvider,
+    document_parser_version:
+      typeof envelope.formatMetadata.document_extraction_provider_version === "string"
+        ? envelope.formatMetadata.document_extraction_provider_version
+        : parserProvider === "native_text"
+          ? "native_text_v1"
+          : "unknown",
+    document_chunking_strategy: chunkingStrategy,
+    document_parent_strategy: "source_uri_section_v1"
   };
-  const sourceChunks =
+  const sourceChunks: readonly RawSourceChunk[] =
     envelope.sourceType === "markdown"
       ? markdownSections(envelope.rawText).map((entry) => ({ ...entry, metadata: { heading: entry.heading } }))
       : envelope.sourceType === "pdf"
@@ -224,7 +262,28 @@ function rawChunksForEnvelope(envelope: SourceEnvelope): readonly SourceEnvelope
       ...chunk.metadata,
       char_start: chunk.start,
       char_end: chunk.end,
-      source_uri: envelope.sourceUri
+      source_uri: envelope.sourceUri,
+      source_envelope_chunk_id: `${id}:chunk:${index}`,
+      child_chunk_id: `${id}:chunk:${index}`,
+      parent_source_section_id:
+        typeof chunk.metadata.heading === "string" && chunk.metadata.heading.length > 0
+          ? `source_section:${stableHash(`${envelope.sourceUri}#${chunk.metadata.heading}`).slice(0, 16)}`
+          : typeof chunk.metadata.page === "number"
+            ? `source_section:${stableHash(`${envelope.sourceUri}#page:${chunk.metadata.page}`).slice(0, 16)}`
+            : `source_section:${stableHash(envelope.sourceUri).slice(0, 16)}`,
+      parent_source_uri: envelope.sourceUri,
+      section_heading: typeof chunk.metadata.heading === "string" ? chunk.metadata.heading : undefined,
+      page_number: typeof chunk.metadata.page === "number" ? chunk.metadata.page : undefined,
+      layout_warning_kinds: [
+        chunk.metadata.ocr_risk === true ? "ocr_text_missing_or_low_confidence" : "",
+        /\btable\b|\|.+\|/iu.test(chunk.text) ? "table_detected" : "",
+        /\b(?:figure|diagram|image|chart|screenshot|ocr)\b/iu.test(chunk.text) ? "layout_or_ocr_region_detected" : ""
+      ].filter(Boolean),
+      layout_warning_count: [
+        chunk.metadata.ocr_risk === true,
+        /\btable\b|\|.+\|/iu.test(chunk.text),
+        /\b(?:figure|diagram|image|chart|screenshot|ocr)\b/iu.test(chunk.text)
+      ].filter(Boolean).length
     }
   }));
 }

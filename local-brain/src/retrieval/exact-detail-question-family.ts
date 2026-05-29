@@ -242,7 +242,7 @@ const EXACT_DETAIL_FAMILY_SPECS: Partial<Record<ExactDetailQuestionFamily, Exact
     queryFamily: "exact_detail",
     readerPriority: "event_first",
     scalarPropertyKeys: ["duration", "duration_held", "time_spent", "stay_duration"],
-    scalarMatchTerms: ["duration", "how long", "months", "years", "weeks", "days"],
+    scalarMatchTerms: ["duration", "how long", "how much time", "commute", "each way", "minutes", "hours", "months", "years", "weeks", "days"],
     eventPredicateFamilies: ["temporal_event_fact", "location_history", "work_history", "work_education_history"],
     eventMatchTerms: ["duration", "months", "years", "weeks", "days", "stayed", "lived", "worked"],
     selfOwned: true
@@ -424,7 +424,7 @@ export function inferExactDetailQuestionFamily(queryText: string): ExactDetailQu
   if (/\bscreen\s+time\b/.test(lowered) && /\b(?:how much|average|averaging|per day|daily)\b/.test(lowered)) {
     return "duration";
   }
-  if (/\bcommute\b/.test(lowered) && /\b(?:how long|daily|work|minutes?|hours?)\b/.test(lowered)) {
+  if (/\bcommute\b/.test(lowered) && /\b(?:how long|how much time|duration|daily|each day|each way|work|minutes?|hours?)\b/.test(lowered)) {
     return "duration";
   }
   if (

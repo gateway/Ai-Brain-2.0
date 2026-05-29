@@ -53,9 +53,18 @@ function answerFromPayload(payload: any): string {
   if (typeof payload?.summaryText === "string" && payload.summaryText.trim()) {
     return payload.summaryText.trim();
   }
+  if (payload?.followUpAction === "route_to_clarifications" && typeof payload?.clarificationHint?.suggestedPrompt === "string") {
+    return payload.clarificationHint.suggestedPrompt.trim();
+  }
   if (Array.isArray(payload?.tasks)) {
     return payload.tasks
       .map((task: any) => (typeof task?.title === "string" ? task.title : typeof task?.text === "string" ? task.text : ""))
+      .filter(Boolean)
+      .join("; ");
+  }
+  if (Array.isArray(payload?.commitments)) {
+    return payload.commitments
+      .map((commitment: any) => (typeof commitment?.title === "string" ? commitment.title : typeof commitment?.text === "string" ? commitment.text : ""))
       .filter(Boolean)
       .join("; ");
   }
@@ -68,7 +77,7 @@ function isSourceAuditQuestion(query: string, payload: any): boolean {
     payload?.queryContract === "source_audit" ||
     /\b(?:where did|where was).{0,80}\b(?:come from|source|evidence)\b/u.test(normalized) ||
     /\b(?:show|list).{0,40}\bsources?\b/u.test(normalized) ||
-    /\b(?:source trail|provenance|evidence for|came from|come from|why do you think|why does)\b/u.test(normalized)
+    /\b(?:source trail|provenance|evidence for|why do you think|why does)\b/u.test(normalized)
   );
 }
 
@@ -126,6 +135,12 @@ function sourceAuditAnswer(payload: any, maxItems: number): string {
 }
 
 function compactAnswerLimit(query: string, payload: any): number {
+  if (payload?.finalClaimSource === "codex_project_detail_report") {
+    return 560;
+  }
+  if (payload?.finalClaimSource === "workflow_pattern_report" || payload?.finalClaimSource === "engineering_memory_packet") {
+    return 420;
+  }
   if (
     payload?.finalClaimSource === "source_topic_report" ||
     /\b(?:projects?|actively building|working on|current(?:ly)? building)\b/iu.test(query)

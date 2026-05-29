@@ -32,7 +32,7 @@ import {
 import { isProfileTraitJudgmentQuery, normalizeRelationshipWhyQuery } from "./query-signals.js";
 import { buildProfileInferenceSupport, renderProfileInferenceSupport } from "./support-objects.js";
 import { canonicalPlaceName, textMatchesPlaceAlias } from "./place-aliases.js";
-import { buildMemoryQueryPlan, memoryQueryPlanTelemetry } from "./memory-query-plan.js";
+import { buildMemoryQueryPlan, memoryQueryPlanTelemetry, type MemoryQueryPlanSourceAuditTarget } from "./memory-query-plan.js";
 import { readPackageProcedureCorpus, readRepoSpecCorpus } from "./repo-corpus-reader.js";
 import { inferExactDetailQuestionFamily } from "./exact-detail-question-family.js";
 import type {
@@ -2122,6 +2122,17 @@ function wordBoundaryRegex(value: string): string {
   return `\\m${escapeSqlRegexLiteral(value.toLowerCase())}\\M`;
 }
 
+function escapeJsRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function textHasFocusTerm(text: string, term: string): boolean {
+  if (term.includes(" ")) {
+    return text.includes(term);
+  }
+  return new RegExp(`(^|[^a-z0-9])${escapeJsRegexLiteral(term.toLowerCase())}([^a-z0-9]|$)`, "iu").test(text);
+}
+
 function compactAlternation(values: readonly string[]): string {
   return uniqueStrings(values)
     .map((value) => value.toLowerCase().includes(" ") ? escapeSqlRegexLiteral(value.toLowerCase()) : wordBoundaryRegex(value))
@@ -2136,6 +2147,12 @@ function isBroadEntityDossierQueryText(queryText: string): boolean {
 
 function isWorkHistoryProfileQueryText(queryText: string): boolean {
   const normalized = normalizeWhitespace(queryText);
+  if (
+    /\b(?:commute|travel\s+time|each\s+way)\b/iu.test(normalized) &&
+    !/\b(?:career|work\s+history|professional\s+history|employment\s+history|roles?\s+and\s+dates|employers?|companies)\b/iu.test(normalized)
+  ) {
+    return false;
+  }
   return (
     /\b(?:career|work\s+history|professional\s+history|employment\s+history|what\s+have\s+i\s+done\s+in\s+my\s+career|what\s+have\s+i\s+worked\s+on\s+professionally|what\s+have\s+i\s+done\s+professionally|what\s+have\s+i\s+built(?:\s+or\s+worked\s+on)?(?:\s+professionally)?(?:\s+over\s+time)?|what\s+have\s+i\s+built\s+or\s+worked\s+on(?:\s+professionally)?(?:\s+over\s+time)?)\b/iu.test(
       normalized
@@ -4472,6 +4489,9 @@ const SOURCE_AUDIT_STOPWORDS = new Set([
   "did",
   "do",
   "from",
+  "and",
+  "or",
+  "those",
   "steve",
   "prefer",
   "prefers",
@@ -4492,6 +4512,44 @@ function documentQueryPattern(queryText: string): string | null {
   return compactAlternation(tokens);
 }
 
+function documentQueryCoverageTerms(queryText: string): readonly string[] {
+  const tokens = normalizeWhitespace(queryText)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter((token) => token.length > 2)
+    .filter((token) => !DOCUMENT_QUERY_STOPWORDS.has(token));
+  const phrases: string[] = [];
+  for (let size = 2; size <= 4; size += 1) {
+    for (let index = 0; index <= tokens.length - size; index += 1) {
+      phrases.push(tokens.slice(index, index + size).join(" "));
+    }
+  }
+  return uniqueStrings([...phrases, ...tokens]);
+}
+
+function scoreDocumentResultForQuery(result: RecallResult, queryText: string): number {
+  const haystack = normalizeWhitespace(
+    [
+      result.content,
+      typeof result.provenance?.source_uri === "string" ? result.provenance.source_uri : "",
+      typeof result.provenance?.relative_path === "string" ? result.provenance.relative_path : ""
+    ].join(" ")
+  ).toLowerCase();
+  return documentQueryCoverageTerms(queryText).reduce((score, term) => {
+    if (!haystack.includes(term.toLowerCase())) {
+      return score;
+    }
+    return score + (term.includes(" ") ? 4 : 1);
+  }, 0);
+}
+
+function rankDocumentResultsForQuery(results: readonly RecallResult[], queryText: string): readonly RecallResult[] {
+  return results
+    .map((result, index) => ({ result, index, score: scoreDocumentResultForQuery(result, queryText) }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((entry) => entry.result);
+}
+
 function requestedDocumentSourceExtensions(queryText: string): readonly string[] {
   const extensions = new Set<string>();
   if (/\bpdfs?|papers?\b/iu.test(queryText)) {
@@ -4500,9 +4558,7 @@ function requestedDocumentSourceExtensions(queryText: string): readonly string[]
   if (/\b(?:notes?|markdown|md)\b/iu.test(queryText)) {
     extensions.add(".md");
   }
-  if (/\b(?:docs?|documents?|specs?|plans?)\b/iu.test(queryText) && extensions.size === 0) {
-    extensions.add(".md");
-    extensions.add(".pdf");
+  if (/\b(?:text\s+files?|txt)\b/iu.test(queryText)) {
     extensions.add(".txt");
   }
   return [...extensions];
@@ -4517,10 +4573,11 @@ function sourceUriMatchesAnyExtension(sourceUri: string | null | undefined, exte
 }
 
 function sourceAuditQueryPattern(queryText: string): string | null {
-  const tokens = normalizeWhitespace(queryText)
+  const targetText = explicitSourceAuditTargetText(queryText) ?? queryText;
+  const tokens = normalizeWhitespace(targetText)
     .toLowerCase()
     .split(/[^a-z0-9]+/u)
-    .filter((token) => token.length > 2)
+    .filter((token) => token.length > 2 || token === "rv")
     .filter((token) => !SOURCE_AUDIT_STOPWORDS.has(token));
   if (tokens.length === 0) {
     return null;
@@ -4528,8 +4585,21 @@ function sourceAuditQueryPattern(queryText: string): string | null {
   return compactAlternation(tokens);
 }
 
-function sourceAuditFocusTerms(queryText: string): readonly string[] {
+function explicitSourceAuditTargetText(queryText: string): string | null {
   const normalized = normalizeWhitespace(queryText);
+  const afterColon = normalized.match(/:\s*(.+)$/u)?.[1] ?? null;
+  if (afterColon && afterColon.length >= 3) {
+    return afterColon;
+  }
+  const explicitTarget =
+    normalized.match(/\b(?:sources?|evidence|source\s+trail)\s+(?:for|of)\s+(.+?)(?:[?.!]|$)/iu)?.[1] ??
+    normalized.match(/\bwhere\s+did\s+.+?\s+come\s+from\s+(.+?)(?:[?.!]|$)/iu)?.[1] ??
+    null;
+  return explicitTarget && explicitTarget.length >= 3 ? explicitTarget : null;
+}
+
+function sourceAuditFocusTerms(queryText: string): readonly string[] {
+  const normalized = normalizeWhitespace(explicitSourceAuditTargetText(queryText) ?? queryText);
   const focusTerms = new Set<string>();
   for (const match of normalized.matchAll(/"([^"]+)"/gu)) {
     const phrase = normalizeWhitespace(match[1] ?? "").toLowerCase();
@@ -4550,7 +4620,7 @@ function sourceAuditFocusTerms(queryText: string): readonly string[] {
   for (const token of normalized
     .toLowerCase()
     .split(/[^a-z0-9]+/u)
-    .filter((item) => item.length > 2)
+    .filter((item) => item.length > 2 || item === "rv")
     .filter((item) => !SOURCE_AUDIT_STOPWORDS.has(item))) {
     focusTerms.add(token);
   }
@@ -4565,7 +4635,7 @@ function sourceAuditSupportScore(result: RecallResult, focusTerms: readonly stri
     if (!term) {
       continue;
     }
-    if (lower.includes(term)) {
+    if (textHasFocusTerm(lower, term)) {
       score += term.includes(" ") ? 18 : 10;
     }
   }
@@ -4587,8 +4657,22 @@ function hasSourceAuditFocusMatch(results: readonly RecallResult[], focusTerms: 
   }
   return results.some((result) => {
     const lower = normalizeWhitespace(result.content).toLowerCase();
-    return focusTerms.some((term) => term.length > 0 && lower.includes(term));
+    return focusTerms.some((term) => term.length > 0 && textHasFocusTerm(lower, term));
   });
+}
+
+function sourceAuditRequiredPatternForTarget(target: MemoryQueryPlanSourceAuditTarget | null, focusTerms: readonly string[]): string | null {
+  if (target?.family !== "task_list") {
+    return null;
+  }
+  const materialTerms = uniqueStrings(
+    focusTerms
+      .flatMap((term) => term.toLowerCase().split(/[^a-z0-9]+/u))
+      .filter((term) => term.length > 2 || term === "rv")
+      .filter((term) => !SOURCE_AUDIT_STOPWORDS.has(term))
+      .filter((term) => !/^(?:tasks?|travel|those|source|sources?|support|backed|include|please|short|version|store)$/u.test(term))
+  );
+  return materialTerms.length > 0 ? compactAlternation(materialTerms) : null;
 }
 
 async function buildSourceAuditDirectResponse(params: {
@@ -4738,17 +4822,6 @@ async function buildSourceAuditDirectResponse(params: {
         cacheHit: false,
         providerCallCount: 0
       };
-  const results = await loadDirectArtifactContextResults({
-    namespaceId: params.query.namespaceId,
-    seedPattern: topicPattern,
-    topicPattern,
-    tier: "source_audit_direct_read_model",
-    limit: Math.max(params.limit, 6),
-    queryEmbedding: queryEmbeddingResult.embedding
-  });
-  if (results.length === 0) {
-    return null;
-  }
   const planTarget = memoryPlan.sourceAuditTarget;
   const focusTerms = uniqueStrings([
     ...sourceAuditFocusTerms(params.queryText),
@@ -4756,6 +4829,19 @@ async function buildSourceAuditDirectResponse(params: {
     ...(planTarget?.places ?? []),
     ...(planTarget?.projects ?? [])
   ]);
+  const requiredPattern = sourceAuditRequiredPatternForTarget(planTarget, focusTerms);
+  const results = await loadDirectArtifactContextResults({
+    namespaceId: params.query.namespaceId,
+    seedPattern: topicPattern,
+    topicPattern,
+    requiredPattern,
+    tier: "source_audit_direct_read_model",
+    limit: Math.max(params.limit, 6),
+    queryEmbedding: queryEmbeddingResult.embedding
+  });
+  if (results.length === 0) {
+    return null;
+  }
   const prioritizedResults = prioritizeSourceAuditSupport(params.queryText, results, focusTerms);
   const topFocusScore = prioritizedResults.length > 0 ? sourceAuditSupportScore(prioritizedResults[0]!, focusTerms) : 0;
   if (focusTerms.length > 0 && (!hasSourceAuditFocusMatch(prioritizedResults, focusTerms) || topFocusScore <= 0)) {
@@ -4850,16 +4936,16 @@ async function buildDocumentLookupDirectResponse(params: {
         cacheHit: false,
         providerCallCount: 0
       };
+  const requestedExtensions = requestedDocumentSourceExtensions(params.queryText);
   const rawResults = await loadDirectArtifactContextResults({
     namespaceId: params.query.namespaceId,
     seedPattern: topicPattern,
     topicPattern,
     tier: params.queryContract.contractName === "procedure_lookup" ? "procedure_projection" : "document_section_projection",
-    limit: Math.max(params.limit, requestedDocumentSourceExtensions(params.queryText).length > 1 ? 12 : 4),
-    seedArtifactLimit: requestedDocumentSourceExtensions(params.queryText).length > 1 ? 12 : undefined,
+    limit: Math.max(params.limit, requestedExtensions.length > 1 ? 16 : 8),
+    seedArtifactLimit: requestedExtensions.length > 1 ? 24 : 12,
     queryEmbedding: queryEmbeddingResult.embedding
   });
-  const requestedExtensions = requestedDocumentSourceExtensions(params.queryText);
   const filteredResults =
     requestedExtensions.length > 0
       ? rawResults.filter((result) =>
@@ -4869,7 +4955,7 @@ async function buildDocumentLookupDirectResponse(params: {
           )
         )
       : rawResults;
-  const results = filteredResults.length > 0 ? filteredResults : rawResults;
+  const results = rankDocumentResultsForQuery(filteredResults.length > 0 ? filteredResults : rawResults, params.queryText);
   if (results.length === 0) {
     return null;
   }
@@ -5895,7 +5981,9 @@ export function isTravelDestinationDirectQuery(queryText: string): boolean {
   const normalized = normalizeWhitespace(queryText);
   const destinationCue =
     /\bwhere\b[\s\S]{0,80}\b(?:go|went|travel(?:ed)?|visit(?:ed)?|vacation|trip)\b/iu.test(normalized) ||
-    /\bwhere\b[\s\S]{0,80}\b(?:trip|vacation)\b/iu.test(normalized);
+    /\bwhere\b[\s\S]{0,80}\b(?:trip|vacation)\b/iu.test(normalized) ||
+    /\bdestination\b[\s\S]{0,80}\b(?:trip|vacation|travel|family)\b/iu.test(normalized) ||
+    /\b(?:trip|vacation|travel|family)\b[\s\S]{0,80}\bdestination\b/iu.test(normalized);
   if (!destinationCue) {
     return false;
   }

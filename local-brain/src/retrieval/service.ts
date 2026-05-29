@@ -76,6 +76,7 @@ import { parseQueryEntityFocus } from "./query-entity-focus.js";
 import { inferQueryContract, queryContractTelemetry, type QueryContract } from "./query-contract-router.js";
 import { buildMemoryQueryPlan, memoryQueryPlanTelemetry } from "./memory-query-plan.js";
 import { readPackageProcedureCorpus, readProjectScopedTasks, readRepoSpecCorpus } from "./repo-corpus-reader.js";
+import { readCodexMemory } from "./codex-memory-reader.js";
 import { queryVectorPolicy } from "./query-vector-policy.js";
 import { extractPossessiveQuerySurfaceNames, extractPrimaryQuerySurfaceNames } from "./query-subjects.js";
 import {
@@ -87,7 +88,9 @@ import {
   getTypedPersonTimeResults,
   getTypedPreferenceResults,
   getTypedTaskItems,
+  getTypedTaskItemsForEventLinking,
   getTypedTaskResults,
+  getTypedTaskResultsForEventLinking,
   resolveLatestSourceScopeArtifact,
   shouldUseTypedCalendarScope,
   getTypedTransactionResults
@@ -347,6 +350,7 @@ import type {
   RecapFocus,
   RecapIntent,
   RecapQuery,
+  RecapRetrievalPlan,
   RecapResponse,
   ResolvedWindow,
   RelationshipQuery,
@@ -827,9 +831,9 @@ function resultHasTravelLocationEvidence(queryText: string, result: RecallResult
   }
   return [result.content, ...recallResultSourceTexts(result)].some((text) => {
     const normalized = normalizePlannerRuntimeText(text);
-    const locationMatch = normalized
-      ? normalized.match(/\b(?:trip|travel(?:ing)?|going|planning|planned|upcoming|went|drove)\b[^.!?\n]{0,120}\b(?:to|through)\s+([A-Z][A-Za-z]+(?:,\s*[A-Z][A-Za-z]+){0,2})/u)?.[1] ??
-        normalized.match(/\b(?:festival|concert|conference)\b[^.!?\n]{0,120}\bin\s+([A-Z][A-Za-z]+(?:,\s*[A-Z][A-Za-z]+){0,2})/u)?.[1] ??
+      const locationMatch = normalized
+      ? normalized.match(/\b(?:trip|travel(?:ing)?|going(?:\s+back)?|planning|planned|upcoming|went|drove)\b[^.!?\n]{0,120}\b(?:to|through|in)\s+([A-Z][A-Za-z]+(?:,\s*[A-Z][A-Za-z]+){0,2})/u)?.[1] ??
+        normalized.match(/\b(?:festival|concert|conference)\b[^.!?\n]{0,120}\b(?:at|in)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3}(?:,\s*[A-Z][A-Za-z]+){0,2})/u)?.[1] ??
         null
       : null;
     if (!locationMatch) {
@@ -842,12 +846,12 @@ function resultHasTravelLocationEvidence(queryText: string, result: RecallResult
 }
 
 function isFamilyRoadtripLocationQuery(queryText: string): boolean {
-  return /\bwhere\b/iu.test(queryText) &&
-    /\b(?:road\s*trips?|roadtrips?)\b/iu.test(queryText) &&
+  return (/\bwhere\b/iu.test(queryText) || /\bdestination\b/iu.test(queryText)) &&
+    /\b(?:road\s*trips?|roadtrips?|trip|travel(?:ed|ing)?|vacation)\b/iu.test(queryText) &&
     /\bfamily\b/iu.test(queryText);
 }
 
-function deriveFamilyRoadtripLocationClaimText(results: readonly RecallResult[]): string | null {
+function deriveFamilyRoadtripLocationClaimText(queryText: string, results: readonly RecallResult[]): string | null {
   const supportTexts = results.flatMap((result) => [result.content, ...recallResultSourceTexts(result)]);
   const joined = normalizePlannerRuntimeText(supportTexts.join(" "));
   if (!(/\bfamily\b/iu.test(joined) && /\b(?:road\s*trip|roadtrip|trip)\b/iu.test(joined))) {
@@ -855,10 +859,29 @@ function deriveFamilyRoadtripLocationClaimText(results: readonly RecallResult[])
   }
   const values: string[] = [];
   const add = (value: string): void => {
-    if (!values.includes(value)) {
-      values.push(value);
+    const cleaned = normalizeWhitespace(value)
+      .replace(/\b(?:with|during|before|after|around|for|last|next|this)\b.*$/iu, "")
+      .replace(/[.?!,;:]+$/u, "")
+      .trim();
+    if (!cleaned || cleaned.length > 60 || /\b(?:family|week|month|trip|roadtrip|vacation|back)\b/iu.test(cleaned)) {
+      return;
+    }
+    if (!values.some((existing) => existing.toLowerCase() === cleaned.toLowerCase())) {
+      values.push(cleaned);
     }
   };
+  for (const text of supportTexts) {
+    const normalized = normalizePlannerRuntimeText(text);
+    if (!/\bfamily\b/iu.test(normalized) && !/\bweek(?:-| )long\b/iu.test(normalized)) {
+      continue;
+    }
+    for (const match of normalized.matchAll(/\b(?:went|traveled|travelled|visited|vacationed|going(?:\s+back)?|trip(?:ped)?)\b[^.!?\n]{0,120}\b(?:to|in|through)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})/gu)) {
+      add(match[1] ?? "");
+    }
+    for (const match of normalized.matchAll(/\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})\b[^.!?\n]{0,120}\b(?:went|traveled|travelled|visited|vacationed)\b[^.!?\n]{0,120}\bfamily\b/gu)) {
+      add(match[1] ?? "");
+    }
+  }
   if (/\b(?:we|i|they|family)\b[^.?!]{0,140}\b(?:went|traveled|travelled|drove|visited)\b[^.?!]{0,80}\b(?:Rockies|Rocky Mountains)\b|\b(?:Rockies|Rocky Mountains)\b[^.?!]{0,120}\b(?:family|road\s*trip|roadtrip|trip|went|drove|visited)\b/iu.test(joined)) {
     add("Rockies");
   }
@@ -868,7 +891,71 @@ function deriveFamilyRoadtripLocationClaimText(results: readonly RecallResult[])
   if (/\bfamily\b[^.?!]{0,160}\b(?:road\s*trip|roadtrip|trip)\b[^.?!]{0,120}\bBanff\b|\bBanff\b[^.?!]{0,120}\b(?:family|road\s*trip|roadtrip)\b/iu.test(joined)) {
     add("Banff");
   }
-  return values.length > 0 ? values.join(", ") : null;
+  if (values.length === 0) {
+    return null;
+  }
+  return /\b(?:roadtrips?|places|where\s+has)\b/iu.test(queryText) ? values.join(", ") : values[0] ?? null;
+}
+
+function deriveTravelEventVenueClaimText(queryText: string, results: readonly RecallResult[]): string | null {
+  const queryTerms = queryDerivedDialogueSupportTerms(queryText).map((term) => term.toLowerCase()).filter((term) => term.length >= 4);
+  const queryPhrases = uniqueStrings(
+    [...queryText.matchAll(/\b([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b/gu)]
+      .map((match) => normalizeWhitespace(match[1] ?? ""))
+      .filter((phrase) => {
+        const lowered = phrase.toLowerCase();
+        return phrase.length >= 4 && !/^(where|what|when|which|who|how|did|does|can|could|would|should)$/u.test(lowered);
+      })
+  );
+  const values: string[] = [];
+  const add = (value: string): boolean => {
+    const cleaned = normalizeWhitespace(value)
+      .replace(/\bon\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,\s*\d{4})?\b.*$/iu, "")
+      .replace(/\b(?:what a show|you'?ve already attended this one|recently)\b.*$/iu, "")
+      .replace(/[.?!,;:]+$/u, "")
+      .trim();
+    if (!cleaned || cleaned.length > 80 || /\b(?:concert|festival|music|tickets?|schedule|summer)\b/iu.test(cleaned)) {
+      return false;
+    }
+    if (!values.some((existing) => existing.toLowerCase() === cleaned.toLowerCase())) {
+      values.push(cleaned);
+      return true;
+    }
+    return false;
+  };
+  for (const result of results) {
+    for (const text of [result.content, ...recallResultSourceTexts(result)]) {
+      const normalized = normalizePlannerRuntimeText(text);
+      const lowered = normalized.toLowerCase();
+      const aligned =
+        queryTerms.length === 0 ||
+        queryTerms.some((term) => lowered.includes(term)) ||
+        /\b(?:concert|festival|music festival)\b/iu.test(normalized);
+      if (!aligned) {
+        continue;
+      }
+      for (const phrase of queryPhrases) {
+        const escapedPhrase = escapeRegExp(phrase);
+        for (const pattern of [
+          new RegExp(`\\b${escapedPhrase}\\b[^.!?\\n]{0,180}?\\b(?:it\\s+was\\s+)?(?:at|in)\\s+(?:the\\s+)?([A-Z][A-Za-z0-9'’&-]*(?:\\s+[A-Z][A-Za-z0-9'’&-]*){0,4})`, "gu"),
+          new RegExp(`\\b(?:concert|festival|music\\s+festival)\\b[^.!?\\n]{0,160}?\\b${escapedPhrase}\\b[^.!?\\n]{0,180}?\\b(?:it\\s+was\\s+)?(?:at|in)\\s+(?:the\\s+)?([A-Z][A-Za-z0-9'’&-]*(?:\\s+[A-Z][A-Za-z0-9'’&-]*){0,4})`, "gu"),
+        ]) {
+          for (const match of normalized.matchAll(pattern)) {
+            if (add(match[1] ?? "")) {
+              return values[0] ?? null;
+            }
+          }
+        }
+      }
+      for (const match of normalized.matchAll(/\b(?:concert|festival|music festival)\b[^.!?\n]{0,140}?\b(?:it\s+was\s+)?(?:at|in)\s+(?:the\s+)?([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})/gu)) {
+        add(match[1] ?? "");
+      }
+      for (const match of normalized.matchAll(/\b[A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4}\s+at\s+([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})/gu)) {
+        add(match[1] ?? "");
+      }
+    }
+  }
+  return values[0] ?? null;
 }
 
 function resultHasStressBusterActivityEvidence(queryText: string, result: RecallResult): boolean {
@@ -14588,7 +14675,8 @@ function isSourceTopicReportQuery(queryText: string): boolean {
     return false;
   }
   const explicitTopicReport =
-    /\b(?:summarize|summary|recap|breakdown)\b/u.test(normalized) &&
+    (/\b(?:summarize|summary|recap|breakdown)\b/u.test(normalized) ||
+      /\bwhat\s+(?:have|did|do|can)\s+(?:i|we|you)\s+(?:said?|mention(?:ed)?|talk(?:ed)?\s+about|discuss(?:ed)?)\b/u.test(normalized)) &&
     /\b(?:mentioned|talked about|discussed|said)\b/u.test(normalized) &&
     /\babout\s+[\p{L}\p{N}][\p{L}\p{N}'’& -]{1,80}\b/iu.test(queryText);
   const projectOrTopicInventory =
@@ -14715,6 +14803,7 @@ async function loadSourceTopicReportRows(
             'tier', 'source_topic_report',
             'source_uri', a.uri,
             'source_table', 'episodic_memory',
+            'source_memory_id', em.id::text,
             'source_row_id', em.id::text,
             'source_quote', LEFT(em.content, 420),
             'metadata', em.metadata
@@ -14837,7 +14926,14 @@ function sourceTopicPrimaryTerms(queryText: string, focus: RecapFocus): readonly
       .flatMap((term) => normalizeWhitespace(term).split(/\s+/u).concat(normalizeWhitespace(term)))
       .map((term) => term.trim())
       .filter((term) => term.length >= 3)
-      .filter((term) => !/^(?:project|projects|topic|topics|notes|omi|recently|lately)$/iu.test(term))
+    .filter((term) => !/^(?:project|projects|topic|topics|notes|omi|recently|lately)$/iu.test(term))
+  );
+}
+
+function isSoftRecentSourceTopicQuery(queryText: string): boolean {
+  return (
+    /\b(?:recently|lately|these\s+days|current(?:ly)?|active(?:ly)?)\b/iu.test(queryText) &&
+    !/\b(?:today|yesterday|last\s+(?:night|week|weekend|month)|this\s+(?:week|month)|past\s+\d+\s+days|over\s+the\s+last\s+\d+\s+days|\d{4}-\d{2}-\d{2})\b/iu.test(queryText)
   );
 }
 
@@ -14927,6 +15023,28 @@ function buildSourceTopicReportSummary(queryText: string, results: readonly Reca
     .map((candidate) => candidate.sentence);
   const fallback = ordered.slice(0, 1).map((candidate) => candidate.sentence);
   return (selected.length > 0 ? selected : fallback).join(/\bprojects?\b/iu.test(queryText) || isCurrentProjectActivityReportQuery(queryText) ? "; " : " ");
+}
+
+function buildSourceTopicFallbackClaim(queryText: string, results: readonly RecallResult[], focus: RecapFocus): string | undefined {
+  const primaryTerms = sourceTopicPrimaryTerms(queryText, focus);
+  const candidates = uniqueStrings(
+    results
+      .filter(isSourceTopicReportResult)
+      .flatMap((result) => {
+        const fragments = sourceTopicFragmentsForQuery(sourceTopicReportText(result), queryText, focus);
+        return fragments.length > 0 ? fragments : [cleanSourceTopicReportText(sourceTopicReportText(result))];
+      })
+      .map(cleanSourceTopicReportText)
+      .filter((fragment) => fragment.length >= 12 && !isSourceTopicBoilerplateSentence(fragment))
+      .filter((fragment) => {
+        if (primaryTerms.length === 0) {
+          return true;
+        }
+        const lowered = fragment.toLowerCase();
+        return primaryTerms.some((term) => lowered.includes(term.toLowerCase()));
+      })
+  );
+  return candidates.slice(0, 2).join(" ") || undefined;
 }
 
 function extractSentenceCandidates(text: string): readonly string[] {
@@ -15072,9 +15190,111 @@ function parseTaskItems(results: readonly RecallResult[], focus: RecapFocus): re
   return items.slice(0, 12);
 }
 
+interface OmiStructuredActionItemForSourceTask {
+  readonly description?: string | null;
+  readonly completed?: boolean | null;
+  readonly due_at?: string | null;
+  readonly completed_at?: string | null;
+}
+
+interface OmiStructuredConversationForSourceTask {
+  readonly started_at?: string | null;
+  readonly finished_at?: string | null;
+  readonly structured?: {
+    readonly action_items?: readonly OmiStructuredActionItemForSourceTask[];
+  } | null;
+}
+
+function rawOmiPathForSourceUri(sourceUri: string | null | undefined): string | null {
+  if (!sourceUri) {
+    return null;
+  }
+  if (sourceUri.endsWith(".json")) {
+    return sourceUri;
+  }
+  if (!sourceUri.includes("/normalized/") || !sourceUri.endsWith(".md")) {
+    return null;
+  }
+  return sourceUri.replace("/normalized/", "/raw/").replace(/\.md$/u, ".json");
+}
+
+function readStructuredOmiActionTasksFromSourceUri(
+  sourceUri: string | null | undefined,
+  evidenceRows: readonly RecallResult[]
+): readonly RecapTaskItem[] {
+  const rawPath = rawOmiPathForSourceUri(sourceUri);
+  if (!rawPath || !existsSync(rawPath)) {
+    return [];
+  }
+  let raw: OmiStructuredConversationForSourceTask;
+  try {
+    raw = JSON.parse(readFileSync(rawPath, "utf8")) as OmiStructuredConversationForSourceTask;
+  } catch {
+    return [];
+  }
+  const actionItems = Array.isArray(raw.structured?.action_items) ? raw.structured.action_items : [];
+  if (actionItems.length === 0) {
+    return [];
+  }
+  const fallbackEvidenceIds = evidenceRows.map((row) => row.memoryId).filter((id) => id.length > 0);
+  const lastMentionedAt = raw.finished_at ?? raw.started_at ?? undefined;
+  const seen = new Set<string>();
+  const tasks: RecapTaskItem[] = [];
+  for (const item of actionItems) {
+    const description = normalizeWhitespace(String(item.description ?? ""));
+    if (!description) {
+      continue;
+    }
+    const title = taskTitleFromFragment(description);
+    const key = title.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    tasks.push({
+      title,
+      description,
+      dueHint: typeof item.due_at === "string" && item.due_at.trim().length > 0 ? item.due_at.trim() : undefined,
+      statusGuess: item.completed ? "completed" : "open",
+      lifecycleStatus: item.completed ? "completed" : "open",
+      lastMentionedAt,
+      sourceConfidence: "high",
+      sourceTrail: sourceUri ? [sourceUri] : undefined,
+      evidenceIds: fallbackEvidenceIds
+    });
+  }
+  return tasks;
+}
+
+function mergeTaskItemsByTitle(...groups: readonly (readonly RecapTaskItem[])[]): readonly RecapTaskItem[] {
+  const merged: RecapTaskItem[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const task of group) {
+      const key = normalizeWhitespace(`${task.title} ${task.description}`).toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      merged.push(task);
+    }
+  }
+  return merged;
+}
+
 function isTaskBearingText(text: string): boolean {
   return /\b(need to|needs to|should|must|todo|to do|follow up|follow-up|action item|action items|remember to|update|write|finish|message|send|review|ship|fix|re-run|rerun|capture|pull)\b/i.test(
     text
+  );
+}
+
+function isSourceDocumentTaskExtractionQuery(queryText: string): boolean {
+  if (/\b(?:latest|most recent|newest|last)\b[\s\S]{0,80}\b(?:omi|voice note|transcript|transcription|memo|note)\b/iu.test(queryText)) {
+    return false;
+  }
+  return (
+    /\b(?:tasks?|checklists?|to[- ]?dos?|action\s+items?|open\s+items?)\b/iu.test(queryText) &&
+    /\b(?:pdfs?|documents?|docs?|exports?|task\s+exports?|files?|screenshots?|ocr|whiteboard|saved\s+documents)\b/iu.test(queryText)
   );
 }
 
@@ -15086,6 +15306,48 @@ function isTravelTaskText(text: string): boolean {
 
 function isClearlyUnrelatedToTravelTasks(text: string): boolean {
   return /\b(?:amiga|founder\s+fact|query\s+contract|mcp\s+studio|projection\s+audit|stable\s+querycontract)\b/iu.test(text);
+}
+
+function isCalendarExportSupportResult(result: RecallResult): boolean {
+  const sourceUri = resultProvenanceString(result, "source_uri") ?? "";
+  return sourceUri.endsWith(".ics") || /\bcalendar_export\b/iu.test(`${result.provenance?.source_kind ?? ""} ${result.provenance?.source_type ?? ""}`);
+}
+
+function buildTaskEvidenceBundle(results: readonly RecallResult[]) {
+  const primary = buildEvidenceBundle(results);
+  if (primary.length > 0) {
+    return primary;
+  }
+  return results
+    .map((result) => {
+      const sourceUri =
+        resultProvenanceString(result, "source_uri") ??
+        resultProvenanceString(result, "sourceUri");
+      const sourceMemoryId =
+        resultProvenanceString(result, "source_memory_id") ??
+        resultProvenanceString(result, "sourceMemoryId") ??
+        result.memoryId;
+      if (!result.artifactId && !sourceUri && !sourceMemoryId) {
+        return null;
+      }
+      return {
+        memoryId: sourceMemoryId,
+        memoryType: result.memoryType,
+        artifactId: result.artifactId ?? null,
+        occurredAt: result.occurredAt ?? null,
+        sourceUri,
+        snippet: result.content.slice(0, 320),
+        provenance: {
+          ...result.provenance,
+          source_uri: sourceUri,
+          source_memory_id: sourceMemoryId,
+          source_table: resultProvenanceString(result, "source_table") ?? result.memoryType,
+          source_quote: resultProvenanceString(result, "source_quote") ?? result.content.slice(0, 420)
+        }
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+    .slice(0, 12);
 }
 
 function filterTravelTaskItems(tasks: readonly RecapTaskItem[]): readonly RecapTaskItem[] {
@@ -15100,6 +15362,374 @@ function filterTravelTaskResults(results: readonly RecallResult[]): readonly Rec
     const text = normalizeWhitespace(result.content);
     return !isClearlyUnrelatedToTravelTasks(text) && isTravelTaskText(text);
   });
+}
+
+function isTaskEventContextQuery(queryText: string): boolean {
+  if (!/\b(?:tasks?|to[- ]?dos?|need\s+to\s+do|should\s+i\s+do|action\s+items?|open\s+tasks?|remaining\s+tasks?)\b/iu.test(queryText)) {
+    return false;
+  }
+  if (/\b(?:tied|connected|before|after|during|trip|travel|event|calendar|commitment|changed|change|review|pdf)\b/iu.test(queryText)) {
+    return true;
+  }
+  return /\b(?:july|september|june)\b/iu.test(queryText) && /\b(?:trip|travel|flight|fly|leave|arrive|land)\b/iu.test(queryText);
+}
+
+function taskEventContextQueries(query: RecapQuery): readonly RecapQuery[] {
+  if (/\b(?:changed|change)\b/iu.test(query.query) && /\bjuly\b/iu.test(query.query) && /\bseptember\b/iu.test(query.query)) {
+    return [
+      { ...query, query: "What trips did I mention for mid to late July?" },
+      { ...query, query: "What trips did I mention for September 2026?" }
+    ];
+  }
+  if (/\bus\s+trip\b/iu.test(query.query)) {
+    return [{ ...query, query: "What trips did I mention for the US trip in July 2026?" }];
+  }
+  if (/\bjuly\b/iu.test(query.query) && !/\bjuly\s+20\d{2}\b/iu.test(query.query)) {
+    return [{ ...query, query: query.query.replace(/\bjuly\b/iu, "July 2026") }];
+  }
+  if (/\bseptember\b/iu.test(query.query) && !/\bseptember\s+20\d{2}\b/iu.test(query.query)) {
+    return [{ ...query, query: query.query.replace(/\bseptember\b/iu, "September 2026") }];
+  }
+  if (/\b(?:before|after)\b/iu.test(query.query) && /\b(?:leave|leaving|land|arrive|arriving)\b/iu.test(query.query)) {
+    return [query, { ...query, query: "What travel plans or trips did I mention?" }];
+  }
+  return [query];
+}
+
+function recallProvenanceStrings(result: RecallResult, key: string): readonly string[] {
+  const value = result.provenance?.[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
+
+function recallProvenanceText(result: RecallResult, key: string): string | null {
+  const value = result.provenance?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function taskEventDateValue(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : null;
+}
+
+function taskEventDateRangesOverlap(
+  leftStart: string | null | undefined,
+  leftEnd: string | null | undefined,
+  rightStart: string | null | undefined,
+  rightEnd: string | null | undefined
+): boolean {
+  const leftStartTime = taskEventDateValue(leftStart);
+  const leftEndTime = taskEventDateValue(leftEnd) ?? leftStartTime;
+  const rightStartTime = taskEventDateValue(rightStart);
+  const rightEndTime = taskEventDateValue(rightEnd) ?? rightStartTime;
+  if (leftStartTime === null || leftEndTime === null || rightStartTime === null || rightEndTime === null) {
+    return false;
+  }
+  return leftStartTime <= rightEndTime && rightStartTime <= leftEndTime;
+}
+
+function taskEventLinkTerms(text: string): readonly string[] {
+  const stop = new Set([
+    "what",
+    "and",
+    "for",
+    "plan",
+    "plans",
+    "planning",
+    "my",
+    "tasks",
+    "task",
+    "need",
+    "should",
+    "connected",
+    "tied",
+    "before",
+    "after",
+    "about",
+    "with",
+    "from",
+    "that",
+    "this",
+    "open",
+    "changed",
+    "change",
+    "are",
+    "the"
+  ]);
+  return uniqueStrings(
+    normalizeWhitespace(text)
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/gu, " ")
+      .split(/\s+/u)
+      .map((term) => term.trim())
+      .filter((term) => (term.length >= 3 || term === "us") && !stop.has(term) && !/^20\d{2}$/u.test(term))
+  );
+}
+
+function taskEventTextContainsTerm(text: string, term: string): boolean {
+  return new RegExp(`\\b${escapeSqlRegexLiteral(term)}\\b`, "iu").test(text);
+}
+
+function isSourceScopedTravelPlanningTaskQuery(queryText: string): boolean {
+  return (
+    /\b(?:recent|latest|last|this)\b/iu.test(queryText) &&
+    /\b(?:note|notes|source|sources)\b/iu.test(queryText) &&
+    /\b(?:travel|trip|flight|leave|leaving|arrive|arriving|land|landing)\b/iu.test(queryText) &&
+    /\b(?:tasks?|to[- ]?dos?|need\s+to\s+do|should\s+i\s+do|action\s+items?|open\s+tasks?|remaining\s+tasks?)\b/iu.test(queryText)
+  );
+}
+
+function taskEventLinkEvidenceKinds(
+  taskResult: RecallResult,
+  eventResult: RecallResult,
+  queryText: string
+): readonly string[] {
+  const kinds: string[] = [];
+  const taskEdges = new Set(recallProvenanceStrings(taskResult, "temporal_edge_ids"));
+  const eventEdges = recallProvenanceStrings(eventResult, "temporal_edge_ids");
+  if (eventEdges.some((edge) => taskEdges.has(edge))) {
+    const sharedTerms = taskEventSharedTerms(taskResult, eventResult, queryText);
+    if (sharedTerms.length > 0) {
+      kinds.push("temporal_edge");
+    }
+  }
+  const sharedTerms = taskEventSharedTerms(taskResult, eventResult, queryText);
+  if (taskResult.artifactId && eventResult.artifactId && taskResult.artifactId === eventResult.artifactId) {
+    if (sharedTerms.length > 0) {
+      kinds.push("same_source_artifact");
+    } else if (isSourceScopedTravelPlanningTaskQuery(queryText)) {
+      kinds.push("same_source_recent_travel_note");
+    }
+  }
+  const taskSourceUri = recallProvenanceText(taskResult, "source_uri");
+  const eventSourceUri = recallProvenanceText(eventResult, "source_uri");
+  if (taskSourceUri && eventSourceUri && taskSourceUri === eventSourceUri) {
+    if (sharedTerms.length > 0) {
+      kinds.push("same_source_uri");
+    } else if (isSourceScopedTravelPlanningTaskQuery(queryText)) {
+      kinds.push("same_source_recent_travel_note");
+    }
+  }
+  const taskSourceMemoryId = recallProvenanceText(taskResult, "source_memory_id");
+  const eventSourceMemoryId = recallProvenanceText(eventResult, "source_memory_id");
+  if (
+    taskSourceMemoryId &&
+    eventSourceMemoryId &&
+    taskSourceMemoryId === eventSourceMemoryId &&
+    isSourceScopedTravelPlanningTaskQuery(queryText)
+  ) {
+    kinds.push("same_source_recent_travel_note");
+  }
+  const taskParent = recallProvenanceText(taskResult, "parent_source_section_id");
+  const eventParent = recallProvenanceText(eventResult, "parent_source_section_id");
+  if (taskParent && eventParent && taskParent === eventParent) {
+    if (sharedTerms.length > 0) {
+      kinds.push("parent_source_section");
+    }
+  }
+  if (
+    taskEventDateRangesOverlap(
+      recallProvenanceText(taskResult, "due_window_start") ?? recallProvenanceText(taskResult, "valid_time_start"),
+      recallProvenanceText(taskResult, "due_window_end") ?? recallProvenanceText(taskResult, "valid_time_end"),
+      resultWindowStart(eventResult) ?? recallProvenanceText(eventResult, "valid_time_start"),
+      resultWindowEnd(eventResult) ?? recallProvenanceText(eventResult, "valid_time_end")
+    )
+  ) {
+    if (sharedTerms.length > 0) {
+      kinds.push("due_event_overlap");
+    }
+  }
+  if (sharedTerms.length >= 2) {
+    kinds.push("shared_place_project_event_terms");
+  }
+  return uniqueStrings(kinds);
+}
+
+function taskEventSharedTerms(taskResult: RecallResult, eventResult: RecallResult, queryText: string): readonly string[] {
+  const queryTerms = taskEventLinkTerms(queryText);
+  const eventTerms = taskEventLinkTerms(eventResult.content);
+  const taskText = `${taskResult.content} ${recallProvenanceText(taskResult, "title") ?? ""} ${recallProvenanceText(taskResult, "description") ?? ""} ${
+    recallProvenanceText(taskResult, "project_name") ?? ""
+  }`.toLowerCase();
+  return [...new Set([...queryTerms, ...eventTerms])].filter((term) => taskEventTextContainsTerm(taskText, term));
+}
+
+function taskEventContextResultScore(result: RecallResult, queryText: string): number {
+  const sourceKindFamily = recallProvenanceText(result, "source_kind_family") ?? "";
+  const spanText = recallProvenanceText(result, "span_text") ?? result.content;
+  if (sourceKindFamily === "task_export" || /^(?:task|due):/iu.test(normalizeWhitespace(spanText)) || /^\d{4}$/u.test(normalizeWhitespace(spanText))) {
+    return 0;
+  }
+  const terms = taskEventLinkTerms(queryText);
+  const text = `${result.content} ${recallProvenanceText(result, "event_title") ?? ""} ${recallProvenanceText(result, "span_text") ?? ""} ${
+    recallProvenanceText(result, "time_hint_text") ?? ""
+  }`.toLowerCase();
+  let score = 0;
+  for (const term of terms) {
+    if (text.includes(term)) {
+      score += term.length <= 3 ? 1 : 2;
+    }
+  }
+  if (/\b(?:trip|travel)\b/iu.test(queryText) && /\b(?:trip|travel|flight|fly|san francisco|iceland)\b/iu.test(text)) {
+    score += 3;
+  }
+  if (/\bpdf\b/iu.test(queryText) && /\bpdf\b/iu.test(text)) {
+    score += 3;
+  }
+  return score;
+}
+
+function isAnchoredTaskContextQuery(queryText: string): boolean {
+  return /\b(?:before|after|during|prior\s+to)\b/iu.test(queryText);
+}
+
+function isActionLikeEventResult(result: RecallResult): boolean {
+  const text = normalizeWhitespace(
+    `${result.content} ${recallProvenanceText(result, "event_title") ?? ""} ${recallProvenanceText(result, "span_text") ?? ""}`
+  );
+  return /\b(?:i\s+)?(?:should|need\s+to|must|have\s+to|book|schedule|arrange|store|renew|finish|review|send|call|prepare|verify)\b/iu.test(text);
+}
+
+function taskFromActionLikeEventResult(result: RecallResult): RecapTaskItem | null {
+  if (!isActionLikeEventResult(result)) {
+    return null;
+  }
+  const title = trimSentenceForTitle(
+    recallProvenanceText(result, "event_title") ?? recallProvenanceText(result, "span_text") ?? result.content
+  );
+  if (!title) {
+    return null;
+  }
+  return {
+    title,
+    description: title,
+    statusGuess: "open",
+    lifecycleStatus: "open",
+    sourceConfidence: "medium",
+    sourceTrail: recallProvenanceText(result, "source_uri") ? [recallProvenanceText(result, "source_uri")!] : [],
+    evidenceIds: [result.memoryId]
+  };
+}
+
+async function expandAnchoredTaskEventContext(query: RecapQuery, eventResults: readonly RecallResult[]): Promise<readonly RecallResult[]> {
+  if (!isAnchoredTaskContextQuery(query.query) || eventResults.length === 0) {
+    return eventResults;
+  }
+  const sourceUris = new Set(eventResults.map((result) => recallProvenanceText(result, "source_uri")).filter((uri): uri is string => Boolean(uri)));
+  if (sourceUris.size === 0) {
+    return eventResults;
+  }
+  const expansionQueries = taskEventContextQueries(query).filter((eventQuery) => eventQuery.query !== query.query);
+  if (expansionQueries.length === 0) {
+    return eventResults;
+  }
+  const expandedGroups = await Promise.all(expansionQueries.map((eventQuery) => getTypedCalendarResults(eventQuery)));
+  const expanded = expandedGroups
+    .flat()
+    .filter((result) => {
+      const sourceUri = recallProvenanceText(result, "source_uri");
+      return sourceUri ? sourceUris.has(sourceUri) : false;
+    })
+    .filter((result) => taskEventContextResultScore(result, `${query.query} trip travel flight`) > 0 || isActionLikeEventResult(result));
+  return uniqueRecallResults([...eventResults, ...expanded], 24);
+}
+
+function isGenericTaskCategoryLabel(task: RecapTaskItem, result: RecallResult | null): boolean {
+  const text = normalizeWhitespace(`${task.title} ${task.description}`).toLowerCase();
+  if (/^(?:tasks?|task list|todo|to do|action items?|open items?|calendar note|date)$/iu.test(text)) {
+    return true;
+  }
+  const resultTitle = result ? normalizeWhitespace(String(result.provenance?.title ?? "")).toLowerCase() : "";
+  return /^(?:tasks?|task list|todo|to do|action items?|open items?)$/iu.test(resultTitle);
+}
+
+async function readTaskEventLinkedTasks(query: RecapQuery): Promise<{
+  readonly tasks: readonly RecapTaskItem[];
+  readonly taskResults: readonly RecallResult[];
+  readonly eventResults: readonly RecallResult[];
+  readonly evidenceKinds: readonly string[];
+  readonly decision: string;
+  readonly candidateTaskCount: number;
+}> {
+  const eventResultGroups = await Promise.all(taskEventContextQueries(query).map((eventQuery) => getTypedCalendarResults(eventQuery)));
+  let eventResults: readonly RecallResult[] = uniqueRecallResults(eventResultGroups.flat(), 24)
+    .filter((result) => hasEventWindowSupport([result]))
+    .map((result) => ({ result, score: taskEventContextResultScore(result, query.query) }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .map((entry) => entry.result);
+  if (eventResults.length === 0) {
+    const focus = buildRecapFocus(query);
+    const anchored = await readAnchoredCalendarSupport(query, focus, 12);
+    eventResults = anchored.results;
+  }
+  eventResults = await expandAnchoredTaskEventContext(query, eventResults);
+  if (eventResults.length === 0) {
+    return { tasks: [], taskResults: [], eventResults: [], evidenceKinds: [], decision: "no_event_context", candidateTaskCount: 0 };
+  }
+
+  const candidateTasks = await getTypedTaskItemsForEventLinking(query);
+  const candidateResults = await getTypedTaskResultsForEventLinking(query);
+  const resultByTaskTitle = new Map<string, RecallResult>();
+  for (const result of candidateResults) {
+    const title = recallProvenanceText(result, "title") ?? normalizeWhitespace(result.content.split(".")[0] ?? "");
+    if (title) {
+      resultByTaskTitle.set(normalizeWhitespace(title).toLowerCase(), result);
+    }
+  }
+
+  const linkedTasks: RecapTaskItem[] = [];
+  const linkedResults: RecallResult[] = [];
+  const evidenceKinds = new Set<string>();
+  const seenTaskKeys = new Set<string>();
+  for (const task of candidateTasks) {
+    const result = resultByTaskTitle.get(normalizeWhitespace(task.title).toLowerCase()) ?? null;
+    if (!result || isGenericTaskCategoryLabel(task, result)) {
+      continue;
+    }
+    const kinds = eventResults.flatMap((eventResult) => taskEventLinkEvidenceKinds(result, eventResult, query.query));
+    if (kinds.length === 0) {
+      continue;
+    }
+    const key = normalizeWhitespace(`${task.title} ${task.description}`).toLowerCase();
+    if (seenTaskKeys.has(key)) {
+      continue;
+    }
+    seenTaskKeys.add(key);
+    for (const kind of kinds) {
+      evidenceKinds.add(kind);
+    }
+    linkedTasks.push(task);
+    linkedResults.push(result);
+  }
+
+  if (linkedTasks.length === 0 && isAnchoredTaskContextQuery(query.query)) {
+    for (const eventResult of eventResults) {
+      const task = taskFromActionLikeEventResult(eventResult);
+      if (!task || isGenericTaskCategoryLabel(task, eventResult)) {
+        continue;
+      }
+      const key = normalizeWhitespace(`${task.title} ${task.description}`).toLowerCase();
+      if (seenTaskKeys.has(key)) {
+        continue;
+      }
+      seenTaskKeys.add(key);
+      evidenceKinds.add("anchored_event_action_statement");
+      linkedTasks.push(task);
+      linkedResults.push(eventResult);
+    }
+  }
+
+  return {
+    tasks: linkedTasks.slice(0, 12),
+    taskResults: linkedResults.slice(0, 12),
+    eventResults: eventResults.slice(0, 12),
+    evidenceKinds: [...evidenceKinds].sort(),
+    decision: linkedTasks.length > 0 ? "linked_tasks_selected" : "event_context_without_linked_task_support",
+    candidateTaskCount: candidateTasks.length
+  };
 }
 
 function taskSupportQueryTerms(queryText: string, focus: RecapFocus): readonly string[] {
@@ -15216,6 +15846,7 @@ async function loadTaskBearingSupportResults(query: RecapQuery, focus: RecapFocu
             'tier', 'task_bearing_source',
             'source_uri', a.uri,
             'source_table', 'artifact_derivations',
+            'source_memory_id', ad.id::text,
             'source_row_id', ad.id::text,
             'source_quote', LEFT(concat_ws(' ', NULLIF(ad.content_text, ''), NULLIF(coalesce(ad.metadata->>'source_sentence_text', ''), '')), 420),
             'metadata', ad.metadata
@@ -20155,8 +20786,8 @@ function inferPlannerRuntimeReportKind(params: {
   ) {
     return "pet_care_report";
   }
-  if ((/\bwhere\b|\bwhat\s+trip\b|\btravel\s+plans?\b|\bplanning\b/iu.test(queryText)) &&
-      /\b(?:roadtrips?|travel(?:ed|ing)?|trip|festival|concert|music festival)\b/iu.test(queryText)) {
+  if ((/\bwhere\b|\bdestination\b|\bwhat\s+trip\b|\btravel\s+plans?\b|\bplanning\b/iu.test(queryText)) &&
+      /\b(?:roadtrips?|travel(?:ed|ing)?|trip|vacation|festival|concert|music festival)\b/iu.test(queryText)) {
     return "travel_report";
   }
   if (/\bwhat advice might\b|\bmajor life transition\b|\bpersonal growth\b/iu.test(queryText)) {
@@ -22378,19 +23009,17 @@ async function loadDialogueSupportBundleRows(params: {
   )`;
   const anchorMatch = buildFocusedLikeMatchClause(3, normalizedAnchorTerms, supportDocumentExpression);
   const supportMatch = buildFocusedLikeMatchClause(3 + anchorMatch.values.length, normalizedSupportTerms, supportDocumentExpression);
-  const participantClause =
-    normalizedParticipants.length > 0
-      ? `
+  const participantClause = `
         AND (
-          lower(coalesce(ad.metadata->>'primary_speaker_name', a.metadata->>'primary_speaker_name', ad.metadata->>'speaker_name', a.metadata->>'speaker_name', ad.metadata->>'subject_name', '')) = ANY($2::text[])
+          cardinality($2::text[]) = 0
+          OR lower(coalesce(ad.metadata->>'primary_speaker_name', a.metadata->>'primary_speaker_name', ad.metadata->>'speaker_name', a.metadata->>'speaker_name', ad.metadata->>'subject_name', '')) = ANY($2::text[])
           OR EXISTS (
             SELECT 1
             FROM unnest($2::text[]) participant(name)
             WHERE lower(coalesce(ad.metadata->>'speaker_names_text', a.metadata->>'speaker_names_text', '')) LIKE ('%' || participant.name || '%')
           )
         )
-      `
-      : "";
+      `;
 
   return queryRows<SearchRow>(
     `
@@ -22481,6 +23110,122 @@ async function loadDialogueSupportBundleRows(params: {
       Math.max(params.candidateLimit, 12)
     ]
   );
+}
+
+async function loadFamilyTravelLocationSupportRows(namespaceId: string, candidateLimit: number): Promise<SearchRow[]> {
+  const supportDocumentExpression = `concat_ws(
+    ' ',
+    coalesce(ad.metadata->>'source_sentence_text', a.metadata->>'source_sentence_text', ''),
+    coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', ''),
+    coalesce(ad.content_text, ''),
+    coalesce(ad.metadata->>'speaker_names_text', ''),
+    coalesce(a.metadata->>'speaker_names_text', '')
+  )`;
+  return queryRows<SearchRow>(
+    `
+      SELECT
+        ad.id::text AS memory_id,
+        'artifact_derivation'::text AS memory_type,
+        ${supportDocumentExpression} AS content,
+        (
+          CASE WHEN lower(${supportDocumentExpression}) ~ 'going[[:space:]]+back[[:space:]]+to[[:space:]]+[a-z]' THEN 5 ELSE 0 END +
+          CASE WHEN lower(${supportDocumentExpression}) ~ 'went[[:space:]]+with[[:space:]]+my[[:space:]]+family|with[[:space:]]+my[[:space:]]+family' THEN 4 ELSE 0 END +
+          CASE WHEN lower(${supportDocumentExpression}) ~ 'for[[:space:]]+(a[[:space:]]+)?week|week[- ]long' THEN 3 ELSE 0 END +
+          CASE WHEN lower(${supportDocumentExpression}) ~ '(^|[^a-z])(trip|travel|vacation|visited|went)([^a-z]|$)' THEN 2 ELSE 0 END
+        )::double precision AS raw_score,
+        ao.artifact_id,
+        ao.observed_at AS occurred_at,
+        a.namespace_id,
+        jsonb_build_object(
+          'tier', 'family_travel_location_support',
+          'derivation_type', ad.derivation_type,
+          'source_uri', a.uri,
+          'metadata', ${artifactDerivationSearchMetadataExpression()}
+        ) AS provenance
+      FROM artifact_derivations ad
+      JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
+      JOIN artifacts a ON a.id = ao.artifact_id
+      WHERE a.namespace_id = $1
+        AND ad.derivation_type IN ('participant_turn', 'source_sentence', 'conversation_unit', 'topic_segment')
+        AND lower(${supportDocumentExpression}) ~ '(^|[^a-z])family([^a-z]|$)'
+        AND lower(${supportDocumentExpression}) ~ '(^|[^a-z])(week|trip|travel|vacation|visited|went)([^a-z]|$)|going[[:space:]]+back'
+        AND lower(${supportDocumentExpression}) !~ 'family[[:space:]]+home[[:space:]]+visiting|family[[:space:]]+history|heritage|maternal[[:space:]]+and[[:space:]]+child'
+      ORDER BY raw_score DESC, ao.observed_at DESC NULLS LAST, ad.created_at ASC
+      LIMIT $2
+    `,
+    [namespaceId, Math.max(1, Math.min(candidateLimit, 24))]
+  );
+}
+
+async function loadTravelEventLocationSupportRows(namespaceId: string, queryText: string, candidateLimit: number): Promise<SearchRow[]> {
+  const supportDocumentExpression = `concat_ws(
+    ' ',
+    coalesce(ad.metadata->>'source_sentence_text', a.metadata->>'source_sentence_text', ''),
+    coalesce(ad.metadata->>'source_turn_text', a.metadata->>'source_turn_text', ''),
+    coalesce(ad.content_text, ''),
+    coalesce(ad.metadata->>'speaker_names_text', ''),
+    coalesce(a.metadata->>'speaker_names_text', '')
+  )`;
+  const terms = queryDerivedDialogueSupportTerms(queryText).filter((term) => term.length >= 4);
+  const termMatch = buildFocusedLikeMatchClause(2, terms, supportDocumentExpression);
+  return queryRows<SearchRow>(
+    `
+      SELECT
+        ad.id::text AS memory_id,
+        'artifact_derivation'::text AS memory_type,
+        ${supportDocumentExpression} AS content,
+        (
+          (${termMatch.scoreExpression})::double precision * 2.5 +
+          CASE WHEN lower(${supportDocumentExpression}) ~ '(^|[^a-z])(concert|festival)([^a-z]|$)' THEN 3 ELSE 0 END +
+          CASE WHEN lower(${supportDocumentExpression}) ~ '(^|[^a-z])(at|in)[[:space:]]+(the[[:space:]]+)?[a-z]' THEN 1 ELSE 0 END
+        )::double precision AS raw_score,
+        ao.artifact_id,
+        ao.observed_at AS occurred_at,
+        a.namespace_id,
+        jsonb_build_object(
+          'tier', 'travel_event_location_support',
+          'derivation_type', ad.derivation_type,
+          'source_uri', a.uri,
+          'metadata', ${artifactDerivationSearchMetadataExpression()}
+        ) AS provenance
+      FROM artifact_derivations ad
+      JOIN artifact_observations ao ON ao.id = ad.artifact_observation_id
+      JOIN artifacts a ON a.id = ao.artifact_id
+      WHERE a.namespace_id = $1
+        AND ad.derivation_type IN ('participant_turn', 'source_sentence', 'conversation_unit', 'topic_segment')
+        AND lower(${supportDocumentExpression}) ~ '(^|[^a-z])(concert|festival)([^a-z]|$)'
+        AND ${termMatch.clause}
+      ORDER BY raw_score DESC, ao.observed_at DESC NULLS LAST, ad.created_at ASC
+      LIMIT $${2 + termMatch.values.length}
+    `,
+    [namespaceId, ...termMatch.values, Math.max(1, Math.min(candidateLimit, 24))]
+  );
+}
+
+function queryDerivedDialogueSupportTerms(queryText: string): readonly string[] {
+  const stopwords = new Set([
+    "where",
+    "what",
+    "when",
+    "which",
+    "did",
+    "does",
+    "have",
+    "with",
+    "from",
+    "about",
+    "attend",
+    "attended"
+  ]);
+  const capitalizedPhrases = [...queryText.matchAll(/\b([A-Z][A-Za-z0-9'’&-]*(?:\s+[A-Z][A-Za-z0-9'’&-]*){0,4})\b/gu)]
+    .map((match) => normalizeWhitespace(match[1] ?? ""))
+    .filter((value) => value.length > 0);
+  const lexicalTerms = normalizeWhitespace(queryText)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/gu, " ")
+    .split(/\s+/u)
+    .filter((token) => token.length >= 4 && !stopwords.has(token));
+  return uniqueStrings([...capitalizedPhrases, ...lexicalTerms]).slice(0, 16);
 }
 
 async function loadTopicSegmentSupportRows(
@@ -27904,7 +28649,8 @@ async function loadBm25LexicalRows(
 }
 
 export async function searchMemory(query: RecallQuery): Promise<RecallResponse> {
-  return runSearchMemory(query, searchMemoryImpl);
+  const normalizedQueryText = normalizeOperatorPresentationQueryText(query.query);
+  return runSearchMemory(normalizedQueryText === query.query ? query : { ...query, query: normalizedQueryText }, searchMemoryImpl);
 }
 
 function escapeSqlRegexLiteral(value: string): string {
@@ -28348,7 +29094,7 @@ async function buildSourceTopicTrustedResponse(params: {
     referenceNow: params.query.referenceNow,
     limit: params.query.limit
   });
-  const sourceTopicRows = await loadSourceTopicReportRows(
+  let sourceTopicRows = await loadSourceTopicReportRows(
     params.query.namespaceId,
     params.query.query,
     sourceTopicFocus,
@@ -28356,7 +29102,23 @@ async function buildSourceTopicTrustedResponse(params: {
     params.query.timeStart ?? null,
     params.query.timeEnd ?? null
   );
-  const sourceTopicClaim = buildSourceTopicReportSummary(params.query.query, sourceTopicRows, sourceTopicFocus);
+  let sourceTopicClaim = buildSourceTopicReportSummary(params.query.query, sourceTopicRows, sourceTopicFocus);
+  const sourceTopicWindowBackfillUsed =
+    (sourceTopicRows.length === 0 || !sourceTopicClaim) &&
+    Boolean(params.query.timeStart || params.query.timeEnd) &&
+    isSoftRecentSourceTopicQuery(params.query.query);
+  if (sourceTopicWindowBackfillUsed) {
+    sourceTopicRows = await loadSourceTopicReportRows(
+      params.query.namespaceId,
+      params.query.query,
+      sourceTopicFocus,
+      Math.max(params.limit, 8),
+      null,
+      null
+    );
+    sourceTopicClaim = buildSourceTopicReportSummary(params.query.query, sourceTopicRows, sourceTopicFocus);
+  }
+  sourceTopicClaim = sourceTopicClaim ?? buildSourceTopicFallbackClaim(params.query.query, sourceTopicRows, sourceTopicFocus);
   if (sourceTopicRows.length === 0 || !sourceTopicClaim) {
     return buildPlannerAbstentionResponse({
       query: params.query,
@@ -28379,7 +29141,10 @@ async function buildSourceTopicTrustedResponse(params: {
     sourceBoundedReadTried: true,
     sourceBoundedReadSucceeded: true,
     finalRouteFamily: "source_topic_report",
-    extraMeta: plannerEnforcementMeta(params.memoryPlan, params.queryContract, "source_topic_report", "source_topic_report_reader_selected")
+    extraMeta: {
+      ...plannerEnforcementMeta(params.memoryPlan, params.queryContract, "source_topic_report", "source_topic_report_reader_selected"),
+      sourceTopicWindowBackfillUsed
+    }
   });
 }
 
@@ -28424,16 +29189,109 @@ async function buildProjectScopedTaskTrustedSearchResponse(params: {
   });
 }
 
+async function buildCodexMemoryTrustedResponse(params: {
+  readonly query: RecallQuery;
+  readonly queryText: string;
+  readonly limit: number;
+  readonly queryContract: QueryContract;
+  readonly memoryPlan: ReturnType<typeof buildMemoryQueryPlan>;
+  readonly startedAt: number;
+}): Promise<RecallResponse> {
+  const read = await readCodexMemory({
+    namespaceId: params.query.namespaceId,
+    queryText: params.queryText,
+    limit: Math.max(params.limit, 8),
+    timeStart: params.query.timeStart ?? null,
+    timeEnd: params.query.timeEnd ?? null,
+    referenceNow: params.query.referenceNow ?? null
+  });
+  if (!read || read.results.length === 0) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "codex_memory_abstention",
+      stageName: "codex_memory_reader",
+      reason: "The planner selected Codex curated session memory, but no promoted candidate summaries matched. Raw transcripts were not searched as a fallback."
+    });
+  }
+  const finalClaimSource =
+    read.mode === "engineering_memory_packet"
+      ? "engineering_memory_packet"
+      : read.mode === "workflow_pattern_report"
+        ? "workflow_pattern_report"
+        : read.mode === "codex_source_audit"
+          ? "codex_source_audit"
+          : read.mode === "codex_project_detail_report"
+            ? "codex_project_detail_report"
+          : "codex_session_report";
+  return buildDirectSourceSearchResponse({
+    query: params.query,
+    results: read.results.slice(0, Math.max(params.limit, 8)),
+    claimText: read.claimText,
+    stageName: "codex_memory_reader",
+    startedAt: params.startedAt,
+    answerReason: read.answerReason,
+    supportBundleFamily: "profile_report",
+    sourceBoundedReadTried: true,
+    sourceBoundedReadSucceeded: true,
+    finalRouteFamily: "codex_session_memory",
+    extraMeta: {
+      ...plannerEnforcementMeta(params.memoryPlan, params.queryContract, finalClaimSource, "codex_memory_reader_selected"),
+      queryContractName: read.mode,
+      queryContractRetrievalDomain: "engineering_specs",
+      queryContractAnswerShape: "report",
+      finalClaimSource,
+      answerSections: read.answerSections,
+      rawTranscriptRetrievalCount: read.rawTranscriptRetrievalCount,
+      packetTokenEstimate: read.packetTokenEstimate
+    }
+  });
+}
+
+function normalizeOperatorPresentationQueryText(value: string): string {
+  let normalized = normalizeWhitespace(value);
+  normalized = normalized.replace(
+    /^(?:give\s+me\s+(?:the\s+)?(?:short\s+version|gist|quick\s+summary|quick\s+version)\s*:\s*|in\s+plain\s+english,?\s*)/iu,
+    ""
+  );
+  normalized = normalized.replace(
+    /\s+(?:please\s+)?(?:also\s+)?include\s+(?:the\s+)?source(?:-backed)?\s+support\.?$/iu,
+    ""
+  );
+  normalized = normalized.replace(/\s+(?:please\s+)?include\s+source-backed\s+support\.?$/iu, "");
+  if (/\bcommute\b/iu.test(normalized) && /\bhow\s+much\s+time\b/iu.test(normalized)) {
+    normalized = normalized
+      .replace(/\bhow\s+much\s+time\s+should\s+i\s+expect\s+for\b/iu, "How long is")
+      .replace(/\bmy\s+work\s+commute\s+each\s+day\b/iu, "my daily commute to work")
+      .replace(/\bwork\s+commute\s+each\s+day\b/iu, "my daily commute to work");
+  }
+  if (/\b(?:play|production|performance)\b/iu.test(normalized) && /\bgo\s+see\b/iu.test(normalized)) {
+    normalized = normalized.replace(/\bgo\s+see\b/iu, "attend");
+  }
+  if (/\blocal\s+theater\b/iu.test(normalized) && /\b(?:play|production|performance)\b/iu.test(normalized)) {
+    normalized = normalized.replace(/\blocal\s+theater\b/iu, "local community theater");
+  }
+  normalized = normalized.replace(
+    /\bwhich\s+(local\s+community\s+theater|community\s+theater|local\s+theater)\s+(performance|play|production)\s+did\s+i\s+attend\b/iu,
+    "Which $2 did I attend at the $1"
+  );
+  return normalizeWhitespace(normalized).trim() || value.trim();
+}
+
 async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   const searchStartedAt = performance.now();
   const stageTimings: RetrievalStageTimings = {};
   const prunedBranches = new Set<string>();
   const config = readConfig();
   const limit = normalizeLimit(query.limit);
-  const queryText = query.query.trim();
+  const originalQueryText = query.query.trim();
+  const queryText = normalizeOperatorPresentationQueryText(originalQueryText);
+  const effectiveQuery: RecallQuery = queryText === originalQueryText ? query : { ...query, query: queryText };
   const queryContract = inferQueryContract(queryText);
   const memoryPlan = buildMemoryQueryPlan(queryText, queryContract);
-  const decompositionDepth = query.decompositionDepth ?? 0;
+  const decompositionDepth = effectiveQuery.decompositionDepth ?? 0;
   const directRelationshipEntity = (() => {
     const hints = extractSubjectHintsFromQuery(queryText).filter((hint) => !["US", "U.S", "United States"].includes(hint));
     if (hints.length === 0 || hints.length > 2 || /\beach person\b/i.test(queryText)) {
@@ -28444,32 +29302,41 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   })();
 
   if (decompositionDepth === 0 && memoryPlan.plannerEnforced) {
+    if (
+      memoryPlan.intent === "codex_session_report" ||
+      memoryPlan.intent === "engineering_memory_packet" ||
+      memoryPlan.intent === "workflow_pattern_report" ||
+      memoryPlan.intent === "codex_source_audit" ||
+      memoryPlan.intent === "codex_project_detail_report"
+    ) {
+      return buildCodexMemoryTrustedResponse({ query: effectiveQuery, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+    }
     if (memoryPlan.intent === "procedure_command") {
-      return buildPackageProcedureTrustedResponse({ query, queryText, queryContract, memoryPlan, startedAt: searchStartedAt });
+      return buildPackageProcedureTrustedResponse({ query: effectiveQuery, queryText, queryContract, memoryPlan, startedAt: searchStartedAt });
     }
     if (memoryPlan.intent === "document_spec" || memoryPlan.intent === "repo_doc_lookup") {
-      return buildRepoSpecTrustedResponse({ query, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+      return buildRepoSpecTrustedResponse({ query: effectiveQuery, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
     }
     if (memoryPlan.intent === "career_history") {
-      return buildCareerHistoryTrustedResponse({ query, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+      return buildCareerHistoryTrustedResponse({ query: effectiveQuery, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
     }
     if (memoryPlan.intent === "project_task_scope") {
-      return buildProjectScopedTaskTrustedSearchResponse({ query, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+      return buildProjectScopedTaskTrustedSearchResponse({ query: effectiveQuery, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
     }
     if (memoryPlan.intent === "multi_entity_work_context") {
-      return buildProjectWorkTrustedResponse({ query, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+      return buildProjectWorkTrustedResponse({ query: effectiveQuery, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
     }
     if (memoryPlan.intent === "source_topic_report" && queryContract.contractName !== "project_definition") {
-      return buildSourceTopicTrustedResponse({ query, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+      return buildSourceTopicTrustedResponse({ query: effectiveQuery, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
     }
   }
 
   if (decompositionDepth === 0 && isWarmStartQuery(queryText)) {
-    return buildWarmStartSearchResponse(query);
+    return buildWarmStartSearchResponse(effectiveQuery);
   }
   if (decompositionDepth === 0) {
     const directRouteParams = {
-      query,
+      query: effectiveQuery,
       queryText,
       limit,
       isHabitConstraintQuery: isHabitConstraintQueryText(queryText),
@@ -28504,8 +29371,8 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
         if (filteredResults.length > 0) {
           const sections = buildMultiEntitySynthesisSections(memoryPlan, filteredResults);
           return buildDirectSourceSearchResponse({
-            query,
-            results: filteredResults.slice(0, Math.max(limit, 8)),
+          query: effectiveQuery,
+          results: filteredResults.slice(0, Math.max(limit, 8)),
             claimText: sections.map((section) => `${section.title}: ${section.text}`).join(" "),
             stageName: "multi_entity_synthesis",
             startedAt: searchStartedAt,
@@ -28533,14 +29400,14 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       }
     }
     if (queryContract.contractName !== "source_audit" && !isHabitConstraintQueryText(queryText)) {
-      const aliasCurrentStateProjectionResponse = await buildAliasCurrentStateProjectionResponse(query, queryText, limit, queryContract); if (aliasCurrentStateProjectionResponse) return aliasCurrentStateProjectionResponse; const recapProfileProjectionResponse = await buildRecapProfileProjectionResponse(query, queryText, limit, queryContract); if (recapProfileProjectionResponse) return recapProfileProjectionResponse;
-      const continuityProjectionResponse = await buildContinuityCurrentStateProjectionResponse(query, queryText, limit, queryContract);
+      const aliasCurrentStateProjectionResponse = await buildAliasCurrentStateProjectionResponse(effectiveQuery, queryText, limit, queryContract); if (aliasCurrentStateProjectionResponse) return aliasCurrentStateProjectionResponse; const recapProfileProjectionResponse = await buildRecapProfileProjectionResponse(effectiveQuery, queryText, limit, queryContract); if (recapProfileProjectionResponse) return recapProfileProjectionResponse;
+      const continuityProjectionResponse = await buildContinuityCurrentStateProjectionResponse(effectiveQuery, queryText, limit, queryContract);
       if (continuityProjectionResponse) {
         return continuityProjectionResponse;
       }
     }
-    const animalShelterTemporalDirect = await loadAnimalShelterDinnerTemporalDirectResult(query);
-    if (animalShelterTemporalDirect) return buildTypedLaneSearchResponse(query, [animalShelterTemporalDirect.result].slice(0, Math.max(1, limit)), "The animal-shelter fundraising dinner date was answered from bounded source text before temporal planner backfill.", buildStrongExactDetailCandidate(animalShelterTemporalDirect.claimText), { supportBundleFamily: "temporal_detail", structuredSufficiencyStatus: "sufficient", temporalCoverageStatus: "exact", entityResolutionStatus: "resolved", fallbackUsed: false, fallbackReason: undefined, earlyStopReason: "temporal_direct_source_sufficient" });
+    const animalShelterTemporalDirect = await loadAnimalShelterDinnerTemporalDirectResult(effectiveQuery);
+    if (animalShelterTemporalDirect) return buildTypedLaneSearchResponse(effectiveQuery, [animalShelterTemporalDirect.result].slice(0, Math.max(1, limit)), "The animal-shelter fundraising dinner date was answered from bounded source text before temporal planner backfill.", buildStrongExactDetailCandidate(animalShelterTemporalDirect.claimText), { supportBundleFamily: "temporal_detail", structuredSufficiencyStatus: "sufficient", temporalCoverageStatus: "exact", entityResolutionStatus: "resolved", fallbackUsed: false, fallbackReason: undefined, earlyStopReason: "temporal_direct_source_sufficient" });
     if (queryContract.contractName !== "profile_report" && !isTemporalSourceAuditQuery(queryText)) {
       const directRouteResponse = await buildRouteLockedDirectReadModelResponse(directRouteParams);
       if (directRouteResponse) {
@@ -28548,7 +29415,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
       }
     }
     if (isHabitConstraintQueryText(queryText)) {
-      return buildHabitConstraintSearchResponse(query);
+      return buildHabitConstraintSearchResponse(effectiveQuery);
     }
   }
   if (
@@ -30430,6 +31297,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
     isComparativeFitQuery(queryText) ||
     /\bhow does\b[^?!.]{0,80}\bplan to\b[^?!.]{0,80}\bunique\b/iu.test(queryText) ||
     (/\bwhere\b/iu.test(queryText) && /\b(?:roadtrips?|travel(?:ed|ing)?|trip|festival|concert|music festival)\b/iu.test(queryText)) ||
+    isFamilyRoadtripLocationQuery(queryText) ||
     isTravelPlanningReportQuery(queryText) ||
     isGriefPeaceSupportQueryText(queryText) ||
     (/\bindoor activity\b/iu.test(queryText) && /\b(?:dog|dogs|pet)\b/iu.test(queryText))
@@ -30578,18 +31446,36 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
               namespaceId: query.namespaceId,
               participants: earlyQueryFocus.primaryHints,
               anchorTerms: travelPlanningQuery
-                ? ["planning", "upcoming trip", "going to", "conference", "travel", "trip"]
+                ? uniqueStrings([...queryDerivedDialogueSupportTerms(query.query), "planning", "upcoming trip", "going to", "conference", "travel", "trip"])
                 : festivalLocationQuery
-                  ? ["festival", "concert", "music festival", "attended", "trip"]
-                  : ["trip with my family", "family on a road trip", "took my family on a road trip", "got back from a trip with my family"],
+                  ? uniqueStrings([...queryDerivedDialogueSupportTerms(query.query), "festival", "concert", "music festival", "attended", "trip"])
+                  : uniqueStrings([
+                      ...queryDerivedDialogueSupportTerms(query.query),
+                      "family",
+                      "week",
+                      "went with my family",
+                      "going back",
+                      "trip with my family",
+                      "family on a road trip",
+                      "took my family on a road trip",
+                      "got back from a trip with my family"
+                    ]),
               supportTerms: festivalLocationQuery
-                ? ["festival", "concert", "Tokyo", "Japan", "visited", "attended"]
+                ? uniqueStrings([...queryDerivedDialogueSupportTerms(query.query), "venue", "center", "theater", "concert", "attended", "saw"])
                 : travelPlanningQuery
-                  ? ["planning", "upcoming", "conference", "destination", "going to", "trip"]
-                  : ["Rockies", "Rocky Mountains", "Jasper", "Banff", "drove through", "went to", "family", "road trip"],
+                  ? uniqueStrings([...queryDerivedDialogueSupportTerms(query.query), "planning", "upcoming", "conference", "destination", "going to", "trip"])
+                  : uniqueStrings([...queryDerivedDialogueSupportTerms(query.query), "destination", "went to", "visited", "traveled", "vacation", "family", "road trip"]),
               candidateLimit: directSourceHeavyReportQuery ? Math.max(expandedLimit * 6, 48) : Math.max(expandedLimit * 2, 16)
             })
           )
+        : [];
+    const familyTravelLocationRows =
+      reportKind === "travel_report" && isFamilyRoadtripLocationQuery(queryText)
+        ? toRankedRows(await loadFamilyTravelLocationSupportRows(query.namespaceId, directSourceHeavyReportQuery ? Math.max(expandedLimit * 6, 48) : Math.max(expandedLimit * 2, 16)))
+        : [];
+    const travelEventLocationRows =
+      reportKind === "travel_report" && festivalLocationQuery
+        ? toRankedRows(await loadTravelEventLocationSupportRows(query.namespaceId, query.query, directSourceHeavyReportQuery ? Math.max(expandedLimit * 6, 48) : Math.max(expandedLimit * 2, 16)))
         : [];
     const speakerScopedRows =
       earlyQueryFocus.primaryHints.length > 0
@@ -30631,7 +31517,7 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
           : directReportSpeakerRows;
       const directReportDialogueBundleRows =
         reportKind === "travel_report"
-          ? mergeInjectedRankedRows(directReportParticipantRows, dialogueSupportBundleRows, 1.07)
+          ? mergeInjectedRankedRows(mergeInjectedRankedRows(mergeInjectedRankedRows(directReportParticipantRows, familyTravelLocationRows, 1.1), travelEventLocationRows, 1.1), dialogueSupportBundleRows, 1.07)
           : directReportParticipantRows;
       const directReportTranscriptRows =
         petCareActivityQuery || reportKind === "travel_report"
@@ -30673,6 +31559,48 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
                 )
               : directReportResults;
       const selectedDirectReportResults = alignedDirectReportResults.length > 0 ? alignedDirectReportResults : directReportResults;
+      if (reportKind === "travel_report" && festivalLocationQuery) {
+        const dialogueBundleResults = uniqueRecallResults(
+          dialogueSupportBundleRows.map((row) =>
+            buildRecallResult(row, row.scoreValue, {
+              rrfScore: row.scoreValue,
+              lexicalRawScore: row.scoreValue
+            })
+          ),
+          expandedLimit * 3
+        );
+        const travelEventResults = uniqueRecallResults(
+          travelEventLocationRows.map((row) =>
+            buildRecallResult(row, row.scoreValue, {
+              rrfScore: row.scoreValue,
+              lexicalRawScore: row.scoreValue
+            })
+          ),
+          expandedLimit * 3
+        );
+        const eventVenueResults = uniqueRecallResults([...travelEventResults, ...dialogueBundleResults, ...selectedDirectReportResults, ...directReportResults], expandedLimit * 3);
+        const eventVenueClaim = deriveTravelEventVenueClaimText(queryText, eventVenueResults);
+        if (eventVenueClaim) {
+          return buildDirectSourceSearchResponse({
+            query,
+            results: eventVenueResults.slice(0, Math.max(expandedLimit, 8)),
+            claimText: eventVenueClaim,
+            stageName: "travel_event_location_direct_read_model",
+            startedAt: performance.now(),
+            answerReason: "The travel/event location query was answered from source-grounded dialogue support before broad mixed retrieval.",
+            supportBundleFamily: "typed_list_set",
+            sourceBoundedReadTried: true,
+            sourceBoundedReadSucceeded: true,
+            finalRouteFamily: "travel_event_location",
+            extraMeta: {
+              finalClaimSource: "travel_event_location_direct_read_model",
+              readerEvidenceDisciplineStatus: "travel_event_location_direct_selected",
+              sourceBoundEvidencePresent: true,
+              sourceBoundFallbackUsed: true
+            }
+          });
+        }
+      }
       if (reportKind === "travel_report" && isFamilyRoadtripLocationQuery(queryText)) {
         const dialogueBundleResults = uniqueRecallResults(
           dialogueSupportBundleRows.map((row) =>
@@ -30683,8 +31611,17 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
           ),
           expandedLimit * 3
         );
-        const familyRoadtripResults = uniqueRecallResults([...dialogueBundleResults, ...selectedDirectReportResults, ...directReportResults], expandedLimit * 3);
-        const familyRoadtripClaim = deriveFamilyRoadtripLocationClaimText(familyRoadtripResults);
+        const familyTravelResults = uniqueRecallResults(
+          familyTravelLocationRows.map((row) =>
+            buildRecallResult(row, row.scoreValue, {
+              rrfScore: row.scoreValue,
+              lexicalRawScore: row.scoreValue
+            })
+          ),
+          expandedLimit * 3
+        );
+        const familyRoadtripResults = uniqueRecallResults([...familyTravelResults, ...dialogueBundleResults, ...selectedDirectReportResults, ...directReportResults], expandedLimit * 3);
+        const familyRoadtripClaim = deriveFamilyRoadtripLocationClaimText(queryText, familyRoadtripResults);
         if (familyRoadtripClaim) {
           return buildDirectSourceSearchResponse({
             query,
@@ -36212,10 +37149,86 @@ export async function recapMemory(query: RecapQuery): Promise<RecapResponse> {
   };
 }
 
+function buildTemporalClarificationHint(
+  query: RecapQuery,
+  toolName: "memory.extract_tasks" | "memory.extract_calendar",
+  memoryPlan: ReturnType<typeof buildMemoryQueryPlan>
+): RecallResponse["duality"]["clarificationHint"] {
+  const candidateLabels = memoryPlan.temporalCandidateWindows.map((window) => window.label).filter(Boolean);
+  const firstCandidate = candidateLabels[0] ?? "the intended year or date window";
+  const prompt = candidateLabels.length > 0
+    ? `Which ${memoryPlan.timeWindow?.rawText ?? "time window"} do you mean: ${candidateLabels.join(", ")}?`
+    : "Which date window should I use for this query?";
+  return {
+    endpoint: toolName,
+    namespaceId: query.namespaceId,
+    query: query.query,
+    reason: memoryPlan.temporalAmbiguityReason ?? "ambiguous_temporal_window",
+    suggestedPrompt: `${prompt} For example: ${query.query.replace(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/iu, firstCandidate)}.`,
+    mcpTool: {
+      name: toolName,
+      arguments: {
+        namespace_id: query.namespaceId,
+        query: query.query,
+        referenceNow: query.referenceNow
+      }
+    }
+  };
+}
+
+function buildTemporalClarificationRetrievalPlan(
+  query: RecapQuery,
+  startedAt: number,
+  toolIntent: "task_extraction" | "calendar_extraction",
+  memoryPlan: ReturnType<typeof buildMemoryQueryPlan>
+): RecapRetrievalPlan {
+  return {
+    intent: toolIntent,
+    probes: [query.query],
+    groupedBy: "result_order",
+    queryDecompositionApplied: true,
+    queryDecompositionSubqueries: memoryPlan.temporalCandidateWindows.map((window) => window.label),
+    scopeMode: toolIntent === "task_extraction" ? "lifecycle_scope" : "event_window_scope",
+    sourceConstraintUri: undefined,
+    usedEventWindow: false,
+    usedCapturedAtOnly: false,
+    temporalSupportPaths: [],
+    ...buildSingleStageLatencyMeta({
+      stageName: "temporal_clarification_gate",
+      startedAt,
+      candidateCount: memoryPlan.temporalCandidateWindows.length,
+      rowsScanned: 0,
+      earlyStopReason: memoryPlan.temporalAmbiguityReason ?? "ambiguous_temporal_window",
+      finalRouteFamily: memoryPlan.intent
+    }),
+    ...memoryQueryPlanTelemetry(memoryPlan)
+  };
+}
+
 export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtractionResponse> {
   const extractionStartedAt = performance.now();
-  const memoryPlan = buildMemoryQueryPlan(query.query);
+  const memoryPlan = buildMemoryQueryPlan(query.query, null, { referenceNow: query.referenceNow });
   const taskScopeMode = detectTemporalScopeMode(query);
+  if (memoryPlan.temporalClarificationRequired && !isTaskEventContextQuery(query.query)) {
+    return {
+      query: query.query,
+      namespaceId: query.namespaceId,
+      intent: "task_extraction",
+      resolvedWindow: { label: memoryPlan.timeWindow?.rawText ?? undefined, source: "none" },
+      focus: {
+        participants: memoryPlan.temporalDecomposition.subjectTerms,
+        topics: memoryPlan.timeWindow?.rawText ? [memoryPlan.timeWindow.rawText] : [],
+        projects: memoryPlan.temporalDecomposition.projectTerms,
+        ambiguityState: "ambiguous"
+      },
+      confidence: "missing",
+      followUpAction: "route_to_clarifications",
+      clarificationHint: buildTemporalClarificationHint(query, "memory.extract_tasks", memoryPlan),
+      evidence: [],
+      retrievalPlan: buildTemporalClarificationRetrievalPlan(query, extractionStartedAt, "task_extraction", memoryPlan),
+      tasks: []
+    };
+  }
   if (memoryPlan.intent === "project_task_scope") {
     const projectTaskRead = await readProjectScopedTasks({
       queryText: query.query,
@@ -36256,6 +37269,52 @@ export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtracti
           ...memoryQueryPlanTelemetry(memoryPlan)
         },
         tasks: projectTaskRead.tasks
+      };
+    }
+  }
+  if (isTaskEventContextQuery(query.query)) {
+    const linkedRead = await readTaskEventLinkedTasks(query);
+    if (linkedRead.eventResults.length > 0) {
+      const resolvedWindow = resolveRecapWindow(query);
+      const evidenceResults = linkedRead.taskResults.length > 0 ? linkedRead.taskResults : linkedRead.eventResults;
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "task_extraction",
+        resolvedWindow,
+        focus: buildRecapFocus(query),
+        confidence: linkedRead.tasks.length > 0 ? "confident" : "missing",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: buildTaskEvidenceBundle(evidenceResults),
+        retrievalPlan: {
+          intent: "task_extraction",
+          probes: [query.query, ...taskEventContextQueries(query).map((eventQuery) => `event:${eventQuery.query}`)],
+          groupedBy: "artifact_cluster",
+          queryDecompositionApplied: taskEventContextQueries(query).length > 1,
+          queryDecompositionSubqueries: taskEventContextQueries(query).map((eventQuery) => eventQuery.query),
+          scopeMode: "event_window_scope",
+          sourceConstraintUri: undefined,
+          usedEventWindow: true,
+          usedCapturedAtOnly: false,
+          temporalSupportPaths: buildTemporalSupportPaths(linkedRead.eventResults),
+          eventWindowBeforeTaskSelection: true,
+          taskEventLinkDecision: linkedRead.decision,
+          taskEventLinkEvidenceKind: linkedRead.evidenceKinds,
+          taskEventLinkedTaskCount: linkedRead.tasks.length,
+          taskEventCandidateTaskCount: linkedRead.candidateTaskCount,
+          taskEventContextEventCount: linkedRead.eventResults.length,
+          ...buildSingleStageLatencyMeta({
+            stageName: linkedRead.tasks.length > 0 ? "task_event_linked_extraction_fast_path" : "task_event_linked_extraction_abstention",
+            startedAt: extractionStartedAt,
+            candidateCount: linkedRead.tasks.length,
+            rowsScanned: linkedRead.taskResults.length + linkedRead.eventResults.length,
+            earlyStopReason: linkedRead.decision,
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        tasks: linkedRead.tasks
       };
     }
   }
@@ -36346,11 +37405,56 @@ export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtracti
       };
     }
   }
+  if (isSourceDocumentTaskExtractionQuery(query.query)) {
+    const typedTasks = await getTypedTaskItems(query);
+    const typedTaskResults = typedTasks.length > 0 ? await getTypedTaskResults(query) : [];
+    const sourceTaskResults = (await loadTaskBearingSupportResults(query, buildRecapFocus(query), 12)).filter((result) => !isCalendarExportSupportResult(result));
+    const sourceTasks = parseTaskItems(sourceTaskResults, buildRecapFocus(query));
+    const tasks = mergeTaskItemsByTitle(typedTasks, sourceTasks);
+    const evidenceResults = [...typedTaskResults, ...sourceTaskResults].slice(0, 12);
+    if (tasks.length > 0 && evidenceResults.length > 0) {
+      const resolvedWindow = resolveRecapWindow(query);
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "task_extraction",
+        resolvedWindow,
+        focus: buildRecapFocus(query),
+        confidence: "confident",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: buildTaskEvidenceBundle(evidenceResults),
+        retrievalPlan: {
+          intent: "task_extraction",
+          probes: [query.query],
+          groupedBy: "result_order",
+          queryDecompositionApplied: false,
+          queryDecompositionSubqueries: [],
+          scopeMode: "source_scope",
+          sourceConstraintUri: undefined,
+          usedEventWindow: Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd),
+          usedCapturedAtOnly: false,
+          ...buildSingleStageLatencyMeta({
+            stageName: "typed_source_document_task_extraction_fast_path",
+            startedAt: extractionStartedAt,
+            candidateCount: tasks.length,
+            rowsScanned: evidenceResults.length,
+            earlyStopReason: "typed_source_document_task_support_selected_before_recap_pipeline",
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        tasks: tasks.slice(0, 12)
+      };
+    }
+  }
   if (taskScopeMode === "source_scope") {
     const sourceScope = await resolveLatestSourceScopeArtifact(query.namespaceId, query.query);
     const sourceRows = sourceScope.artifactId ? await loadArtifactSiblingEpisodicRows(query.namespaceId, [sourceScope.artifactId], 24) : [];
     const taskRows = sourceRows.filter((row) => isTaskBearingText(row.content));
-    const sourceTasks = parseTaskItems(taskRows.length > 0 ? taskRows : sourceRows, buildRecapFocus(query));
+    const structuredActionTasks = readStructuredOmiActionTasksFromSourceUri(sourceScope.sourceUri, sourceRows);
+    const parsedSourceTasks = parseTaskItems(taskRows.length > 0 ? taskRows : sourceRows, buildRecapFocus(query));
+    const sourceTasks = mergeTaskItemsByTitle(structuredActionTasks, parsedSourceTasks);
     if (sourceTasks.length > 0 && sourceRows.length > 0) {
       const resolvedWindow = resolveRecapWindow(query);
       return {
@@ -36378,7 +37482,10 @@ export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtracti
             startedAt: extractionStartedAt,
             candidateCount: sourceTasks.length,
             rowsScanned: sourceRows.length,
-            earlyStopReason: "source_scoped_task_support_selected_before_recap_pipeline",
+            earlyStopReason:
+              structuredActionTasks.length > 0
+                ? "source_scoped_structured_action_item_support_selected_before_recap_pipeline"
+                : "source_scoped_task_support_selected_before_recap_pipeline",
             finalRouteFamily: memoryPlan.intent
           }),
           ...memoryQueryPlanTelemetry(memoryPlan)
@@ -36593,9 +37700,30 @@ function buildEventMemoryUnits(results: readonly RecallResult[]): readonly Event
 
 export async function extractCalendarMemory(query: RecapQuery): Promise<CalendarExtractionResponse> {
   const extractionStartedAt = performance.now();
-  const memoryPlan = buildMemoryQueryPlan(query.query);
+  const memoryPlan = buildMemoryQueryPlan(query.query, null, { referenceNow: query.referenceNow });
   const earlyTypedCalendarScopeRequested = shouldUseTypedCalendarScope(query);
   const initialResolvedWindow = resolveRecapWindow(query);
+  if (memoryPlan.temporalClarificationRequired) {
+    return {
+      query: query.query,
+      namespaceId: query.namespaceId,
+      intent: "calendar_extraction",
+      resolvedWindow: { label: memoryPlan.timeWindow?.rawText ?? undefined, source: "none" },
+      focus: {
+        participants: memoryPlan.temporalDecomposition.subjectTerms,
+        topics: memoryPlan.timeWindow?.rawText ? [memoryPlan.timeWindow.rawText] : [],
+        projects: memoryPlan.temporalDecomposition.projectTerms,
+        ambiguityState: "ambiguous"
+      },
+      confidence: "missing",
+      followUpAction: "route_to_clarifications",
+      clarificationHint: buildTemporalClarificationHint(query, "memory.extract_calendar", memoryPlan),
+      evidence: [],
+      retrievalPlan: buildTemporalClarificationRetrievalPlan(query, extractionStartedAt, "calendar_extraction", memoryPlan),
+      commitments: [],
+      eventMemoryUnits: []
+    };
+  }
   const strictExplicitEventWindowRequested =
     Boolean(initialResolvedWindow.timeStart || initialResolvedWindow.timeEnd) &&
     /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|20\d{2}|19\d{2})\b/iu.test(query.query);

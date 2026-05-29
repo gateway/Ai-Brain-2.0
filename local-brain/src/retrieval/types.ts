@@ -1304,6 +1304,14 @@ export interface RecallResponse {
     readonly memoryQueryPlanObjects?: readonly string[];
     readonly memoryQueryPlanPlaces?: readonly string[];
     readonly memoryQueryPlanProjects?: readonly string[];
+    readonly memoryQueryPlanTimeWindow?: Record<string, unknown> | null;
+    readonly temporalClarificationRequired?: boolean;
+    readonly temporalAmbiguityReason?: string | null;
+    readonly temporalCandidateWindows?: readonly Record<string, unknown>[];
+    readonly selectedTemporalAssumption?: string | null;
+    readonly temporalDecomposition?: Record<string, unknown>;
+    readonly temporalConstraintSet?: readonly Record<string, unknown>[];
+    readonly timeNodeGranularity?: string | null;
     readonly memoryQueryPlanSourceScope?: string;
     readonly memoryQueryPlanTaskScope?: string;
     readonly memoryQueryPlanSourceAuditTarget?: Record<string, unknown> | null;
@@ -1317,6 +1325,8 @@ export interface RecallResponse {
     readonly routeArbitrationReason?: string;
     readonly blockedEarlyRoutes?: readonly string[];
     readonly selectedReader?: string | null;
+    readonly rawTranscriptRetrievalCount?: number;
+    readonly packetTokenEstimate?: number;
     readonly repoProjectionUsed?: boolean;
     readonly packageScriptProjectionUsed?: boolean;
     readonly repoDocScanCount?: number;
@@ -1372,6 +1382,7 @@ export interface RecallResponse {
     readonly sourceBoundEvidencePresent?: boolean;
     readonly readerEvidenceDisciplineStatus?: string;
     readonly readerResidualOwner?: string | null;
+    readonly sourceTopicWindowBackfillUsed?: boolean;
     readonly answerOwnerTrace?: AnswerOwnerTrace;
     readonly answerShapingTrace?: AnswerShapingTrace;
     readonly fallbackSuppressedReason?: string;
@@ -1503,6 +1514,43 @@ export interface RecapRetrievalPlan {
   readonly usedEventWindow?: boolean;
   readonly usedCapturedAtOnly?: boolean;
   readonly temporalSupportPaths?: readonly TemporalSupportPath[];
+  readonly memoryQueryPlanVersion?: string;
+  readonly memoryQueryPlanIntent?: string;
+  readonly memoryQueryPlanRetrievalDomain?: string;
+  readonly memoryQueryPlanQueryContract?: string;
+  readonly memoryQueryPlanAnswerShape?: string;
+  readonly memoryQueryPlanSubjects?: readonly string[];
+  readonly memoryQueryPlanObjects?: readonly string[];
+  readonly memoryQueryPlanPlaces?: readonly string[];
+  readonly memoryQueryPlanProjects?: readonly string[];
+  readonly memoryQueryPlanTimeWindow?: Record<string, unknown> | null;
+  readonly temporalClarificationRequired?: boolean;
+  readonly temporalAmbiguityReason?: string | null;
+  readonly temporalCandidateWindows?: readonly Record<string, unknown>[];
+  readonly selectedTemporalAssumption?: string | null;
+  readonly temporalDecomposition?: Record<string, unknown>;
+  readonly temporalConstraintSet?: readonly Record<string, unknown>[];
+  readonly timeNodeGranularity?: string | null;
+  readonly memoryQueryPlanSourceScope?: string;
+  readonly memoryQueryPlanTaskScope?: string;
+  readonly memoryQueryPlanSourceAuditTarget?: Record<string, unknown> | null;
+  readonly memoryQueryPlanRequiresSynthesis?: boolean;
+  readonly recallChannels?: readonly string[];
+  readonly rerankDecision?: string;
+  readonly filterTrace?: readonly Record<string, unknown>[];
+  readonly finalSelectionReason?: string;
+  readonly selectedCorpusCapability?: string;
+  readonly routeArbitrationDecision?: string;
+  readonly routeArbitrationReason?: string;
+  readonly blockedEarlyRoutes?: readonly string[];
+  readonly selectedReader?: string | null;
+  readonly plannerEnforced?: boolean;
+  readonly eventWindowBeforeTaskSelection?: boolean;
+  readonly taskEventLinkDecision?: string;
+  readonly taskEventLinkEvidenceKind?: readonly string[];
+  readonly taskEventLinkedTaskCount?: number;
+  readonly taskEventCandidateTaskCount?: number;
+  readonly taskEventContextEventCount?: number;
 }
 
 export interface RecapDerivation {

@@ -10,7 +10,7 @@ import type { ArtifactRecord, SourceType } from "../types.js";
 import { attachAnswerableUnitsForClient } from "./answerable-units.js";
 import { splitIntoFragments, splitIntoScenes } from "./fragment.js";
 import { deriveSalienceMetadata, insertFragment, normalizeText } from "./persist.js";
-import { buildIngestionRouterV2Packet, ingestionRouterV2Metadata } from "./router-v2.js";
+import { buildIngestionRouterV2Packet, ingestionRouterV2Metadata, type IngestionRouterV2Packet } from "./router-v2.js";
 import { promoteTranscriptArtifactForClient } from "./transcript.js";
 import type { CandidateMemoryWrite, IngestRequest, IngestResult } from "./types.js";
 
@@ -46,6 +46,44 @@ interface TopicSegment {
   readonly turnStartIndex: number;
   readonly turnEndIndex: number;
   readonly speakerNames: readonly string[];
+}
+
+function documentChunkMetadataForFragment(
+  packet: IngestionRouterV2Packet,
+  fragment: import("../types.js").FragmentRecord
+): Record<string, unknown> {
+  const chunks = packet.adapter?.artifactChunks ?? [];
+  const sourceKind = packet.sourceCapabilityProfile.sourceKind;
+  if (!["pdf_document", "document", "image_ocr"].includes(sourceKind) || chunks.length === 0) {
+    return {};
+  }
+  const matchingChunk =
+    chunks.find((chunk) => {
+      if (typeof fragment.charStart !== "number" || typeof fragment.charEnd !== "number") {
+        return false;
+      }
+      return chunk.charEnd > fragment.charStart && chunk.charStart < fragment.charEnd;
+    }) ?? chunks[fragment.fragmentIndex] ?? chunks[0];
+  if (!matchingChunk) {
+    return {};
+  }
+  return {
+    document_parser_provider: matchingChunk.metadata.document_parser_provider,
+    document_parser_version: matchingChunk.metadata.document_parser_version,
+    document_chunking_strategy: matchingChunk.metadata.document_chunking_strategy,
+    document_parent_strategy: matchingChunk.metadata.document_parent_strategy,
+    source_envelope_chunk_id: matchingChunk.metadata.source_envelope_chunk_id,
+    child_chunk_id: matchingChunk.metadata.child_chunk_id,
+    parent_source_section_id: matchingChunk.metadata.parent_source_section_id,
+    parent_source_uri: matchingChunk.metadata.parent_source_uri,
+    section_heading: matchingChunk.metadata.section_heading,
+    page_number: matchingChunk.metadata.page_number,
+    layout_warning_kinds: matchingChunk.metadata.layout_warning_kinds,
+    layout_warning_count: matchingChunk.metadata.layout_warning_count,
+    source_envelope_char_start: matchingChunk.charStart,
+    source_envelope_char_end: matchingChunk.charEnd,
+    source_text_hash: matchingChunk.textHash
+  };
 }
 
 interface ParticipantBoundDerivation {
@@ -1169,6 +1207,7 @@ export async function ingestObservationTextForClient(
       const metadata = {
         ...(request.metadata ?? {}),
         ...(fragment.metadata ?? {}),
+        ...documentChunkMetadataForFragment(routerV2Packet, fragment),
         importance_score: fragment.importanceScore ?? null,
         tags: fragment.tags ?? [],
         source_type: request.sourceType,
