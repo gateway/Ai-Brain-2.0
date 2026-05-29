@@ -57,26 +57,45 @@ CREATE INDEX IF NOT EXISTS idx_episodic_memory_occurred_id_desc
     ON episodic_memory (occurred_at DESC, id DESC);
 
 DO $$
+DECLARE
+    already_hypertable boolean := false;
 BEGIN
     IF EXISTS (
         SELECT 1
         FROM pg_extension
         WHERE extname = 'timescaledb'
     )
-    AND NOT EXISTS (
+    AND EXISTS (
         SELECT 1
-        FROM timescaledb_information.hypertables
-        WHERE hypertable_schema = 'public'
-          AND hypertable_name = 'episodic_memory'
+        FROM pg_proc
+        WHERE proname = 'create_hypertable'
     ) THEN
+        IF to_regclass('timescaledb_information.hypertables') IS NOT NULL THEN
+            EXECUTE $hypertable_check$
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM timescaledb_information.hypertables
+                    WHERE hypertable_schema = 'public'
+                      AND hypertable_name = 'episodic_memory'
+                )
+            $hypertable_check$
+            INTO already_hypertable;
+        END IF;
+
+        IF already_hypertable THEN
+            RETURN;
+        END IF;
+
         BEGIN
-            PERFORM create_hypertable(
-                'episodic_memory',
-                'occurred_at',
-                chunk_time_interval => interval '7 days',
-                if_not_exists => TRUE,
-                migrate_data => TRUE
-            );
+            EXECUTE $create_hypertable$
+                SELECT create_hypertable(
+                    'episodic_memory',
+                    'occurred_at',
+                    chunk_time_interval => interval '7 days',
+                    if_not_exists => TRUE,
+                    migrate_data => TRUE
+                )
+            $create_hypertable$;
         EXCEPTION
             WHEN undefined_function THEN
                 NULL;
