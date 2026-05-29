@@ -18,12 +18,25 @@ CREATE TABLE IF NOT EXISTS episodic_timeline (
     PRIMARY KEY (occurred_at, memory_id)
 );
 
-SELECT create_hypertable(
-    'episodic_timeline',
-    'occurred_at',
-    chunk_time_interval => interval '7 days',
-    if_not_exists => TRUE
-);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_proc
+        WHERE proname = 'create_hypertable'
+    ) THEN
+        EXECUTE $hypertable$
+            SELECT create_hypertable(
+                'episodic_timeline',
+                'occurred_at',
+                chunk_time_interval => interval '7 days',
+                if_not_exists => TRUE
+            )
+        $hypertable$;
+    ELSE
+        RAISE NOTICE 'timescaledb create_hypertable is not available; episodic_timeline remains a plain table.';
+    END IF;
+END $$;
 
 INSERT INTO episodic_timeline (
     occurred_at,
