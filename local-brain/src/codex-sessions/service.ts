@@ -606,12 +606,21 @@ async function collectCodexSessionCandidates(config: CodexSessionConfig, options
 }
 
 function applyCodexScanSelection(candidates: readonly CodexSessionCandidate[], options: CodexScanOptions = {}): readonly CodexSessionCandidate[] {
+  const prioritized = [...candidates].sort((left, right) => {
+    const archivedDelta = Number(left.archived) - Number(right.archived);
+    if (archivedDelta !== 0) return archivedDelta;
+    const mtimeDelta = Date.parse(right.mtimeAt) - Date.parse(left.mtimeAt);
+    if (mtimeDelta !== 0) return mtimeDelta;
+    const capturedDelta = Date.parse(right.capturedAt ?? "1970-01-01T00:00:00.000Z") - Date.parse(left.capturedAt ?? "1970-01-01T00:00:00.000Z");
+    if (capturedDelta !== 0) return capturedDelta;
+    return left.byteSize - right.byteSize;
+  });
   const capped = options.maxBytes
-    ? candidates.reduce<CodexSessionCandidate[]>((acc, session) => {
+    ? prioritized.reduce<CodexSessionCandidate[]>((acc, session) => {
         const nextBytes = acc.reduce((sum, entry) => sum + entry.byteSize, 0) + session.byteSize;
         return nextBytes <= (options.maxBytes ?? 0) ? [...acc, session] : acc;
       }, [])
-    : candidates;
+    : prioritized;
   return typeof options.limit === "number" && options.limit > 0 ? capped.slice(0, options.limit) : capped;
 }
 
@@ -860,6 +869,16 @@ function isCodexOperatingContextNoise(text: string): boolean {
   );
 }
 
+function isCodexDirectiveScaffolding(text: string): boolean {
+  const normalized = text.replace(/\s+/gu, " ").trim();
+  if (!normalized) return false;
+  return (
+    /^you are gpt-[\d.]+\b/iu.test(normalized) ||
+    /\b(?:your first job is|your mission:|expected first response format|execution order:|docs location:|non-negotiable architecture rules:|primary ux areas expected:|what success looks like:|your working style:|additional implementation preferences:)\b/iu.test(normalized) ||
+    /\b(?:use up to \d+ sub-agents|do not stop at planning|immediate next coding steps|critical architecture decisions you will honor)\b/iu.test(normalized)
+  );
+}
+
 function isSummaryCandidateEvent(event: CodexParsedEvent): boolean {
   if (isCodexOperatingContextNoise(event.contentText)) return false;
   if (event.eventCategory === "tool_result" || event.eventCategory === "shell_output") return false;
@@ -1062,7 +1081,9 @@ export function buildDeterministicCodexSummary(input: {
 }): CodexSessionSummary {
   const events = input.events.filter((event) => !isCodexOperatingContextNoise(event.contentText));
   const allText = events.map((event) => event.contentText).join("\n");
-  const userIntent = firstMeaningful(events, "user_message");
+  const userIntent =
+    events.find((event) => event.eventCategory === "user_message" && event.contentText.trim().length > 0 && !isCodexOperatingContextNoise(event.contentText) && !isCodexDirectiveScaffolding(event.contentText))
+    ?? firstMeaningful(events, "user_message");
   const assistantFinal = [...events].reverse().find((event) => event.eventCategory === "assistant_message" && event.importanceScore >= 0.45);
   const commands = uniqueStrings(events.map((event) => event.command)).slice(0, 12);
   const files = uniqueStrings(events.flatMap((event) => event.filePaths)).slice(0, 30);
@@ -1079,7 +1100,11 @@ export function buildDeterministicCodexSummary(input: {
     events.length > 0 ? "partial" : "unknown";
   const domain = domainFromText(allText, input.repoPath ?? null);
   const decisions = events
-    .filter((event) => (event.role === "user" || event.role === "assistant") && /\b(?:decision|decided|we should|must|do not|don't|never|always)\b/iu.test(event.contentText))
+    .filter((event) =>
+      (event.role === "user" || event.role === "assistant") &&
+      /\b(?:decision|decided|we should|must|do not|don't|never|always)\b/iu.test(event.contentText) &&
+      !isCodexDirectiveScaffolding(event.contentText)
+    )
     .slice(0, 5)
     .map((event) => ({
       decision: sentence(event.contentText),
@@ -1155,8 +1180,8 @@ export function buildDeterministicCodexSummary(input: {
     docs_changed_or_needed: docs,
     failed_approaches: failures,
     open_questions: events.filter((event) => /\?\s*$/u.test(event.contentText.trim())).slice(0, 6).map((event) => sentence(event.contentText)),
-    followups: events.filter((event) => /\b(?:next|followup|todo|remaining)\b/iu.test(event.contentText)).slice(0, 8).map((event) => sentence(event.contentText)),
-    repeated_user_instructions: events.filter((event) => event.role === "user" && /\b(?:always|never|must|don't|do not)\b/iu.test(event.contentText)).slice(0, 8).map((event) => sentence(event.contentText)),
+    followups: events.filter((event) => /\b(?:next|followup|todo|remaining)\b/iu.test(event.contentText) && !isCodexDirectiveScaffolding(event.contentText)).slice(0, 8).map((event) => sentence(event.contentText)),
+    repeated_user_instructions: events.filter((event) => event.role === "user" && /\b(?:always|never|must|don't|do not)\b/iu.test(event.contentText) && !isCodexDirectiveScaffolding(event.contentText)).slice(0, 8).map((event) => sentence(event.contentText)),
     agent_failure_patterns: failures.map((failure) => failure.approach),
     token_waste_observations: events.filter((event) => event.noiseScore >= 0.7 && !isCodexOperatingContextNoise(event.contentText)).slice(0, 5).map((event) => `Noisy event ${event.eventIndex}: ${sentence(event.contentText)}`),
     skill_candidates: events.filter((event) => (event.role === "user" || event.role === "assistant") && /\bskill\b/iu.test(event.contentText)).slice(0, 5).map((event) => sentence(event.contentText)),
@@ -2116,12 +2141,10 @@ export async function projectCodexSessionSpecCoverage(params: {
       [params.namespaceId]
     );
 
-    let deprecatedMarked = false;
     for (const candidate of candidateRows.rows) {
       const confidence = Number(candidate.confidence ?? 0);
-      const shouldDeprecated = !deprecatedMarked && candidate.candidate_type === "codex_token_waste_observation";
+      const shouldDeprecated = candidate.candidate_type === "codex_token_waste_observation";
       if (shouldDeprecated) {
-        deprecatedMarked = true;
         await client.query(
           `
             UPDATE memory_candidates

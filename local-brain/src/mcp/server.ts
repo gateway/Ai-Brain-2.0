@@ -1,4 +1,5 @@
 import { stdin, stdout } from "node:process";
+import { performance } from "node:perf_hooks";
 import { queryRows, withTransaction } from "../db/client.js";
 import { keepIdentityConflictSeparate, mergeEntityAlias, mergeEntityRoleCorrection, processBrainOutboxEvents } from "../clarifications/service.js";
 import { loadEntityRoleConflictProjection, rebuildEntityRoleConflictProjection } from "../identity/entity-role-resolution.js";
@@ -520,6 +521,220 @@ function wrapResult(payload: unknown): McpResultPayload {
     ],
     structuredContent: payload
   };
+}
+
+function elapsedMs(startedAt: number): number {
+  return Number((performance.now() - startedAt).toFixed(2));
+}
+
+function withMcpStageTelemetry(payload: Record<string, unknown>, timings: Record<string, number>): Record<string, unknown> {
+  const meta = payload.meta && typeof payload.meta === "object" ? { ...(payload.meta as Record<string, unknown>) } : {};
+  const existingStageTimings = meta.stageTimingsMs && typeof meta.stageTimingsMs === "object" ? (meta.stageTimingsMs as Record<string, unknown>) : {};
+  const stageTimingsMs: Record<string, number> = {};
+  for (const [key, value] of Object.entries(existingStageTimings)) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      stageTimingsMs[key] = Number(value.toFixed(2));
+    }
+  }
+  for (const [key, value] of Object.entries(timings)) {
+    if (Number.isFinite(value)) {
+      stageTimingsMs[key] = Number(value.toFixed(2));
+    }
+  }
+  const total = Object.entries(stageTimingsMs)
+    .filter(([key]) => key !== "total")
+    .reduce((sum, [, value]) => sum + value, 0);
+  stageTimingsMs.total = Number(total.toFixed(2));
+  const dominant = Object.entries(stageTimingsMs)
+    .filter(([key]) => key !== "total")
+    .sort((left, right) => right[1] - left[1])[0] ?? null;
+  return {
+    ...payload,
+    meta: {
+      ...meta,
+      stageTimingsMs,
+      topStageMs: typeof meta.topStageMs === "number" && meta.topStageMs > 0 ? meta.topStageMs : dominant?.[1] ?? null,
+      dominantStage: typeof meta.dominantStage === "string" && meta.dominantStage.trim() ? meta.dominantStage : dominant?.[0] ?? null
+    }
+  };
+}
+
+function compactText(value: unknown, max = 320): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+  return normalized.length > max ? `${normalized.slice(0, max - 1)}…` : normalized;
+}
+
+function compactSourceTrail(value: unknown, maxItems = 4): readonly Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .slice(0, maxItems)
+    .map((item) => ({
+      sourceUri: typeof item.sourceUri === "string" ? item.sourceUri : null,
+      artifactId: typeof item.artifactId === "string" ? item.artifactId : null,
+      occurredAt: typeof item.occurredAt === "string" ? item.occurredAt : null,
+      sourceMemoryIds: Array.isArray(item.sourceMemoryIds) ? item.sourceMemoryIds.filter((id): id is string => typeof id === "string").slice(0, 4) : [],
+      sourceChunkIds: Array.isArray(item.sourceChunkIds) ? item.sourceChunkIds.filter((id): id is string => typeof id === "string").slice(0, 4) : [],
+      sourceSceneIds: Array.isArray(item.sourceSceneIds) ? item.sourceSceneIds.filter((id): id is string => typeof id === "string").slice(0, 4) : [],
+      sourceTable: typeof item.sourceTable === "string" ? item.sourceTable : null,
+      sourceRowId: typeof item.sourceRowId === "string" ? item.sourceRowId : null,
+      quote: compactText(item.quote, 240)
+    }));
+}
+
+function compactClaimAudit(value: unknown, maxItems = 6): readonly Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .slice(0, maxItems)
+    .map((item) => ({
+      id: typeof item.id === "string" ? item.id : "",
+      claimText: compactText(item.claimText, 320) ?? "",
+      claimFamily: typeof item.claimFamily === "string" ? item.claimFamily : "unknown",
+      supportKind: typeof item.supportKind === "string" ? item.supportKind : "answer_section",
+      finalClaimSource: typeof item.finalClaimSource === "string" ? item.finalClaimSource : null,
+      evidenceCount: typeof item.evidenceCount === "number" ? item.evidenceCount : 0,
+      sourceTrail: compactSourceTrail(item.sourceTrail, 2),
+      sourceQuotes: Array.isArray(item.sourceQuotes) ? item.sourceQuotes.map((quote) => compactText(quote, 220)).filter(Boolean).slice(0, 2) : [],
+      supportStatus: typeof item.supportStatus === "string" ? item.supportStatus : "supported",
+      faithfulnessStatus: typeof item.faithfulnessStatus === "string" ? item.faithfulnessStatus : "verified"
+    }));
+}
+
+function compactAnswerSections(value: unknown, maxItems = 4): readonly Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .slice(0, maxItems)
+    .map((item) => ({
+      id: typeof item.id === "string" ? item.id : "",
+      title: typeof item.title === "string" ? item.title : "",
+      text: compactText(item.text, 700) ?? "",
+      evidenceCount: typeof item.evidenceCount === "number" ? item.evidenceCount : 0,
+      sourceTrail: compactSourceTrail(item.sourceTrail, 2),
+      claimAudit: compactClaimAudit(item.claimAudit, 2),
+      focusModes: Array.isArray(item.focusModes) ? item.focusModes.filter((mode): mode is string => typeof mode === "string").slice(0, 4) : []
+    }));
+}
+
+function compactInsightItems(value: unknown, maxItems: number, textMax = 520): readonly Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .slice(0, maxItems)
+    .map((item) => {
+      const output: Record<string, unknown> = {};
+      for (const [key, itemValue] of Object.entries(item)) {
+        if (typeof itemValue === "string") {
+          output[key] = compactText(itemValue, key === "quote" ? 260 : textMax);
+        } else if (Array.isArray(itemValue)) {
+          output[key] = itemValue.filter((entry): entry is string => typeof entry === "string").map((entry) => compactText(entry, 180)).filter(Boolean).slice(0, 6);
+        } else if (typeof itemValue === "number" || typeof itemValue === "boolean" || itemValue === null) {
+          output[key] = itemValue;
+        }
+      }
+      return output;
+    });
+}
+
+function compactInsightReport(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const report = value as Record<string, unknown>;
+  return {
+    insightType: typeof report.insightType === "string" ? report.insightType : null,
+    answer: compactText(report.answer, 900) ?? "",
+    observations: compactInsightItems(report.observations, 4),
+    examples: compactInsightItems(report.examples, 4, 360),
+    suggestions: compactInsightItems(report.suggestions, 4),
+    uncertainty: Array.isArray(report.uncertainty) ? report.uncertainty.map((item) => compactText(item, 300)).filter(Boolean).slice(0, 4) : [],
+    verification: report.verification && typeof report.verification === "object" ? report.verification : null
+  };
+}
+
+function compactHumanReadable(value: unknown): Record<string, unknown> | string | null {
+  if (typeof value === "string") {
+    return compactText(value, 1200);
+  }
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    answer: compactText(record.answer, 1200) ?? "",
+    whyThisAnswer: compactText(record.whyThisAnswer, 360) ?? "",
+    evidenceSummary: Array.isArray(record.evidenceSummary) ? record.evidenceSummary.map((item) => compactText(item, 220)).filter(Boolean).slice(0, 1) : [],
+    answerSections: compactAnswerSections(record.answerSections, 2),
+    sourceTrail: Array.isArray(record.sourceTrail) ? record.sourceTrail.map((item) => compactText(item, 260)).filter(Boolean).slice(0, 1) : [],
+    uncertainty: compactText(record.uncertainty, 300),
+    suggestedNextQuery: compactText(record.suggestedNextQuery, 240)
+  };
+}
+
+function estimatePayloadTokens(value: unknown): number {
+  const text = JSON.stringify(value);
+  return Math.ceil(Buffer.byteLength(text, "utf8") / 4);
+}
+
+function compactPayloadForDetailMode(payload: Record<string, unknown>, detailMode: "compact" | "full"): Record<string, unknown> {
+  if (detailMode !== "compact") {
+    return payload;
+  }
+  const compact: Record<string, unknown> = { ...payload };
+  const originalMeta = payload.meta && typeof payload.meta === "object" ? (payload.meta as Record<string, unknown>) : {};
+  const removedDiagnosticKeys = ["meta", "results", "duality", "evidence"] as const;
+  for (const key of removedDiagnosticKeys) {
+    delete compact[key];
+  }
+  compact.meta = {
+    finalClaimSource: typeof originalMeta.finalClaimSource === "string" ? originalMeta.finalClaimSource : compact.finalClaimSource ?? null,
+    queryTimeModelCalls: typeof originalMeta.queryTimeModelCalls === "number" ? originalMeta.queryTimeModelCalls : 0,
+    queryTimeGLiNEROrLLMUsed: originalMeta.queryTimeGLiNEROrLLMUsed === true,
+    selectedReader: typeof originalMeta.selectedReader === "string" ? originalMeta.selectedReader : compact.selectedReader ?? null,
+    dominantStage: typeof originalMeta.dominantStage === "string" ? originalMeta.dominantStage : null,
+    topStageMs: typeof originalMeta.topStageMs === "number" ? originalMeta.topStageMs : null,
+    stageTimingsMs: originalMeta.stageTimingsMs && typeof originalMeta.stageTimingsMs === "object" ? originalMeta.stageTimingsMs : null,
+    memoryQueryPlanIntent: typeof originalMeta.memoryQueryPlanIntent === "string" ? originalMeta.memoryQueryPlanIntent : null,
+    selectedCorpusCapability: typeof originalMeta.selectedCorpusCapability === "string" ? originalMeta.selectedCorpusCapability : null,
+    queryContractName: typeof originalMeta.queryContractName === "string" ? originalMeta.queryContractName : compact.queryContract ?? null,
+    queryContractRetrievalDomain: typeof originalMeta.queryContractRetrievalDomain === "string" ? originalMeta.queryContractRetrievalDomain : compact.retrievalDomain ?? null
+  };
+  compact.sourceTrail = compactSourceTrail(compact.sourceTrail, 4);
+  compact.primarySource = Array.isArray(compact.sourceTrail) ? compact.sourceTrail[0] ?? null : null;
+  compact.sourceQuotes = Array.isArray(payload.sourceQuotes)
+    ? payload.sourceQuotes.map((quote) => compactText(quote, 240)).filter(Boolean).slice(0, 4)
+    : compactSourceTrail(compact.sourceTrail, 4).map((item) => item.quote).filter(Boolean);
+  compact.claimAudit = compactClaimAudit(compact.claimAudit, 6);
+  compact.answerSections = compactAnswerSections(compact.answerSections, 4);
+  compact.insightReport = compactInsightReport(compact.insightReport);
+  compact.observations = compactInsightItems(compact.observations, 4);
+  compact.examples = compactInsightItems(compact.examples, 4, 360);
+  compact.suggestions = compactInsightItems(compact.suggestions, 4);
+  compact.humanReadable = compactHumanReadable(compact.humanReadable);
+  compact.expansionTrace = Array.isArray(compact.expansionTrace)
+    ? compact.expansionTrace.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object").slice(0, 4)
+    : [];
+  compact.mcpPayloadBudget = {
+    mode: "compact",
+    removedDiagnosticKeys,
+    approximateTokenEstimate: estimatePayloadTokens(compact)
+  };
+  return compact;
 }
 
 function normalizeCorrectionName(value: string): string {
@@ -1642,43 +1857,59 @@ export async function executeMcpTool(name: string, args: Record<string, unknown>
           })
         });
       const payload = await applySourcePrivacyGuard({ namespaceId, query, payload: rawPayload as Record<string, unknown> });
-      return wrapResult({
+      return wrapResult(compactPayloadForDetailMode({
         ...payload,
         detailModeUsed: detailMode,
         focusModeUsed: focusMode ?? null,
         humanReadable: presentHumanReadableQueryResult({ query, payload, detailMode, focusMode })
-      });
+      }, detailMode));
     }
     case "memory.extract_tasks": {
       const query = requireString(args.query, "query");
       const namespaceId = requireString(args.namespace_id, "namespace_id");
       const detailMode = optionalDetailMode(args.detail_mode) ?? "full";
       const focusMode = optionalFocusMode(args.focus_mode);
+      const extractionStartedAt = performance.now();
+      const extractedPayload = await extractTaskMemory({
+        query,
+        namespaceId,
+        timeStart: optionalString(args.time_start),
+        timeEnd: optionalString(args.time_end),
+        referenceNow: optionalString(args.reference_now),
+        limit: optionalNumber(args.limit),
+        participants: optionalStringArray(args.participants),
+        topics: optionalStringArray(args.topics),
+        projects: optionalStringArray(args.projects),
+        provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
+        model: optionalString(args.model)
+      });
+      const extractionMs = elapsedMs(extractionStartedAt);
+      const envelopeStartedAt = performance.now();
       const rawPayload = await attachStableQueryContractEnvelope({
           toolName: "memory.extract_tasks",
           queryText: query,
           namespaceId,
-          payload: await extractTaskMemory({
-            query,
-            namespaceId,
-            timeStart: optionalString(args.time_start),
-            timeEnd: optionalString(args.time_end),
-            referenceNow: optionalString(args.reference_now),
-            limit: optionalNumber(args.limit),
-            participants: optionalStringArray(args.participants),
-            topics: optionalStringArray(args.topics),
-            projects: optionalStringArray(args.projects),
-            provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
-            model: optionalString(args.model)
-          })
+          payload: extractedPayload
         });
-      const payload = await applySourcePrivacyGuard({ namespaceId, query, payload: rawPayload as Record<string, unknown> });
-      return wrapResult({
+      const envelopeMs = elapsedMs(envelopeStartedAt);
+      const privacyStartedAt = performance.now();
+      const privacyPayload = await applySourcePrivacyGuard({ namespaceId, query, payload: rawPayload as Record<string, unknown> });
+      const privacyMs = elapsedMs(privacyStartedAt);
+      const presenterStartedAt = performance.now();
+      const humanReadable = presentHumanReadableQueryResult({ query, payload: privacyPayload, detailMode, focusMode });
+      const presenterMs = elapsedMs(presenterStartedAt);
+      const payload = withMcpStageTelemetry(privacyPayload as Record<string, unknown>, {
+        mcp_extract_tasks: extractionMs,
+        mcp_envelope: envelopeMs,
+        mcp_source_privacy: privacyMs,
+        mcp_presenter: presenterMs
+      });
+      return wrapResult(compactPayloadForDetailMode({
         ...payload,
         detailModeUsed: detailMode,
         focusModeUsed: focusMode ?? null,
-        humanReadable: presentHumanReadableQueryResult({ query, payload, detailMode, focusMode })
-      });
+        humanReadable
+      }, detailMode));
     }
     case "memory.extract_calendar":
     {
@@ -1686,31 +1917,47 @@ export async function executeMcpTool(name: string, args: Record<string, unknown>
       const namespaceId = requireString(args.namespace_id, "namespace_id");
       const detailMode = optionalDetailMode(args.detail_mode) ?? "full";
       const focusMode = optionalFocusMode(args.focus_mode);
+      const extractionStartedAt = performance.now();
+      const extractedPayload = await extractCalendarMemory({
+        query,
+        namespaceId,
+        timeStart: optionalString(args.time_start),
+        timeEnd: optionalString(args.time_end),
+        referenceNow: optionalString(args.reference_now),
+        limit: optionalNumber(args.limit),
+        participants: optionalStringArray(args.participants),
+        topics: optionalStringArray(args.topics),
+        projects: optionalStringArray(args.projects),
+        provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
+        model: optionalString(args.model)
+      });
+      const extractionMs = elapsedMs(extractionStartedAt);
+      const envelopeStartedAt = performance.now();
       const rawPayload = await attachStableQueryContractEnvelope({
           toolName: "memory.extract_calendar",
           queryText: query,
           namespaceId,
-          payload: await extractCalendarMemory({
-            query,
-            namespaceId,
-            timeStart: optionalString(args.time_start),
-            timeEnd: optionalString(args.time_end),
-            referenceNow: optionalString(args.reference_now),
-            limit: optionalNumber(args.limit),
-            participants: optionalStringArray(args.participants),
-            topics: optionalStringArray(args.topics),
-            projects: optionalStringArray(args.projects),
-            provider: optionalString(args.provider) as "none" | "local" | "openrouter" | undefined,
-            model: optionalString(args.model)
-          })
+          payload: extractedPayload
         });
-      const payload = await applySourcePrivacyGuard({ namespaceId, query, payload: rawPayload as Record<string, unknown> });
-      return wrapResult({
+      const envelopeMs = elapsedMs(envelopeStartedAt);
+      const privacyStartedAt = performance.now();
+      const privacyPayload = await applySourcePrivacyGuard({ namespaceId, query, payload: rawPayload as Record<string, unknown> });
+      const privacyMs = elapsedMs(privacyStartedAt);
+      const presenterStartedAt = performance.now();
+      const humanReadable = presentHumanReadableQueryResult({ query, payload: privacyPayload, detailMode, focusMode });
+      const presenterMs = elapsedMs(presenterStartedAt);
+      const payload = withMcpStageTelemetry(privacyPayload as Record<string, unknown>, {
+        mcp_extract_calendar: extractionMs,
+        mcp_envelope: envelopeMs,
+        mcp_source_privacy: privacyMs,
+        mcp_presenter: presenterMs
+      });
+      return wrapResult(compactPayloadForDetailMode({
         ...payload,
         detailModeUsed: detailMode,
         focusModeUsed: focusMode ?? null,
-        humanReadable: presentHumanReadableQueryResult({ query, payload, detailMode, focusMode })
-      });
+        humanReadable
+      }, detailMode));
     }
     case "memory.explain_recap":
       return wrapResult(
@@ -1750,13 +1997,13 @@ export async function executeMcpTool(name: string, args: Record<string, unknown>
         });
       const payload = await applySourcePrivacyGuard({ namespaceId, query, payload: rawPayload as Record<string, unknown> });
       recordSessionClaims({ namespaceId, sessionId, query, payload: payload as Record<string, unknown> });
-      return wrapResult({
+      return wrapResult(compactPayloadForDetailMode({
         ...payload,
         sessionIdUsed: sessionId ?? null,
         detailModeUsed: detailMode,
         focusModeUsed: focusMode ?? null,
         humanReadable: presentHumanReadableQueryResult({ query, payload, detailMode, focusMode })
-      });
+      }, detailMode));
     }
     case "memory.timeline":
       return wrapResult(

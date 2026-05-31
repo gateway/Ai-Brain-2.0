@@ -16,26 +16,62 @@ export function rate(numerator: number, denominator: number): number {
   return denominator <= 0 ? 0 : Number((numerator / denominator).toFixed(4));
 }
 
+function normalizeTermText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/gu, " ").replace(/\s+/gu, " ").trim();
+}
+
 export function hasTerm(value: unknown, term: string): boolean {
-  return JSON.stringify(value ?? null).toLowerCase().includes(term.toLowerCase());
+  const normalizedValue = ` ${normalizeTermText(JSON.stringify(value ?? null))} `;
+  const normalizedTerm = normalizeTermText(term);
+  if (!normalizedTerm) {
+    return false;
+  }
+  const variants = new Set([normalizedTerm]);
+  if (/ing$/u.test(normalizedTerm) && normalizedTerm.length > 5 && !normalizedTerm.includes(" ")) {
+    variants.add(normalizedTerm.replace(/ing$/u, ""));
+  }
+  // Short tokens like "RV" and "US" must not match arbitrary substrings inside
+  // metadata words. Longer single words can still use substring matching to
+  // tolerate small presentational differences.
+  if (normalizedTerm.length <= 3 || normalizedTerm.includes(" ")) {
+    return [...variants].some((variant) => normalizedValue.includes(` ${variant} `));
+  }
+  return [...variants].some((variant) => normalizedValue.includes(variant));
 }
 
 export function payloadEvidenceItems(payload: any): readonly any[] {
   if (Array.isArray(payload?.duality?.evidence)) return payload.duality.evidence;
   if (Array.isArray(payload?.evidence)) return payload.evidence;
   if (Array.isArray(payload?.tasks)) return payload.tasks;
+  if (Array.isArray(payload?.commitments)) return payload.commitments;
+  if (Array.isArray(payload?.sourceTrail)) return payload.sourceTrail;
   return [];
 }
 
 export function payloadEvidenceCount(payload: any): number {
+  if (typeof payload?.evidenceCount === "number" && Number.isFinite(payload.evidenceCount)) {
+    return payload.evidenceCount;
+  }
   return payloadEvidenceItems(payload).length;
 }
 
 export function answerTextFromPayload(payload: any, toolName = "memory.search"): string {
+  if (payload?.humanReadable && typeof payload.humanReadable === "object" && typeof payload.humanReadable.answer === "string") {
+    return payload.humanReadable.answer;
+  }
+  if (typeof payload?.humanReadable === "string") return payload.humanReadable;
+  if (typeof payload?.answer === "string") return payload.answer;
   if (toolName === "memory.extract_tasks") {
     const tasks = Array.isArray(payload?.tasks) ? payload.tasks : [];
     return tasks
       .map((task: any) => (typeof task?.title === "string" ? task.title : typeof task?.text === "string" ? task.text : ""))
+      .filter(Boolean)
+      .join("; ");
+  }
+  if (toolName === "memory.extract_calendar") {
+    const commitments = Array.isArray(payload?.commitments) ? payload.commitments : [];
+    return commitments
+      .map((commitment: any) => (typeof commitment?.title === "string" ? commitment.title : typeof commitment?.text === "string" ? commitment.text : ""))
       .filter(Boolean)
       .join("; ");
   }
@@ -47,6 +83,8 @@ export function answerTextFromPayload(payload: any, toolName = "memory.search"):
 export function queryTimeModelCallsFromPayload(payload: any): number {
   if (payload?.meta?.queryTimeGLiNEROrLLMUsed === true) return 1;
   if (typeof payload?.meta?.queryTimeModelCalls === "number") return payload.meta.queryTimeModelCalls;
+  if (typeof payload?.queryTimeModelCalls === "number") return payload.queryTimeModelCalls;
+  if (typeof payload?.insightVerification?.queryTimeModelCalls === "number") return payload.insightVerification.queryTimeModelCalls;
   return 0;
 }
 

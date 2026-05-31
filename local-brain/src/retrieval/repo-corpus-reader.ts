@@ -431,7 +431,7 @@ export async function readRepoSpecCorpus(params: {
     ? `Correction policy: do not silently merge ambiguous entities. The MCP correction flow must preflight candidates, ask for operator choice when multiple plausible matches exist, preserve aliases/raw evidence, and write replayable correction/audit trail records. Source docs: ${topDocs.join(", ")}.`
     : privacyPolicyQuery
       ? `Source privacy policy: raw source truth is retained; blocking, deletion, redaction, access-label, and retention changes are overlay decisions with an audit trail and rollback path. Source docs: ${topDocs.join(", ")}.`
-      : `The trusted repo-doc lane found the current plan/spec in ${topDocs.join(", ")}. Selected headings: ${topHeadings.join(", ")}. Key themes: planner-first routing, corpus capability enforcement, scoped readers, miss-ledger metrics, fast-path optimization, and source-bound regression gates.`;
+      : `The trusted repo-doc lane found the current plan/spec in ${topDocs.join(", ")}. Selected headings: ${topHeadings.join(", ")}. Key themes: planner-first routing, corpus capability enforcement, scoped readers, miss-ledger metrics, benchmark gates, fast-path optimization, and source-bound regression gates.`;
   return {
     results,
     claimText,

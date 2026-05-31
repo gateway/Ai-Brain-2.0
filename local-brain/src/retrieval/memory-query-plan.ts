@@ -32,6 +32,14 @@ export type MemoryQueryPlanIntent =
   | "workflow_pattern_report"
   | "codex_source_audit"
   | "codex_project_detail_report"
+  | "expandable_memory_packet"
+  | "source_window_expansion"
+  | "insight_report"
+  | "trend_report"
+  | "improvement_recommendation"
+  | "before_after_report"
+  | "skill_candidate_report"
+  | "risk_gap_report"
   | "corpus_unsupported"
   | "direct_fact"
   | "unknown";
@@ -48,6 +56,7 @@ export type CorpusCapability =
   | "relationship_graph"
   | "temporal_events"
   | "codex_sessions"
+  | "memory_packets"
   | "unknown";
 
 export interface MemoryQueryPlanTimeWindow {
@@ -518,6 +527,70 @@ function detectIntent(params: {
   readonly sourceAuditTarget: MemoryQueryPlanSourceAuditTarget | null;
 }): MemoryQueryPlanIntent {
   const { queryText, contractName, people, places, projects, sourceAuditTarget } = params;
+  const explicitSourceWindowOrPacketQuery = /\b(?:(?:generate|show|build|create|expand|drill\s*down|find)\b[\s\S]{0,80}\b(?:context\s+packet|memory\s+packet)|source\s+support|source\s+evidence|(?:show|find|expand|drill\s*down|which|where)\b[\s\S]{0,80}\bsource\s+windows?|show\s+.*\bsupport|show\s+.*\bevidence|which\s+.*\bsource\s+(?:window|says|mentions|contains)|show\s+(?:omi|markdown|pdf|codex|repo)\s+support)\b/iu.test(queryText);
+  if (/\bwhat\s+changed\b[\s\S]{0,120}\b(?:plans?|trip|travel|july|september|calendar|commitments?)\b|\bchanged?\b[\s\S]{0,80}\b(?:plans?|trip|travel|july|september|calendar|commitments?)\b/iu.test(queryText)) {
+    return "temporal_change";
+  }
+  if (
+    /\b(?:codex|agent\s+session|coding\s+session)\b/iu.test(queryText) &&
+    /\b(?:prior\s+decisions?|what\s+did\s+we\s+do\s+last\s+time|last\s+time\s+on\s+this\s+repo|personal\s+planning|repeated\s+instructions?|codex\s+session\s+ingestion)\b/iu.test(queryText)
+  ) {
+    if (/\b(?:repeated\s+instructions?|mistakes?|avoid|docs\s+drift|skill\s+candidates?|token\s+waste)\b/iu.test(queryText)) return "workflow_pattern_report";
+    return "codex_session_report";
+  }
+  if (
+    !explicitSourceWindowOrPacketQuery &&
+    (contractName === "insight_report" ||
+      /\b(?:what\s+did\s+(?:we|i)\s+learn|what\s+could\s+(?:we|i)\s+do\s+better|what\s+could\s+make|what\s+.*\bdo\s+about\s+them|suggest(?:ed|ions?)?|recommend(?:ations?)?|patterns?\s+(?:are\s+)?(?:repeating|show\s+up|keep\s+repeating)|patterns?\s+repeat|repeated\s+instructions?|reusable\s+skills?|what\s+is\s+still\s+(?:weak|uncertain)|what\s+(?:tasks?\s+)?should\s+(?:become|come\s+out\s+of|be\s+generated)|should\s+become\s+permanent\s+agent\s+rules?|should\s+come\s+out\s+of|how\s+did\s+we\s+improve|benchmark\s+results\s+improve|retrieval\s+improve|what\s+changed\s+(?:since|about)|why\s+is\s+this\s+happening|what\s+are\s+the\s+risks?|top\s+risks?|product[-\s]?ready|what\s+remains|recurring\s+weaknesses|next\s+(?:three\s+)?engineering\s+tasks?|research-backed\s+ideas?|source[-\s]?faithfulness\s+research|compare\b[\s\S]{0,120}\b(?:what\s+is\s+)?(?:still\s+)?missing|evidence\s+gaps?|top\s+three\s+ways|calendar-like\s+commitments?|stale\s+(?:tasks?|or\s+uncertain)|latency\s+tail|should\s+(?:we|i)\s+(?:track|improve)|new\s+(?:skill|automation|checklist)|teach\s+us|should\s+we\s+change|what\s+should\s+we\s+implement\s+next|dates?\s+or\s+time\s+windows?\s+are\s+connected|natural\s+and\s+useful\s+to\s+a\s+human)\b/iu.test(queryText))
+  ) {
+    if (/\b(?:how\s+did\s+we\s+improve|what\s+changed\s+since|before\s+and\s+after|from\s+last\s+week)\b/iu.test(queryText)) return "before_after_report";
+    if (/\b(?:skill|automation|checklist|agent\s+rule|repeated\s+instructions?|reusable\s+skills?)\b/iu.test(queryText)) return "skill_candidate_report";
+    if (/\b(?:risk|risks|weak|weakness(?:es)?|gap|gaps|missing)\b/iu.test(queryText)) return "risk_gap_report";
+    if (/\b(?:suggest(?:ed|ions?)?|recommend(?:ations?)?|could\s+(?:we|i)\s+do\s+better|should\s+(?:we|i)\s+do)\b/iu.test(queryText)) return "improvement_recommendation";
+    if (/\b(?:patterns?|trend|trends|repeating|show\s+up)\b/iu.test(queryText)) return "trend_report";
+    return "insight_report";
+  }
+  if (
+    sourceAuditTarget &&
+    !/\bsource[-\s]?windows?\b/iu.test(queryText) &&
+    sourceAuditTarget.family !== "unknown" &&
+    /\b(?:show|where|what|which)\b[\s\S]{0,80}\bsources?\b[\s\S]{0,80}\b(?:for|answer|come\s+from|claim|audit)\b/iu.test(queryText)
+  ) {
+    return "source_audit";
+  }
+  if (/\b(?:where\s+did|source|sources|evidence|come\s+from|provenance)\b[\s\S]{0,100}\b(?:memory\s+packet|agent\s+memory|codex)\b/iu.test(queryText)) {
+    return "codex_source_audit";
+  }
+  if (/\b(?:agent\s+memory\s+packet|memory\s+packet|generate\s+.*packet|future\s+agents?\s+preload|preload\s+before\s+working)\b/iu.test(queryText)) {
+    return "engineering_memory_packet";
+  }
+  if (isProjectScopedTaskQuery(queryText, projects)) return "project_task_scope";
+  if (
+    /\b(?:ingestion|tagging|extraction|source\s+kind|source\s+type|quality\s+issues?|quality\s+ledger|failed\s+to\s+produce|missing\s+(?:task\s+)?projections?|temporal\s+windows?|fix\s+next\s+in\s+ingestion\s+quality)\b/iu.test(queryText) ||
+    /\b(?:parser[_\s-]?chunking[_\s-]?quality[_\s-]?defect|parent[_\s-]?child[_\s-]?context[_\s-]?missing|temporal[_\s-]?validity[_\s-]?conflict|task[_\s-]?projection[_\s-]?missing|event[_\s-]?projection[_\s-]?missing)\b/iu.test(queryText)
+  ) {
+    return "document_lookup";
+  }
+  if (
+    /\b(?:expand|drill\s*down|source\s+windows?|exact\s+source\s+windows?|supporting\s+chunks?|supporting\s+windows?|source\s+support|source\s+evidence|source[-\s]?bound|show\s+the\s+exact|where\s+is\s+the\s+exact|show\s+.*\bsupport|show\s+.*\bevidence|find\s+.*\bsupport|which\s+.*\bsource\s+(?:window|says|mentions|contains)|show\s+.*\bsources?\b)\b/iu.test(queryText) &&
+    /\b(?:memory|packet|summar(?:y|ies)|sources?|codex|omi|pdf|document|docs?|notes?|answer|claim|pattern|travel|task|calendar|repo|markdown|window|context|truth)\b/iu.test(queryText)
+  ) {
+    return "source_window_expansion";
+  }
+  if (
+    (
+      /\b(?:what|which|where|find|show|from)\b[\s\S]{0,140}\b(?:sources?|source\s+windows?|paper|survey|notes?|markdown|omi\s+memory|expandable\s+.*memory)\b[\s\S]{0,100}\b(?:mentions?|says?|defines?|contains?|connects?|treats?|lists?|support|travel|tasks?)\b/iu.test(queryText) ||
+      /\b(?:sources?|source\s+windows?|paper|survey|notes?|markdown|omi\s+memory|expandable\s+.*memory)\b[\s\S]{0,100}\b(?:mentions?|says?|defines?|contains?|connects?|treats?|lists?|support)\b/iu.test(queryText)
+    ) &&
+    /\b(?:memory|packet|summar(?:y|ies)|sources?|evidence|codex|omi|pdf|document|docs?|notes?|answer|claim|pattern|travel|task|calendar|repo|markdown|window|survey|paper|context|truth)\b/iu.test(queryText)
+  ) {
+    return "source_window_expansion";
+  }
+  if (
+    /\b(?:compact\s+context\s+packet|context\s+packet|memory\s+packet|expandable\s+.*memory|summar(?:y|ize).*\b(?:source\s+chunks?|source\s+windows?|supporting\s+chunks?))\b/iu.test(queryText)
+  ) {
+    return "expandable_memory_packet";
+  }
   if (
     /\b(?:codex|agent\s+session|coding\s+session)\b/iu.test(queryText) &&
     /\b(?:tasks?|todo|to[- ]?do|action\s+items?|need\s+to\s+do|should\s+i\s+do|open|remaining)\b/iu.test(queryText)
@@ -539,7 +612,10 @@ function detectIntent(params: {
     if (/\b(?:mistakes?|avoid|repeated\s+instructions?|skill\s+candidates?|skills?\s+should|create\s+.*skills?|docs\s+drift|pattern|patterns|token\s+waste)\b/iu.test(queryText)) return "workflow_pattern_report";
     return "codex_session_report";
   }
-  if (sourceAuditTarget) return "source_audit";
+  if (
+    sourceAuditTarget &&
+    (sourceAuditTarget.family !== "unknown" || /\b(?:answer|claim|come\s+from|where\s+did)\b/iu.test(queryText))
+  ) return "source_audit";
   if (
     /\b(?:silent(?:ly)?\s+merge|merge\s+them|correction|alias|spelling|omi\s+gummi|gummi)\b/iu.test(queryText) &&
     /\b(?:should|policy|multiple|candidate|merge|separate|audit)\b/iu.test(queryText)
@@ -560,12 +636,6 @@ function detectIntent(params: {
     return /\b(?:run|command|benchmark|npm\s+run)\b/iu.test(queryText) ? "procedure_command" : "document_spec";
   }
   if (
-    /\b(?:ingestion|tagging|extraction|source\s+kind|source\s+type|quality\s+issues?|quality\s+ledger|failed\s+to\s+produce|missing\s+(?:task\s+)?projections?|temporal\s+windows?|fix\s+next\s+in\s+ingestion\s+quality)\b/iu.test(queryText) ||
-    /\b(?:parser[_\s-]?chunking[_\s-]?quality[_\s-]?defect|parent[_\s-]?child[_\s-]?context[_\s-]?missing|temporal[_\s-]?validity[_\s-]?conflict|task[_\s-]?projection[_\s-]?missing|event[_\s-]?projection[_\s-]?missing)\b/iu.test(queryText)
-  ) {
-    return "document_lookup";
-  }
-  if (
     /\b(?:pdfs?|documents?|docs?|papers?|specs?)\b[\s\S]{0,120}\b(?:saved?|mention|mentions|contain|say|retrieval\s+planning|chunking|source\s+envelope)\b/iu.test(queryText) ||
     /\b(?:what|which)\b[\s\S]{0,80}\b(?:pdfs?|documents?|docs?|papers?|specs?)\b/iu.test(queryText)
   ) {
@@ -580,7 +650,6 @@ function detectIntent(params: {
     return "temporal_event";
   }
   if (/\bfriends?\b|\bintroduc(?:e|ed|tion)\b/iu.test(queryText) && (contractName === "shared_social_graph" || places.length > 0 || people.length > 1)) return "relationship_friend_set";
-  if (isProjectScopedTaskQuery(queryText, projects)) return "project_task_scope";
   if (/\b(?:task|tasks|todo|action\s+items?|need\s+to\s+do|should\s+i\s+do)\b/iu.test(queryText)) return "task_list";
   if (
     projects.length > 0 &&
@@ -627,6 +696,14 @@ function recallChannelsForIntent(intent: MemoryQueryPlanIntent): MemoryQueryPlan
     case "workflow_pattern_report":
     case "codex_source_audit":
     case "codex_project_detail_report":
+    case "expandable_memory_packet":
+    case "source_window_expansion":
+    case "insight_report":
+    case "trend_report":
+    case "improvement_recommendation":
+    case "before_after_report":
+    case "skill_candidate_report":
+    case "risk_gap_report":
       return ["lexical"];
     case "career_history":
       return ["typed_read_model", "source_topic_report", "lexical", "vector"];
@@ -668,6 +745,16 @@ export function corpusCapabilityForIntent(intent: MemoryQueryPlanIntent): Corpus
     case "codex_source_audit":
     case "codex_project_detail_report":
       return "codex_sessions";
+    case "expandable_memory_packet":
+    case "source_window_expansion":
+      return "memory_packets";
+    case "insight_report":
+    case "trend_report":
+    case "improvement_recommendation":
+    case "before_after_report":
+    case "skill_candidate_report":
+    case "risk_gap_report":
+      return "source_topic_report";
     case "corpus_unsupported":
       return "unknown";
     default:
@@ -696,6 +783,16 @@ function selectedReaderForIntent(intent: MemoryQueryPlanIntent): string | null {
     case "codex_source_audit":
     case "codex_project_detail_report":
       return "codex_memory_reader";
+    case "expandable_memory_packet":
+    case "source_window_expansion":
+      return "expandable_memory_reader";
+    case "insight_report":
+    case "trend_report":
+    case "improvement_recommendation":
+    case "before_after_report":
+    case "skill_candidate_report":
+    case "risk_gap_report":
+      return "insight_support_bundle_reader";
     default:
       return null;
   }
@@ -715,6 +812,14 @@ function blockedEarlyRoutesForIntent(intent: MemoryQueryPlanIntent): readonly st
     case "workflow_pattern_report":
     case "codex_source_audit":
     case "codex_project_detail_report":
+    case "expandable_memory_packet":
+    case "source_window_expansion":
+    case "insight_report":
+    case "trend_report":
+    case "improvement_recommendation":
+    case "before_after_report":
+    case "skill_candidate_report":
+    case "risk_gap_report":
       return ["warm_start", "alias_current_state_projection", "recap_profile_projection", "continuity_current_state_projection", "generic_fallback"];
     default:
       return [];
@@ -750,6 +855,10 @@ export function buildMemoryQueryPlan(queryText: string, queryContract?: QueryCon
         ? "codex_source_audit"
       : intent === "codex_project_detail_report"
         ? "codex_session_report"
+      : intent === "insight_report" || intent === "trend_report" || intent === "improvement_recommendation" || intent === "before_after_report" || intent === "skill_candidate_report" || intent === "risk_gap_report"
+        ? "insight_report"
+      : intent === "expandable_memory_packet" || intent === "source_window_expansion"
+        ? "engineering_memory_packet"
       : intent === "temporal_change" || intent === "temporal_event"
         ? "temporal_event"
         : intent === "career_history"
@@ -764,6 +873,8 @@ export function buildMemoryQueryPlan(queryText: string, queryContract?: QueryCon
       ? "list"
       : intent === "codex_session_report" || intent === "engineering_memory_packet" || intent === "workflow_pattern_report" || intent === "codex_source_audit"
         || intent === "codex_project_detail_report"
+        || intent === "insight_report" || intent === "trend_report" || intent === "improvement_recommendation" || intent === "before_after_report" || intent === "skill_candidate_report" || intent === "risk_gap_report"
+        || intent === "expandable_memory_packet" || intent === "source_window_expansion"
         ? "report"
       : intent === "temporal_change" || intent === "temporal_event"
         ? "timeline"
@@ -776,7 +887,10 @@ export function buildMemoryQueryPlan(queryText: string, queryContract?: QueryCon
       : intent === "task_list" || intent === "project_task_scope"
         ? "task_ops"
       : intent === "codex_session_report" || intent === "engineering_memory_packet" || intent === "workflow_pattern_report" || intent === "codex_source_audit" || intent === "codex_project_detail_report"
+        || intent === "expandable_memory_packet" || intent === "source_window_expansion"
         ? "engineering_specs"
+      : intent === "insight_report" || intent === "trend_report" || intent === "improvement_recommendation" || intent === "before_after_report" || intent === "skill_candidate_report" || intent === "risk_gap_report"
+        ? "cross_corpus_insight"
       : intent === "temporal_change"
           ? "temporal_history"
           : intent === "document_lookup"

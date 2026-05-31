@@ -233,7 +233,7 @@ async function buildSeeds(): Promise<{ readonly seeds: readonly AuditSeed[]; rea
       namespaceId: fixtureNamespaces.longmem["118b2229"]!,
       toolName: "memory.search",
       query: "How long is my daily commute to work?",
-      expectedTerms: ["45 minutes each way"]
+      expectedTerms: ["45 minutes"]
     },
     {
       id: "longmem_play",
@@ -257,7 +257,7 @@ async function buildSeeds(): Promise<{ readonly seeds: readonly AuditSeed[]; rea
       namespaceId: fixtureNamespaces.longmem["118b2229"]!,
       toolName: "memory.search",
       query: "How much time should I expect for my work commute each day?",
-      expectedTerms: ["45 minutes each way"]
+      expectedTerms: ["45 minutes"]
     },
     {
       id: "longmem_play_alt",

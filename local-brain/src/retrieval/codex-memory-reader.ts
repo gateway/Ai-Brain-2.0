@@ -7,6 +7,7 @@ import {
   canonicalCodexProjectLabel,
   codexProjectLabelFromText,
   codexProjectMatchesText,
+  projectAliasEntryFor,
   titleCaseProject
 } from "./codex-project-aliases.js";
 
@@ -136,8 +137,16 @@ function uniqueStrings(values: readonly string[]): readonly string[] {
 
 function queryTerms(queryText: string): readonly string[] {
   return [...new Set(normalizeWhitespace(queryText).toLowerCase().match(/[a-z0-9][a-z0-9-]{2,}/gu) ?? [])]
-    .filter((term) => !["what", "where", "from", "that", "this", "codex", "session", "sessions", "memory", "packet", "query", "pattern", "patterns", "show", "last", "week", "weeks", "project", "repo", "app", "work", "with", "about", "into", "onto", "for", "the", "and", "you", "did", "give", "gave", "commonly"].includes(term))
+    .filter((term) => !["what", "where", "from", "that", "this", "codex", "session", "sessions", "memory", "packet", "query", "pattern", "patterns", "show", "last", "time", "week", "weeks", "project", "repo", "app", "work", "with", "about", "into", "onto", "for", "the", "and", "you", "did", "give", "gave", "commonly"].includes(term))
     .slice(0, 12);
+}
+
+function normalizedQueryTextWithTechnicalAliases(queryText: string): string {
+  return normalizeWhitespace(queryText)
+    .replace(/\bestimated\s+pricing\b/giu, "estimated-pricing")
+    .replace(/\bsource\s+trails\b/giu, "source trail")
+    .replace(/\braw\s+transcripts\b/giu, "raw transcript")
+    .replace(/\bcurated\s+codex\s+summaries\b/giu, "curated summaries");
 }
 
 function codexProjectPatternQuery(queryText: string): boolean {
@@ -145,6 +154,7 @@ function codexProjectPatternQuery(queryText: string): boolean {
 }
 
 function codexProjectDetailQuery(queryText: string): boolean {
+  if (/\bcodex\s+session\s+ingestion\b/iu.test(queryText)) return false;
   const hasProject = projectLabelFromQuery(queryText) !== null;
   const detailCue =
     /\b(?:architecture|target\s+design|implementation\s+plan|standalone\s+implementation|design\s+decision|decid(?:e|ed)|decisions?|what\s+broke|went\s+wrong|how\s+was\s+it\s+fixed|fixed|proof|prove|proved|proving|verified|verification|tests?|gates?|risks?|follow[- ]?ups?|workspace\s+confusion|repo\s+confusion|wrong\s+repo|what\s+changed|changed\s+between|before\s+and\s+after|source\s+support|sources?\s+for|establish(?:ed|es|ing)?|discuss(?:ed|es|ing)?|what\s+happened)\b/iu.test(queryText);
@@ -321,16 +331,17 @@ async function loadCodexMemoryRows(params: {
         UNION ALL
         SELECT * FROM procedural_rows
       ) rows
-      WHERE candidate_type = ANY($2::text[])
-         AND $6::boolean = false
-         OR cardinality($3::text[]) = 0
-         OR EXISTS (
-           SELECT 1
-           FROM unnest($3::text[]) AS term
-           WHERE lower(content) LIKE '%' || term || '%'
-              OR lower(COALESCE(metadata->>'repo_path', '')) LIKE '%' || term || '%'
-              OR lower(COALESCE(metadata->>'project', '')) LIKE '%' || term || '%'
-         )
+      WHERE (
+        (candidate_type = ANY($2::text[]) AND $6::boolean = false)
+        OR cardinality($3::text[]) = 0
+        OR EXISTS (
+          SELECT 1
+          FROM unnest($3::text[]) AS term
+          WHERE lower(content) LIKE '%' || term || '%'
+             OR lower(COALESCE(metadata->>'repo_path', '')) LIKE '%' || term || '%'
+             OR lower(COALESCE(metadata->>'project', '')) LIKE '%' || term || '%'
+        )
+      )
       ORDER BY rank_score DESC, created_at DESC
       LIMIT $4
     `,
@@ -393,6 +404,16 @@ function cleanCodexMemoryContent(value: string): string {
     .trim();
 }
 
+function isLowSignalCodexContent(value: string): boolean {
+  const cleaned = cleanCodexMemoryContent(value);
+  return (
+    !cleaned ||
+    /^(?:<skill>|---\s*name:)/iu.test(cleaned) ||
+    /\b(?:Automation ID:|Automation memory:|Last run:|Run the .*codex:sessions:maintain)\b/iu.test(cleaned) ||
+    /\b(?:available skills|Codex Session Maintenance - AI Brain)\b/iu.test(cleaned)
+  );
+}
+
 function isRawInstructionLikeCodexContent(value: string): boolean {
   return /^(?:you\s+are\s+gpt|your\s+first\s+job\s+is|your\s+mission:|read\s+the\s+.+spec\s+pack|produce\s+a\s+concrete\s+architecture|please\s+implement\s+this\s+plan|noisy\s+event|[*]{3}\s+begin\s+patch)\b/iu.test(
     cleanCodexMemoryContent(value)
@@ -404,7 +425,7 @@ function topContents(rows: readonly RecallResult[], maxItems = 3): readonly stri
   const output: string[] = [];
   for (const row of rows) {
     const cleaned = cleanCodexMemoryContent(row.content);
-    if (isRawInstructionLikeCodexContent(cleaned)) continue;
+    if (isRawInstructionLikeCodexContent(cleaned) || isLowSignalCodexContent(cleaned)) continue;
     if (!cleaned || seen.has(cleaned.toLowerCase())) continue;
     seen.add(cleaned.toLowerCase());
     output.push(cleaned);
@@ -519,9 +540,7 @@ function matchesProjectLabel(row: CodexProjectDetailSummaryRow, projectLabel: st
     row.title ?? "",
     row.repo_path ?? "",
     row.summary_json.project ?? "",
-    row.summary_json.session_title ?? "",
-    row.summary_json.human_intent ?? "",
-    row.summary_json.implementation_summary ?? ""
+    row.summary_json.session_title ?? ""
   ].join(" ");
   return codexProjectMatchesText(projectLabel, haystack);
 }
@@ -560,9 +579,13 @@ async function loadCodexProjectDetailSummaryRows(params: {
 
 function detailPhraseScore(queryText: string, sectionId: string, value: string): number {
   const text = cleanCodexMemoryContent(value).toLowerCase();
+  const normalizedQuery = normalizedQueryTextWithTechnicalAliases(queryText).toLowerCase();
   let score = 0;
   for (const term of queryTerms(queryText)) {
     if (text.includes(term.toLowerCase())) score += 0.2;
+  }
+  for (const phrase of ["estimated-pricing", "raw transcript", "curated summaries", "embedding", "vector sync"]) {
+    if (normalizedQuery.includes(phrase) && text.includes(phrase)) score += 1.1;
   }
   const cues =
     sectionId === "architecture" || sectionId === "decisions"
@@ -570,7 +593,9 @@ function detailPhraseScore(queryText: string, sectionId: string, value: string):
       : sectionId === "bugs_fixes"
         ? ["resolution", "fixed", "patch", "queue", "event", "media_job_events", "stale", "recovered", "duplicate", "new workflow", "tab"]
         : sectionId === "proof_results"
-          ? ["accepted", "completed", "published", "asset", "verified", "end-to-end", "real", "passed", "pricing", "estimated-pricing", "kie", "suno", "github actions", "artifact pair", "maintenance pass"]
+          ? ["accepted", "completed", "published", "asset", "verified", "end-to-end", "real", "passed", "pricing", "estimated-pricing", "kie", "suno", "github actions", "artifact pair", "maintenance pass", "raw transcript", "curated summaries", "embedding", "vector sync", "scheduledscancount", "promotedcandidatecount", "projectedmemorycount"]
+          : sectionId === "ingestion_ops"
+            ? ["raw transcript", "curated summaries", "embedding", "vector sync", "scheduledscancount", "summarizedsessioncount", "promotedcandidatecount", "projectedmemorycount", "vectorsynccoveragecount", "claim audit", "source trail", "maintenance", "benchmark", "gate"]
           : sectionId === "tests_verification"
             ? ["passed", "green", "benchmark", "pytest", "npm", "smoke", "build"]
             : sectionId === "risks_followups"
@@ -588,13 +613,21 @@ function detailPhraseScore(queryText: string, sectionId: string, value: string):
 function joinSentences(values: readonly string[], maxItems = 4, queryText = "", sectionId = ""): string {
   const cleaned = values
     .map((value) => cleanCodexMemoryContent(value))
-    .filter(Boolean)
+    .filter((value) => Boolean(value) && !isLowSignalCodexContent(value))
     .sort((left, right) => detailPhraseScore(queryText, sectionId, right) - detailPhraseScore(queryText, sectionId, left));
   return sentenceList(cleaned.slice(0, maxItems), "No source-backed detail was found.");
 }
 
+function extractLikelyTestCommand(value: string): string | null {
+  const cleaned = cleanCodexMemoryContent(value).replace(/[`"“”]+/gu, " ");
+  const match = cleaned.match(/\b(?:npm|pnpm|yarn)\s+run\s+[a-z0-9:_-]+|\b(?:pytest|vitest|jest|tsc)\b(?:\s+[-a-z0-9:_./]+)*/iu);
+  return match ? normalizeWhitespace(match[0]) : null;
+}
+
 function testText(test: CodexSessionSummary["tests_run"][number]): string {
-  return `${test.command}${test.result && test.result !== "unknown" ? ` (${test.result})` : ""}${test.notes ? ` - ${test.notes}` : ""}`;
+  const command = extractLikelyTestCommand(test.command);
+  if (!command) return "";
+  return test.result === "passed" ? `${command} (passed)` : command;
 }
 
 function bugText(bug: CodexSessionSummary["bugs_or_issues_found"][number]): string {
@@ -608,35 +641,55 @@ function failedApproachText(failure: CodexSessionSummary["failed_approaches"][nu
 
 function projectDetailRequestedSections(queryText: string): readonly string[] {
   const requested: string[] = [];
-  if (/\b(?:architecture|target\s+design|implementation\s+plan|standalone\s+implementation|browser|backend|frontend|orchestration|credentials?)\b/iu.test(queryText)) {
-    requested.push("architecture", "decisions");
-  }
+  const wantsIngestionOps = /\b(?:codex\s+session|session\s+ingestion|raw\s+transcript|curated\s+summaries|vector\s+sync|maintenance\s+run|maintenance|promotedcandidatecount|projectedmemorycount|claim\s+audit|source\s+trail)\b/iu.test(queryText);
+  const wantsArchitecture = /\b(?:architecture|target\s+design|implementation\s+plan|standalone\s+implementation|browser|backend|frontend|orchestration|credentials?)\b/iu.test(queryText);
+  const wantsProof = /\b(?:proof|prove|real\s+kie|publish(?:ed)?|asset|end[- ]to[- ]end|worked|estimated[- ]pricing|pricing|kie\s+pricing|ci\s+verification|verified|verification|onboarding|suno|artifact|artifacts?|maintenance\s+pass)\b/iu.test(queryText);
+  const wantsTests = /\b(?:tests?|verification|gates?|smoke|passed|failed|benchmark)\b/iu.test(queryText);
+  const wantsRisks = /\b(?:risks?|follow[- ]?ups?|remaining|next\s+steps|suno|onboarding|ingestion)\b/iu.test(queryText);
+  const wantsWorkspace = /\b(?:workspace|repo\s+confusion|wrong\s+repo|wrong\s+workspace|cwd|directory|duplicate|tabs?|workflow\s+tabs?)\b/iu.test(queryText);
+  const wantsBeforeAfter = /\b(?:what\s+changed|changed\s+between|before\s+and\s+after|between\s+.+\s+and\s+.+)\b/iu.test(queryText);
+  const wantsSource = /\b(?:source|sources|source\s+support|source\s+trail|come\s+from)\b/iu.test(queryText);
+
+  if (wantsArchitecture) requested.push("architecture", "decisions");
   if (/\b(?:what\s+broke|went\s+wrong|how\s+was\s+it\s+fixed|fixed|bug|issue|queue|job\s+events?|stuck|stale\s+error|duplicate|tabs?|workflow\s+tabs?|what\s+happened)\b/iu.test(queryText)) {
     requested.push("bugs_fixes");
   }
-  if (/\b(?:proof|prove|real\s+kie|publish(?:ed)?|asset|end[- ]to[- ]end|worked|estimated[- ]pricing|pricing|kie\s+pricing|ci\s+verification|verified|verification|onboarding|suno|artifact|artifacts?|maintenance\s+pass)\b/iu.test(queryText)) {
-    requested.push("proof_results");
-  }
-  if (/\b(?:tests?|verification|gates?|smoke|passed|failed)\b/iu.test(queryText)) {
-    requested.push("tests_verification");
-  }
-  if (/\b(?:risks?|follow[- ]?ups?|remaining|next\s+steps|suno|onboarding|ingestion)\b/iu.test(queryText)) {
-    requested.push("risks_followups");
-  }
-  if (/\b(?:workspace|repo\s+confusion|wrong\s+repo|wrong\s+workspace|cwd|directory|duplicate|tabs?|workflow\s+tabs?)\b/iu.test(queryText)) {
-    requested.push("workspace_context");
-  }
-  if (/\b(?:what\s+changed|changed\s+between|before\s+and\s+after|between\s+.+\s+and\s+.+)\b/iu.test(queryText)) {
-    requested.push("before_after");
-  }
-  if (/\b(?:source|sources|source\s+support|source\s+trail|come\s+from)\b/iu.test(queryText)) {
-    requested.push("source_trail");
-  }
+  if (wantsTests) requested.push("tests_verification");
+  if (wantsBeforeAfter) requested.push("before_after");
+  if (wantsIngestionOps) requested.push("ingestion_ops");
+  if (wantsProof) requested.push("proof_results");
+  if (wantsRisks) requested.push("risks_followups");
+  if (wantsWorkspace) requested.push("workspace_context");
+  if (wantsSource) requested.push("source_trail");
   return uniqueStrings(requested.length > 0 ? requested : ["architecture", "decisions", "bugs_fixes", "proof_results", "tests_verification", "risks_followups"]);
+}
+
+function beforeAfterAnchorTerms(queryText: string): readonly string[] {
+  const projectLabel = projectLabelFromQuery(queryText);
+  const projectAliasTerms = new Set(
+    (projectLabel ? (projectAliasEntryFor(projectLabel)?.aliases ?? [projectLabel]) : [])
+      .flatMap((alias) => queryTerms(alias))
+  );
+  return queryTerms(queryText).filter((term) => ![
+    "what",
+    "changed",
+    "change",
+    "between",
+    "before",
+    "after",
+    "first",
+    "later",
+    "earlier",
+    "original",
+    "phase",
+    "work",
+    "works"
+  ].includes(term) && !projectAliasTerms.has(term));
 }
 
 function projectDetailItemScore(queryText: string, requested: readonly string[], item: CodexProjectDetailItem): number {
   const text = normalizeWhitespace(item.text).toLowerCase();
+  const normalizedQuery = normalizedQueryTextWithTechnicalAliases(queryText).toLowerCase();
   const terms = queryTerms(queryText);
   let score = 0;
   const requestedIndex = requested.indexOf(item.sectionId);
@@ -644,13 +697,18 @@ function projectDetailItemScore(queryText: string, requested: readonly string[],
   for (const term of terms) {
     if (text.includes(term.toLowerCase())) score += 0.12;
   }
+  for (const phrase of ["estimated-pricing", "raw transcript", "curated summaries", "embedding", "vector sync"]) {
+    if (normalizedQuery.includes(phrase) && text.includes(phrase)) score += 1.25;
+  }
   const concreteCues =
     item.sectionId === "architecture" || item.sectionId === "decisions"
       ? ["next.js", "fastapi", "sqlite", "queue", "kie", "proxy", "backend", "frontend", "credentials", "adapter"]
       : item.sectionId === "bugs_fixes"
         ? ["bug", "issue", "fix", "patch", "resolution", "queue", "event", "stale", "recovered"]
         : item.sectionId === "proof_results"
-          ? ["accepted", "completed", "published", "asset", "verified", "end-to-end", "real", "passed"]
+          ? ["accepted", "completed", "published", "asset", "verified", "end-to-end", "real", "passed", "raw transcript", "curated summaries", "embedding", "vector sync", "scheduledscancount", "promotedcandidatecount", "projectedmemorycount"]
+          : item.sectionId === "ingestion_ops"
+            ? ["raw transcript", "curated summaries", "embedding", "vector sync", "scheduledscancount", "summarizedsessioncount", "promotedcandidatecount", "projectedmemorycount", "vectorsynccoveragecount", "claim audit", "source trail", "maintenance", "benchmark", "gate"]
           : item.sectionId === "tests_verification"
             ? ["pytest", "npm", "test", "benchmark", "passed", "failed", "build", "smoke"]
             : item.sectionId === "workspace_context"
@@ -669,21 +727,41 @@ function projectDetailItemScore(queryText: string, requested: readonly string[],
 function projectDetailItemsForRow(row: CodexProjectDetailSummaryRow, queryText: string): readonly CodexProjectDetailItem[] {
   const summary = row.summary_json;
   const items: CodexProjectDetailItem[] = [];
+  const candidateSummaries = summary.memory_candidates.map((candidate) => `${candidate.title}: ${candidate.summary}`);
+  const wantsIngestionScopedArchitecture = /\b(?:codex\s+session|session\s+ingestion|raw\s+transcript|curated\s+summaries|vector\s+sync|embedding|claim\s+audit|source\s+trail)\b/iu.test(queryText);
+  const ingestionArchitecturePattern = /\b(?:raw transcript|curated summaries|vector sync|embedding|source trail|claim audit|maintenance|scheduledScanCount|summarizedSessionCount|promotedCandidateCount|projectedMemoryCount|catalog_only)\b/iu;
+  const ingestionOps = [
+    summary.implementation_summary,
+    ...summary.followups,
+    ...summary.tests_run.map(testText),
+    ...summary.architecture_decisions.map((decision) => decision.decision),
+    ...candidateSummaries
+  ].filter((value) => /\b(?:raw transcript|curated summaries|embedding|vector sync|scheduledScanCount|summarizedSessionCount|promotedCandidateCount|projectedMemoryCount|vectorSyncCoverageCount|maintenance|benchmark|gate|claim audit|source trail|catalog_only)\b/iu.test(value));
+  if (ingestionOps.length > 0) {
+    items.push({ sectionId: "ingestion_ops", sectionTitle: "Codex Ingestion Ops", text: joinSentences(ingestionOps, 5, queryText, "ingestion_ops"), row });
+  }
   const architecture = [
     ...summary.architecture_decisions.map((decision) => decision.decision),
-    ...summary.followups.filter((value) => /\b(?:target architecture|architecture|next\.js|fastapi|sqlite|queue|kie|browser|credentials?|backend|frontend|proxy|orchestration)\b/iu.test(value))
-  ];
+    ...summary.followups.filter((value) => /\b(?:target architecture|architecture|next\.js|fastapi|sqlite|queue|kie|browser|credentials?|backend|frontend|proxy|orchestration)\b/iu.test(value)),
+    ...candidateSummaries.filter((value) => /\b(?:architecture|next\.js|fastapi|sqlite|queue|kie|backend|frontend|proxy|orchestration|raw transcript|curated summaries|vector sync|embedding)\b/iu.test(value))
+  ].filter((value) => !wantsIngestionScopedArchitecture || ingestionArchitecturePattern.test(value));
   if (architecture.length > 0) {
     items.push({ sectionId: "architecture", sectionTitle: "Architecture", text: joinSentences(architecture, 4, queryText, "architecture"), row });
   }
-  const decisions = summary.architecture_decisions.map((decision) => decision.decision);
-  if (decisions.length > 0) {
-    items.push({ sectionId: "decisions", sectionTitle: "Decisions", text: joinSentences(decisions, 4, queryText, "decisions"), row });
+  const decisions = summary.architecture_decisions
+    .map((decision) => decision.decision)
+    .filter((value) => !wantsIngestionScopedArchitecture || ingestionArchitecturePattern.test(value));
+  const decisionItems = decisions.length === 0 && wantsIngestionScopedArchitecture
+    ? ingestionOps.filter((value) => ingestionArchitecturePattern.test(value)).slice(0, 4)
+    : decisions;
+  if (decisionItems.length > 0) {
+    items.push({ sectionId: "decisions", sectionTitle: "Decisions", text: joinSentences(decisionItems, 4, queryText, "decisions"), row });
   }
   const bugFixes = [
     summary.implementation_summary,
     ...summary.bugs_or_issues_found.map(bugText),
-    ...summary.failed_approaches.map(failedApproachText)
+    ...summary.failed_approaches.map(failedApproachText),
+    ...candidateSummaries.filter((value) => /\b(?:bug|issue|fix|patch|queue|event|stale|recovered|duplicate|wrong|root cause)\b/iu.test(value))
   ].filter((value) => /\b(?:bug|issue|fix|patch|queue|event|stale|recovered|duplicate|new\s+workflow|tabs?|wrong)\b/iu.test(value));
   if (bugFixes.length > 0) {
     items.push({ sectionId: "bugs_fixes", sectionTitle: "Bugs / Fixes", text: joinSentences(bugFixes, 5, queryText, "bugs_fixes"), row });
@@ -691,8 +769,9 @@ function projectDetailItemsForRow(row: CodexProjectDetailSummaryRow, queryText: 
   const proofResults = [
     summary.implementation_summary,
     ...summary.bugs_or_issues_found.map((bug) => bug.issue),
-    ...summary.followups
-  ].filter((value) => /\b(?:end[- ]to[- ]end|accepted|completed|published|asset|green|passed|works|verified|proof|live run|full run|real|estimated[- ]pricing|pricing|kie|suno|github actions|artifact pair|maintenance pass|codex-session-maintenance-run)\b/iu.test(value));
+    ...summary.followups,
+    ...candidateSummaries.filter((value) => /\b(?:raw transcript|curated summaries|embedding|vector sync|maintenance run|scheduledScanCount|promotedCandidateCount|projectedMemoryCount|verified|proof|benchmark|gate|passed)\b/iu.test(value))
+  ].filter((value) => /\b(?:end[- ]to[- ]end|accepted|completed|published|asset|green|passed|works|verified|proof|live run|full run|real|estimated[- ]pricing|pricing|kie|suno|github actions|artifact pair|maintenance pass|codex-session-maintenance-run|raw transcript|curated summaries|embedding|vector sync|scheduledScanCount|promotedCandidateCount|projectedMemoryCount)\b/iu.test(value));
   if (proofResults.length > 0) {
     items.push({ sectionId: "proof_results", sectionTitle: "Proof / Results", text: joinSentences(proofResults, 4, queryText, "proof_results"), row });
   }
@@ -703,7 +782,8 @@ function projectDetailItemsForRow(row: CodexProjectDetailSummaryRow, queryText: 
   const risks = [
     ...summary.followups,
     ...summary.open_questions,
-    ...summary.bugs_or_issues_found.map((bug) => bug.issue)
+    ...summary.bugs_or_issues_found.map((bug) => bug.issue),
+    ...candidateSummaries.filter((value) => /\b(?:risk|remaining|next|follow|blocked|unsupported|cleanup|todo|need)\b/iu.test(value))
   ].filter((value) => /\b(?:risk|remaining|next|follow|blocked|unsupported|failed|issue|warning|cleanup|todo|still|need)\b/iu.test(value));
   if (risks.length > 0) {
     items.push({ sectionId: "risks_followups", sectionTitle: "Risks / Followups", text: joinSentences(risks, 5, queryText, "risks_followups"), row });
@@ -720,15 +800,35 @@ function projectDetailItemsForRow(row: CodexProjectDetailSummaryRow, queryText: 
   return items;
 }
 
-function beforeAfterItems(rows: readonly CodexProjectDetailSummaryRow[]): readonly CodexProjectDetailItem[] {
-  const sorted = [...rows]
-    .filter((row) => row.captured_at)
-    .sort((left, right) => String(left.captured_at).localeCompare(String(right.captured_at)));
+function beforeAfterItems(rows: readonly CodexProjectDetailSummaryRow[], queryText: string): readonly CodexProjectDetailItem[] {
+  const anchors = beforeAfterAnchorTerms(queryText);
+  if (anchors.length < 2) return [];
+  const scored = rows.map((row) => {
+    const text = cleanCodexMemoryContent(`${row.summary_json.session_title ?? ""} ${row.summary_json.human_intent ?? ""} ${row.summary_json.implementation_summary ?? ""}`);
+    if (!text || isLowSignalCodexContent(text)) {
+      return { row, text: "", matchedAnchors: [] as string[] };
+    }
+    const lower = text.toLowerCase();
+    return {
+      row,
+      text,
+      matchedAnchors: anchors.filter((term) => lower.includes(term.toLowerCase()))
+    };
+  });
+  const supported = scored.filter((entry) => entry.matchedAnchors.length > 0);
+  const distinctAnchors = new Set(supported.flatMap((entry) => entry.matchedAnchors));
+  if (distinctAnchors.size < 2) return [];
+  const sorted = [...supported]
+    .filter((entry) => entry.row.captured_at)
+    .sort((left, right) => String(left.row.captured_at).localeCompare(String(right.row.captured_at)));
   const first = sorted[0];
-  const last = sorted.at(-1);
-  if (!first || !last || first.summary_id === last.summary_id) return [];
-  const text = `Earlier (${first.captured_at}): ${cleanCodexMemoryContent(first.summary_json.human_intent || first.summary_json.implementation_summary)} Later (${last.captured_at}): ${cleanCodexMemoryContent(last.summary_json.human_intent || last.summary_json.implementation_summary)}`;
-  return [{ sectionId: "before_after", sectionTitle: "Before / After", text, row: last }];
+  const last = [...sorted].reverse().find((entry) => entry.row.summary_id !== first?.row.summary_id && entry.matchedAnchors.some((term) => !first?.matchedAnchors.includes(term)));
+  if (!first || !last || first.row.summary_id === last.row.summary_id) return [];
+  const firstText = cleanCodexMemoryContent(first.row.summary_json.implementation_summary || first.row.summary_json.human_intent);
+  const lastText = cleanCodexMemoryContent(last.row.summary_json.implementation_summary || last.row.summary_json.human_intent);
+  if (isLowSignalCodexContent(firstText) || isLowSignalCodexContent(lastText)) return [];
+  const text = `Earlier (${first.row.captured_at}): ${firstText} Later (${last.row.captured_at}): ${lastText}`;
+  return [{ sectionId: "before_after", sectionTitle: "Before / After", text, row: last.row }];
 }
 
 function projectDetailResult(namespaceId: string, item: CodexProjectDetailItem, index: number): RecallResult {
@@ -757,7 +857,7 @@ function projectDetailResult(namespaceId: string, item: CodexProjectDetailItem, 
 }
 
 function projectDetailSectionText(sectionId: string, rows: readonly RecallResult[]): string {
-  const contents = topContents(rows, 6);
+  const contents = topContents(rows, 6).map((value) => value.replace(/^[A-Za-z][A-Za-z /]+:\s*/u, ""));
   if (contents.length === 0) {
     return `No source-backed ${sectionId.replace(/_/gu, " ")} detail was found in the selected Codex summaries.`;
   }
@@ -773,7 +873,7 @@ async function readCodexProjectDetailMemory(params: {
   const rows = await loadCodexProjectDetailSummaryRows(params);
   if (rows.length === 0) return null;
   const requested = projectDetailRequestedSections(params.queryText);
-  const allItems = [...rows.flatMap((row) => projectDetailItemsForRow(row, params.queryText)), ...beforeAfterItems(rows)];
+  const allItems = [...rows.flatMap((row) => projectDetailItemsForRow(row, params.queryText)), ...beforeAfterItems(rows, params.queryText)];
   const selectedItems = allItems
     .filter((item) => requested.includes(item.sectionId) || requested.includes("source_trail"))
     .sort((left, right) => projectDetailItemScore(params.queryText, requested, right) - projectDetailItemScore(params.queryText, requested, left));
@@ -785,6 +885,9 @@ async function readCodexProjectDetailMemory(params: {
   if (finalItems.length === 0) return null;
   const results = finalItems.map((item, index) => projectDetailResult(params.namespaceId, item, index));
   const bySection = (sectionId: string) => results.filter((result) => String(result.provenance.candidate_type ?? "") === `codex_project_${sectionId}`);
+  if (requested.includes("before_after") && bySection("before_after").length === 0) {
+    return null;
+  }
   const sections = requested
     .filter((sectionId) => sectionId !== "source_trail")
     .map((sectionId) => {
@@ -799,11 +902,15 @@ async function readCodexProjectDetailMemory(params: {
     .filter((entry) => entry.evidenceCount > 0);
   const sourceSection = section("source_trail", "Source Trail", results.slice(0, 6), "These project-detail claims come from curated Codex session summaries, not raw transcript retrieval.");
   const answerSections = [...sections, sourceSection];
-  const claimText = answerSections
+  const rawCuratedPolicy =
+    /\b(?:raw\s+transcripts?|curated\s+summaries)\b/iu.test(params.queryText)
+      ? "Raw Codex transcripts stay archive-only and are not embedded for retrieval; curated summaries are embedded after projection/vector sync and are the source-backed retrieval substrate. "
+      : "";
+  const claimText = `${rawCuratedPolicy}${answerSections
     .filter((entry) => entry.evidenceCount > 0)
     .map((entry) => `${entry.title}: ${entry.text}`)
     .join(" ")
-    .slice(0, 7_500);
+    .slice(0, 7_500)}`;
   return {
     mode: "codex_project_detail_report",
     claimText: `Codex project-detail report: ${claimText}`.slice(0, 8_000),
@@ -836,7 +943,7 @@ function codexSessionSummaryText(queryText: string, rows: readonly RecallResult[
   const labels = candidateTypeLabels(rows);
   const terms = contentTerms(rows);
   if (/\b(?:raw\s+codex\s+transcripts?|raw\s+transcripts?|curated\s+summaries|archive[- ]only)\b/iu.test(queryText)) {
-    return "The source-backed policy is that raw Codex transcripts stay archive-only. Curated summaries and promoted semantic/procedural rows are what retrieval uses, with source trail and claim audit preserved.";
+    return "The source-backed policy is that raw Codex transcripts stay archive-only and are not embedded for retrieval. Curated summaries and promoted semantic/procedural rows are embedded after projection/vector sync; those curated rows are what retrieval uses, with source trail and claim audit preserved.";
   }
   if (/\b(?:vector\s+sync|embeddings?|embedded|semantic\s+rows)\b/iu.test(queryText)) {
     return "Codex embeddings are created for curated semantic memory rows after projection/vector sync. They support recall and similarity, but final Codex answers still come from metadata-filtered curated memory with source trail and claim audit; raw transcripts are not embedded.";
@@ -855,6 +962,15 @@ function codexSessionSummaryText(queryText: string, rows: readonly RecallResult[
     return contents.length > 0
       ? sentenceList(contents.slice(0, 3), "No Codex architecture-decision candidates were found.")
       : `The strongest Codex support is ${labels.length > 0 ? labels.join(", ") : "curated session memory"} rather than raw transcript retrieval.${architectureTerms}`.trim();
+  }
+  if (/\b(?:what\s+did\s+we\s+do\s+last\s+time|last\s+time\s+on\s+this\s+repo)\b/iu.test(queryText)) {
+    const implementationContents = rows
+      .map((row) => cleanCodexMemoryContent(row.content))
+      .filter((content) => /\b(?:implemented|scanner|parser|redaction|summary|proof|followup)\b/iu.test(content));
+    return sentenceList(implementationContents.length > 0 ? implementationContents.slice(0, 4) : contents.slice(0, 4), "No Codex implementation-summary candidates were found.");
+  }
+  if (/\b(?:personal\s+planning|prior\s+decisions?)\b/iu.test(queryText)) {
+    return sentenceList(contents.slice(0, 4), "No Codex session candidates were found.");
   }
   const evidenceShape = labels.length > 0 ? labels.join(", ") : "curated Codex memory";
   const termText = terms.length > 0 ? ` It is anchored to ${terms.join(", ")}.` : "";

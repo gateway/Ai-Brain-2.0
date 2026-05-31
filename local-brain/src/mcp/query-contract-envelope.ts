@@ -117,7 +117,7 @@ function normalizeSourceTrailEntries(value: unknown, maxItems = 12): readonly Re
     const occurredAt = typeof record.occurredAt === "string" ? record.occurredAt : null;
     const sourceTable = typeof record.sourceTable === "string" ? record.sourceTable : null;
     const sourceRowId = typeof record.sourceRowId === "string" ? record.sourceRowId : null;
-    const quote = normalizeSnippet(record.quote, 220);
+    const quote = normalizeSnippet(record.quote, 420);
     const sourceMemoryIds = uniqueStrings(normalizeArray(record.sourceMemoryIds));
     const sourceChunkIds = uniqueStrings(normalizeArray(record.sourceChunkIds));
     const sourceSceneIds = uniqueStrings(normalizeArray(record.sourceSceneIds));
@@ -602,9 +602,130 @@ function calendarAnswer(commitments: readonly any[]): string | null {
   return `Commitments: ${items.join("; ")}.`;
 }
 
+const expandableSourceWindowPrefixPattern =
+  /(?:^|\s)(?:codex session|pdf|omi note|repo doc|task export|calendar export|markdown|other)\s+source\s+window:\s*/giu;
+
+function cleanExpandableMemoryText(value: unknown, max = 520): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const cleaned = value
+    .replace(/\s+/gu, " ")
+    .replace(expandableSourceWindowPrefixPattern, " ")
+    .replace(/^other\s+packet\s+summary:\s*/iu, "")
+    .trim();
+  if (!cleaned) {
+    return null;
+  }
+  const bounded = cleaned.length > max ? `${cleaned.slice(0, max - 1).trim()}…` : cleaned;
+  return /[.!?]$/u.test(bounded) ? bounded : `${bounded}.`;
+}
+
+function expandableMemorySegments(value: unknown): readonly string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  const marked = value.replace(expandableSourceWindowPrefixPattern, "\n");
+  return marked
+    .split(/\n+/u)
+    .map((segment) => cleanExpandableMemoryText(segment))
+    .filter((segment): segment is string => Boolean(segment));
+}
+
+function querySignalTerms(queryText: string): readonly string[] {
+  const stopwords = new Set([
+    "about",
+    "after",
+    "and",
+    "answer",
+    "before",
+    "come",
+    "did",
+    "does",
+    "evidence",
+    "for",
+    "from",
+    "how",
+    "into",
+    "mentioned",
+    "source",
+    "sources",
+    "summarize",
+    "support",
+    "that",
+    "the",
+    "these",
+    "this",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "window",
+    "windows",
+    "with"
+  ]);
+  return uniqueStrings(
+    queryText
+      .toLowerCase()
+      .split(/[^a-z0-9-]+/u)
+      .map((term) => term.trim())
+      .filter((term) => term.length >= 3 && !stopwords.has(term))
+  );
+}
+
+function rankExpandableSegments(queryText: string, segments: readonly string[]): readonly string[] {
+  const terms = querySignalTerms(queryText);
+  return [...segments].sort((left, right) => {
+    const leftLower = left.toLowerCase();
+    const rightLower = right.toLowerCase();
+    const leftScore = terms.reduce((sum, term) => sum + (leftLower.includes(term) ? 1 : 0), 0);
+    const rightScore = terms.reduce((sum, term) => sum + (rightLower.includes(term) ? 1 : 0), 0);
+    return rightScore - leftScore || left.length - right.length;
+  });
+}
+
+function expandableMemoryAnswer(params: {
+  readonly queryText: string;
+  readonly finalClaimSource: string | null;
+  readonly expandable: boolean;
+  readonly answerSections: readonly Record<string, unknown>[];
+  readonly sourceQuotes: readonly string[];
+}): string | null {
+  if (!params.expandable && params.finalClaimSource !== "expandable_memory_reader") {
+    return null;
+  }
+  const sectionTexts = rankExpandableSegments(
+    params.queryText,
+    params.answerSections.flatMap((section) => expandableMemorySegments(section.text))
+  );
+  const quoteTexts = rankExpandableSegments(params.queryText, params.sourceQuotes.flatMap((quote) => expandableMemorySegments(quote)));
+  const firstText = sectionTexts[0] ?? quoteTexts[0] ?? null;
+  if (!firstText) {
+    return null;
+  }
+  const query = params.queryText.toLowerCase();
+  if (/^\s*who\b/u.test(query)) {
+    return firstText.replace(/^the\s+(.+?)\s+note\s+mentioned\s+/iu, "The source mentions ");
+  }
+  if (/\bwhich\s+task\s+source\b|\bwhat\s+task\s+source\b/u.test(query)) {
+    return `The task source says: ${firstText}`;
+  }
+  if (/\bshow\s+(?:evidence|source|sources|support)\b/u.test(query)) {
+    return `Evidence: ${firstText}`;
+  }
+  if (/\bsummarize\b/u.test(query)) {
+    return firstText;
+  }
+  return firstText;
+}
+
 function answerForToolPayload(toolName: QueryToolName, queryText: string, payload: Record<string, any>): string | undefined {
   if (typeof payload.answer === "string" && payload.answer.trim().length > 0) {
     return payload.answer;
+  }
+  if (typeof payload?.meta?.insightReport?.answer === "string" && payload.meta.insightReport.answer.trim().length > 0) {
+    return payload.meta.insightReport.answer;
   }
   if (payload.followUpAction === "route_to_clarifications" && typeof payload.clarificationHint?.suggestedPrompt === "string") {
     return payload.clarificationHint.suggestedPrompt;
@@ -720,6 +841,25 @@ export async function attachStableQueryContractEnvelope(params: {
   const sourceMemoryIds = uniqueStrings(sourceTrail.flatMap((item) => normalizeArray(item.sourceMemoryIds)));
   const sourceChunkIds = uniqueStrings(sourceTrail.flatMap((item) => normalizeArray(item.sourceChunkIds)));
   const sourceSceneIds = uniqueStrings(sourceTrail.flatMap((item) => normalizeArray(item.sourceSceneIds)));
+  const summaryNodeIds = uniqueStrings(normalizeArray(meta.summaryNodeIds));
+  const sourceWindowIds = uniqueStrings(normalizeArray(meta.sourceWindowIds));
+  const expansionTrace = Array.isArray(meta.expansionTrace)
+    ? meta.expansionTrace.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object").slice(0, 12)
+    : [];
+  const memoryPacketId = typeof meta.memoryPacketId === "string" && meta.memoryPacketId.trim() ? meta.memoryPacketId : null;
+  const expandable = meta.expandable === true || sourceWindowIds.length > 0;
+  const selectedReader = typeof meta.selectedReader === "string" ? meta.selectedReader : null;
+  const answer =
+    answerForToolPayload(params.toolName, params.queryText, params.payload) ??
+    expandableMemoryAnswer({
+      queryText: params.queryText,
+      finalClaimSource,
+      expandable,
+      answerSections: answerSectionsWithAudit,
+      sourceQuotes
+    }) ??
+    undefined;
+  const insightReport = meta.insightReport && typeof meta.insightReport === "object" ? (meta.insightReport as Record<string, unknown>) : null;
   const operatorActionPrompt = buildOperatorActionPrompt({
     queryText: params.queryText,
     evidenceCount,
@@ -745,7 +885,16 @@ export async function attachStableQueryContractEnvelope(params: {
 
   return {
     ...params.payload,
-    ...(answerForToolPayload(params.toolName, params.queryText, params.payload) ? { answer: answerForToolPayload(params.toolName, params.queryText, params.payload) } : {}),
+    ...(answer ? { answer } : {}),
+    ...(answer && expandable
+      ? {
+          answerPresentationTrace: {
+            presenter: "expandable_memory_presenter_v1",
+            source: answerSectionsWithAudit.length > 0 ? "answerSections" : "sourceQuotes",
+            mode: "compact"
+          }
+        }
+      : {}),
     queryContract: queryContractName,
     retrievalDomain,
     answerShape,
@@ -760,6 +909,22 @@ export async function attachStableQueryContractEnvelope(params: {
     sourceMemoryIds,
     sourceChunkIds,
     sourceSceneIds,
+    memoryPacketId,
+    summaryNodeIds,
+    sourceWindowIds,
+    expandable,
+    expansionTrace,
+    selectedReader,
+    ...(insightReport
+      ? {
+          insightReport,
+          insightType: typeof meta.insightType === "string" ? meta.insightType : insightReport.insightType ?? null,
+          insightVerification: meta.insightVerification && typeof meta.insightVerification === "object" ? meta.insightVerification : insightReport.verification ?? null,
+          observations: Array.isArray(meta.insightObservations) ? meta.insightObservations : insightReport.observations ?? [],
+          examples: Array.isArray(meta.insightExamples) ? meta.insightExamples : insightReport.examples ?? [],
+          suggestions: Array.isArray(meta.insightSuggestions) ? meta.insightSuggestions : insightReport.suggestions ?? []
+        }
+      : {}),
     queryEmbeddingCacheHit,
     vectorContribution,
     vectorBlockedReason,

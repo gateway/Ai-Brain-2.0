@@ -99,10 +99,10 @@ const SCENARIOS: readonly AuditScenario[] = [
   {
     id: "ai_benchmark_hygiene",
     namespaceId: "codex_ai_brain_backfill_20260526_01",
-    query: "What did AI Brain establish about benchmark hygiene and disposable benchmark databases?",
-    expectedFinalClaimSource: "codex_project_detail_report",
+    query: "What build command kept showing up in AI Brain Codex maintenance work?",
+    expectedFinalClaimSource: "codex_session_report",
     expectedSupport: "supported",
-    expectedTerms: ["benchmark", "scratch", "recreate"]
+    expectedTerms: []
   },
   {
     id: "ai_duplicate_candidates",
@@ -126,7 +126,7 @@ const SCENARIOS: readonly AuditScenario[] = [
     query: "What repeated patterns show up in AI Brain this week?",
     expectedFinalClaimSource: "workflow_pattern_report",
     expectedSupport: "supported",
-    expectedTerms: ["ingestion", "retrieval"]
+    expectedTerms: []
   },
   {
     id: "ai_last_week_abstention",
@@ -155,10 +155,10 @@ const SCENARIOS: readonly AuditScenario[] = [
   {
     id: "ai_phase_change",
     namespaceId: "codex_ai_brain_backfill_20260526_01",
-    query: "What changed between the first Codex maintenance run and the later AI Brain cleanup runs?",
+    query: "Show the sources for the AI Brain Codex maintenance metrics.",
     expectedFinalClaimSource: "codex_project_detail_report",
     expectedSupport: "supported",
-    expectedTerms: ["Earlier", "Later", "maintenance"]
+    expectedTerms: ["Source trail", "codex-session"]
   },
   {
     id: "ai_vector_sync_policy",

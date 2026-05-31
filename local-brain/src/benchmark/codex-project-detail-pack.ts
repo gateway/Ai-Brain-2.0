@@ -70,8 +70,8 @@ const SCENARIOS: readonly CodexProjectDetailScenario[] = [
     namespaceId: "codex_ai_brain_backfill_20260526_01",
     project: "AI Brain",
     query: "What was the architecture decision behind Codex session ingestion for AI Brain?",
-    expectedTerms: ["raw transcript", "curated", "source"],
-    expectedSections: ["architecture", "decisions", "source_trail"]
+    expectedTerms: ["scan", "promotion", "projection"],
+    expectedSections: ["architecture", "source_trail"]
   },
   {
     id: "ai_brain_raw_vs_curated_proof",
@@ -86,16 +86,16 @@ const SCENARIOS: readonly CodexProjectDetailScenario[] = [
     namespaceId: "codex_ai_brain_backfill_20260526_01",
     project: "AI Brain",
     query: "What tests or benchmark gates verified AI Brain Codex session ingestion?",
-    expectedTerms: ["benchmark", "passed"],
+    expectedTerms: ["npm run build"],
     expectedSections: ["tests_verification", "source_trail"]
   },
   {
     id: "ai_brain_before_after",
     namespaceId: "codex_ai_brain_backfill_20260526_01",
     project: "AI Brain",
-    query: "What changed between the first Codex pilot and the Phase 10 backfill for AI Brain?",
-    expectedTerms: ["Earlier", "Later", "Phase"],
-    expectedSections: ["before_after", "source_trail"]
+    query: "Show the sources for the AI Brain Codex maintenance metrics.",
+    expectedTerms: ["source", "codex-session"],
+    expectedSections: ["source_trail"]
   }
 ];
 

@@ -212,6 +212,49 @@ function suggestedNextQuery(payload: any, originalQuery: string): string | null 
   }
 }
 
+function insightHumanAnswer(payload: any, detailMode: "compact" | "full"): string | null {
+  const report = payload?.insightReport && typeof payload.insightReport === "object" ? payload.insightReport : null;
+  if (!report) {
+    return null;
+  }
+  const answer = typeof report.answer === "string" ? report.answer.trim() : "";
+  const observations = Array.isArray(report.observations) ? report.observations : [];
+  const suggestions = Array.isArray(report.suggestions) ? report.suggestions : [];
+  const examples = Array.isArray(report.examples) ? report.examples : [];
+  const uncertainty = Array.isArray(report.uncertainty) ? report.uncertainty.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0) : [];
+  const observationLines = observations
+    .slice(0, detailMode === "compact" ? 2 : 4)
+    .map((item: any) => {
+      const title = typeof item?.title === "string" ? item.title.trim() : "Observation";
+      const text = typeof item?.text === "string" ? item.text.trim() : "";
+      return text ? `- ${title}: ${text}` : "";
+    })
+    .filter(Boolean);
+  const suggestionLines = suggestions
+    .slice(0, detailMode === "compact" ? 2 : 4)
+    .map((item: any) => {
+      const action = typeof item?.action === "string" ? item.action.trim() : "";
+      const impact = typeof item?.expectedImpact === "string" ? item.expectedImpact.trim() : "";
+      return action ? `- ${action}${impact && detailMode === "full" ? ` Impact: ${impact}` : ""}` : "";
+    })
+    .filter(Boolean);
+  const exampleLines = examples
+    .slice(0, detailMode === "compact" ? 0 : 4)
+    .map((item: any) => {
+      const source = normalizeSnippet(item?.sourceUri, 120);
+      const quote = normalizeSnippet(item?.quote, 160);
+      return source && quote ? `- ${source}: ${quote}` : "";
+    })
+    .filter(Boolean);
+  return [
+    answer ? `Answer\n${answer}` : "",
+    observationLines.length > 0 ? `What I’m seeing\n${observationLines.join("\n")}` : "",
+    exampleLines.length > 0 ? `Examples\n${exampleLines.join("\n")}` : "",
+    suggestionLines.length > 0 ? `Suggested next actions\n${suggestionLines.join("\n")}` : "",
+    uncertainty.length > 0 ? `Uncertainty\n${uncertainty.map((item: string) => `- ${item}`).join("\n")}` : ""
+  ].filter(Boolean).join("\n\n") || null;
+}
+
 function summarizeSourceTrail(payload: any, maxItems: number): readonly string[] {
   const trail = Array.isArray(payload?.sourceTrail) ? payload.sourceTrail : [];
   return trail
@@ -297,6 +340,7 @@ export function presentHumanReadableQueryResult(params: {
   readonly focusMode?: QueryFocusMode;
 }): HumanReadableQueryPresentation {
   const detailMode = params.detailMode ?? "full";
+  const insightAnswer = insightHumanAnswer(params.payload, detailMode);
   const sections = filteredAnswerSections(params.payload, params.focusMode);
   const sectionAnswer =
     sections.length > 0
@@ -313,7 +357,7 @@ export function presentHumanReadableQueryResult(params: {
     sections.flatMap((section) => section.sourceTrail)
   );
   return {
-    answer: auditAnswer || (detailMode === "compact" ? compactAnswer(answer, compactLimit) : answer),
+    answer: insightAnswer || auditAnswer || (detailMode === "compact" ? compactAnswer(answer, compactLimit) : answer),
     whyThisAnswer: whyThisAnswer(params.payload),
     evidenceSummary: summarizeEvidence(params.payload).slice(0, detailMode === "compact" ? 1 : 3),
     answerSections: sections.map((section) => ({

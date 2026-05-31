@@ -12,6 +12,7 @@ export type RetrievalDomain =
   | "list_collection"
   | "procedural_memory"
   | "source_audit"
+  | "cross_corpus_insight"
   | "review_unknown";
 
 export type QueryContractNameForRegistry =
@@ -28,6 +29,7 @@ export type QueryContractNameForRegistry =
   | "engineering_memory_packet"
   | "workflow_pattern_report"
   | "codex_source_audit"
+  | "insight_report"
   | "task_list"
   | "procedure_lookup"
   | "source_audit"
@@ -210,6 +212,18 @@ export const RETRIEVAL_DOMAIN_SPECS: readonly RetrievalDomainSpec[] = [
     reviewOnlyWhen: ["source_absent", "source_inconclusive"]
   },
   {
+    domain: "cross_corpus_insight",
+    description: "Source-backed observations, trends, recommendations, and what-we-learned reports across selected corpora.",
+    allowedSourceRoutes: ALL_SOURCE_ROUTES,
+    allowedTaxonomyProfiles: ["direct_fact", "relation_event", "temporal_event", "task_ops", "profile_report", "document_summary", "review_only"],
+    allowedQueryContracts: ["insight_report", "document_lookup", "profile_report", "task_list", "source_audit"],
+    allowedAnswerShapes: ["report"],
+    allowedReadModels: ["insight_support_bundle", "source_audit_index", "document_section_projection", "task_projection"],
+    requiredEvidence: { sourceQuote: true, sourceRowId: false, subjectBinding: false },
+    blockedFallbacks: ["weak_canonical_profile", "generic_lexical_without_support"],
+    reviewOnlyWhen: ["source_absent", "unsupported_recommendation", "citation_faithfulness_failed"]
+  },
+  {
     domain: "review_unknown",
     description: "Unknown, weakly understood, or unapproved source/query shape.",
     allowedSourceRoutes: ["generic_text", "unsupported_binary"],
@@ -239,6 +253,7 @@ const QUERY_CONTRACT_PRIMARY_DOMAIN: Readonly<Record<QueryContractNameForRegistr
   engineering_memory_packet: "engineering_specs",
   workflow_pattern_report: "engineering_specs",
   codex_source_audit: "engineering_specs",
+  insight_report: "cross_corpus_insight",
   task_list: "task_ops",
   procedure_lookup: "procedural_memory",
   source_audit: "source_audit",

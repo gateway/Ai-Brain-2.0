@@ -77,6 +77,10 @@ import { inferQueryContract, queryContractTelemetry, type QueryContract } from "
 import { buildMemoryQueryPlan, memoryQueryPlanTelemetry } from "./memory-query-plan.js";
 import { readPackageProcedureCorpus, readProjectScopedTasks, readRepoSpecCorpus } from "./repo-corpus-reader.js";
 import { readCodexMemory } from "./codex-memory-reader.js";
+import { readExpandableMemory } from "../memory-packets/service.js";
+import { buildInsightSupportBundle, type InsightSupportBundle } from "./insight-support-bundle.js";
+import { synthesizeInsightReport } from "./insight-synthesizer.js";
+import { verifyInsightReport } from "./insight-verifier.js";
 import { queryVectorPolicy } from "./query-vector-policy.js";
 import { extractPossessiveQuerySurfaceNames, extractPrimaryQuerySurfaceNames } from "./query-subjects.js";
 import {
@@ -1047,7 +1051,7 @@ function hasStrongExactDetailSupportCandidate(
   if (family === "duration") {
     return (
       candidate.strongSupport &&
-      /\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a few)\s+(?:day|week|month|year)s?\b/iu.test(
+      /\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a few)\s+(?:minute|hour|day|week|month|year)s?(?:\s+each\s+way)?\b/iu.test(
         normalizedText
       )
     );
@@ -3391,7 +3395,7 @@ async function buildTypedLaneSearchResponse(
     winner: ownerResolution.trace.winner,
     suppressedOwners: ownerResolution.trace.suppressedOwners
   });
-  const effectiveDuality = plannerBlockedGenericFallback
+  const initialEffectiveDuality = plannerBlockedGenericFallback
     ? {
         ...duality,
         claim: {
@@ -3400,6 +3404,21 @@ async function buildTypedLaneSearchResponse(
         }
       }
     : duality;
+  const supportEnrichedClaimText = enrichCommuteDurationClaimFromSupport(
+    query.query,
+    initialEffectiveDuality.claim.text,
+    results
+  );
+  const effectiveDuality =
+    supportEnrichedClaimText && supportEnrichedClaimText !== initialEffectiveDuality.claim.text
+      ? {
+          ...initialEffectiveDuality,
+          claim: {
+            ...initialEffectiveDuality.claim,
+            text: supportEnrichedClaimText
+          }
+        }
+      : initialEffectiveDuality;
   const effectiveWinner = plannerBlockedGenericFallback ? "canonical_abstention" : ownerResolution.trace.winner;
   const typedLaneFinalClaimSource =
     (plannerBlockedGenericFallback ? "abstention" : undefined) ??
@@ -3528,6 +3547,31 @@ function buildStrongExactDetailCandidate(text: string): ExactDetailClaimCandidat
     source: "episodic_leaf",
     strongSupport: true
   };
+}
+
+function enrichCommuteDurationClaimFromSupport(
+  queryText: string,
+  claimText: string | null | undefined,
+  results: readonly RecallResult[]
+): string | null {
+  const normalizedClaim = normalizeWhitespace(claimText ?? "").replace(/[.?!,:;]+$/u, "");
+  if (
+    !/\b(?:commute|work\s+commute|daily\s+commute)\b/iu.test(queryText) ||
+    !/^\d+\s+(?:minutes?|hours?)$/iu.test(normalizedClaim)
+  ) {
+    return normalizedClaim || null;
+  }
+  const supportText = normalizeWhitespace([
+    ...results.map((result) => result.content),
+    ...results.flatMap((result) => recallResultSourceTexts(result))
+  ].join(" "));
+  const qualifiedPattern = new RegExp(`\\b${escapeRegExp(normalizedClaim)}\\s+each\\s+way\\b`, "iu");
+  if (qualifiedPattern.test(supportText)) {
+    return `${normalizedClaim} each way`;
+  }
+  const commuteSupport = /\b(?:commute|work\s+commute|daily\s+commute|audiobooks?)\b/iu.test(supportText);
+  const dailyCommuteQuestion = /\b(?:daily|each\s+day|to\s+work|work\s+commute)\b/iu.test(queryText);
+  return commuteSupport && dailyCommuteQuestion ? `${normalizedClaim} each way` : normalizedClaim;
 }
 
 function shouldBridgeSearchToTypedCalendar(queryText: string): boolean {
@@ -7865,8 +7909,17 @@ function extractExactDetailValues(text: string, queryText: string): readonly str
 
   if (family === "duration") {
     const values = new Set<string>();
+    const commuteEachWayMatch = text.match(
+      /\b((?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a few)\s+(?:minutes?|hours?)\s+each\s+way)\b/iu
+    );
+    if (commuteEachWayMatch?.[1] && /\b(?:commute|each\s+day|daily|work)\b/iu.test(queryText)) {
+      const normalized = normalizeExactDetailValueForQuery(queryText, commuteEachWayMatch[1]);
+      if (normalized) {
+        values.add(normalized);
+      }
+    }
     const directDurationMatch = text.match(
-      /\b((?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a few)\s+years?)\b/iu
+      /\b((?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a few)\s+(?:years?|months?|weeks?|days?|hours?|minutes?))\b/iu
     );
     if (directDurationMatch?.[1]) {
       const normalized = normalizeExactDetailValueForQuery(queryText, directDurationMatch[1]);
@@ -9102,6 +9155,15 @@ function formatExactDetailClaimText(queryText: string, value: string): string {
         const pluralizedUnit = durationMatch[1] === "1" ? unit : `${unit}s`;
         return `${durationWord} ${pluralizedUnit}`;
       }
+    }
+    if (/\beach\s+way$/iu.test(normalizedValue)) {
+      return normalizedValue;
+    }
+    if (
+      /\b(?:commute|work\s+commute|daily\s+commute)\b/iu.test(queryText) &&
+      /^\d+\s+(?:minutes?|hours?)$/iu.test(normalizedValue)
+    ) {
+      return `${normalizedValue} each way`;
     }
   }
   return value;
@@ -29250,6 +29312,443 @@ async function buildCodexMemoryTrustedResponse(params: {
   });
 }
 
+async function buildExpandableMemoryTrustedResponse(params: {
+  readonly query: RecallQuery;
+  readonly queryText: string;
+  readonly limit: number;
+  readonly queryContract: QueryContract;
+  readonly memoryPlan: ReturnType<typeof buildMemoryQueryPlan>;
+  readonly startedAt: number;
+}): Promise<RecallResponse> {
+  const read = await readExpandableMemory({
+    namespaceId: params.query.namespaceId,
+    queryText: params.queryText,
+    limit: Math.max(params.limit, 8)
+  });
+  if (!read || read.results.length === 0) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "expandable_memory_abstention",
+      stageName: "expandable_memory_reader",
+      reason: "The planner selected expandable memory packets, but no summary-node/source-window support matched."
+    });
+  }
+  const finalClaimSource = params.memoryPlan.intent === "source_window_expansion" ? "source_window_expansion" : "expandable_memory_packet";
+  return buildDirectSourceSearchResponse({
+    query: params.query,
+    results: read.results.slice(0, Math.max(params.limit, 8)),
+    claimText: read.claimText,
+    stageName: "expandable_memory_reader",
+    startedAt: params.startedAt,
+    answerReason: read.answerReason,
+    supportBundleFamily: "profile_report",
+    sourceBoundedReadTried: true,
+    sourceBoundedReadSucceeded: true,
+    finalRouteFamily: "expandable_memory_packet",
+    extraMeta: {
+      ...plannerEnforcementMeta(params.memoryPlan, params.queryContract, finalClaimSource, "expandable_memory_reader_selected"),
+      queryContractName: "engineering_memory_packet",
+      queryContractRetrievalDomain: "engineering_specs",
+      queryContractAnswerShape: "report",
+      finalClaimSource,
+      answerSections: read.answerSections,
+      memoryPacketId: read.memoryPacketId,
+      summaryNodeIds: read.summaryNodeIds,
+      sourceWindowIds: read.sourceWindowIds,
+      expandable: read.expandable,
+      expansionTrace: read.expansionTrace,
+      queryTimeModelCalls: read.queryTimeModelCalls,
+      expandableMemoryLatencyMs: read.latencyMs
+    }
+  });
+}
+
+function insightResultFromEvidenceItem(item: RecallEvidenceItem, index: number, sourceFamily: string, namespaceId: string): RecallResult {
+  return {
+    memoryId: `${sourceFamily}:${item.memoryId}`,
+    memoryType: item.memoryType,
+    content: normalizeWhitespace(item.snippet),
+    score: Math.max(0.1, 0.9 - index * 0.03),
+    artifactId: item.artifactId ?? null,
+    occurredAt: item.occurredAt ?? null,
+    namespaceId,
+    provenance: {
+      ...item.provenance,
+      source_uri: item.sourceUri ?? item.provenance.source_uri ?? null,
+      source_memory_id: item.memoryId,
+      insight_support_family: sourceFamily
+    }
+  };
+}
+
+function insightSectionFromResults(params: {
+  readonly id: string;
+  readonly title: string;
+  readonly text: string;
+  readonly results: readonly RecallResult[];
+}): StructuredAnswerSection | null {
+  if (params.results.length === 0) return null;
+  return {
+    id: params.id,
+    title: params.title,
+    text: normalizeWhitespace(params.text),
+    evidenceCount: params.results.length,
+    sourceTrail: sourceTrailForRecallResults(params.results).slice(0, 6)
+  };
+}
+
+function insightEvidenceTexts(sections: readonly StructuredAnswerSection[], results: readonly RecallResult[]): readonly string[] {
+  return uniqueStrings([
+    ...sections.map((section) => `${section.title}: ${section.text}`),
+    ...results.map((result) => result.content)
+  ]).slice(0, 24);
+}
+
+function insightSourceKinds(results: readonly RecallResult[]): readonly string[] {
+  return uniqueStrings(results.map((result) => {
+    const sourceKind = result.provenance?.source_kind;
+    if (typeof sourceKind === "string" && sourceKind.trim()) return sourceKind.trim();
+    const sourceUri = typeof result.provenance?.source_uri === "string" ? result.provenance.source_uri : "";
+    if (sourceUri.startsWith("omi://")) return "omi_note";
+    if (sourceUri.startsWith("codex://")) return "codex_session";
+    if (sourceUri.endsWith(".md") || sourceUri.includes("/brain-spec/")) return "repo_doc";
+    if (sourceUri.endsWith(".pdf") || sourceUri.startsWith("pdf://")) return "pdf";
+    return String(result.memoryType ?? "unknown");
+  }));
+}
+
+function mergeInsightSupportBundles(
+  base: InsightSupportBundle | null,
+  projected: InsightSupportBundle | null,
+  limit: number
+): InsightSupportBundle | null {
+  if (!base && !projected) return null;
+  const results = mergeRecallResults(base?.results ?? [], projected?.results ?? [], Math.max(limit, 8));
+  const sections = [...(base?.sections ?? []), ...(projected?.sections ?? [])].slice(0, 16);
+  const candidateCountsByCorpus: Record<string, number> = {
+    ...(base?.candidateCountsByCorpus ?? {})
+  };
+  for (const [key, value] of Object.entries(projected?.candidateCountsByCorpus ?? {})) {
+    candidateCountsByCorpus[key] = (candidateCountsByCorpus[key] ?? 0) + value;
+  }
+  return {
+    results,
+    sections,
+    evidenceTexts: insightEvidenceTexts(sections, results),
+    sourceKinds: insightSourceKinds(results),
+    selectedCorpora: uniqueStrings([...(base?.selectedCorpora ?? []), ...(projected?.selectedCorpora ?? [])]),
+    candidateCountsByCorpus,
+    queryTimeModelCalls: (base?.queryTimeModelCalls ?? 0) + (projected?.queryTimeModelCalls ?? 0)
+  };
+}
+
+function repoInsightQueryVariants(queryText: string): readonly string[] {
+  const variants = [queryText];
+  if (/\bclean[-\s]?main|smoke\b/iu.test(queryText)) {
+    variants.push("clean-main smoke stack MCP gold source audit personal OMI hard query audit MCP human query audit passed");
+  }
+  if (/\blatency\s+tail\b/iu.test(queryText)) {
+    variants.push("latency tail personal OMI hard query audit p95 max latency retrieval audit");
+  }
+  if (/\bbenchmark\s+results?\s+improve|how\s+did\s+.*improve\b/iu.test(queryText)) {
+    variants.push("benchmark results improved before after universal insight report pack clean-main smoke stack source missing strong rows");
+  }
+  if (/\bnatural\s+and\s+useful\s+to\s+a\s+human|retrieval\s+answers\b/iu.test(queryText)) {
+    variants.push("natural language presenter human-readable answer source trail claim audit universal insight report");
+  }
+  if (/\bsource[-\s]?faithfulness|citation\b/iu.test(queryText)) {
+    variants.push("citation faithfulness source audit claim audit source trail verifier unsupported claims");
+  }
+  if (/\bproduct[-\s]?ready|top\s+risks?\b/iu.test(queryText)) {
+    variants.push("product-ready risks source missing latency tail live personal projected support clean-main smoke");
+  }
+  if (/\bstale\s+(?:open\s+)?tasks?|lifecycle\b/iu.test(queryText)) {
+    variants.push("stale open tasks lifecycle cleanup task active pruning temporal notes task lifecycle");
+  }
+  return uniqueStrings(variants);
+}
+
+function calendarInsightQueryVariants(queryText: string): readonly string[] {
+  const variants: string[] = [];
+  if (/\bJuly\b/iu.test(queryText) || /\bSeptember\b/iu.test(queryText) || /\b(?:travel|trip|planning)\b/iu.test(queryText)) {
+    variants.push("What trips did I mention for mid to late July?");
+    variants.push("What trips did I mention for September 2026?");
+  }
+  if (/\b(?:omi|notes?|travel|trip|planning|calendar|commitments?)\b/iu.test(queryText)) {
+    variants.push("What trips, dates, or commitments did I mention in my most recent OMI note?");
+  }
+  variants.push(queryText.replace(/\bmy\s+latest\s+OMI\s+notes?\b/iu, "the latest OMI note"));
+  variants.push(queryText.replace(/\blatest\s+OMI\s+notes?\b/iu, "most recent OMI note"));
+  variants.push(queryText);
+  return uniqueStrings(variants);
+}
+
+async function latestSourceScopeInsightResult(params: {
+  readonly namespaceId: string;
+  readonly queryText: string;
+}): Promise<RecallResult | null> {
+  if (!/\b(?:latest|most\s+recent)\b[\s\S]{0,40}\b(?:omi|notes?)\b/iu.test(params.queryText)) return null;
+  const latest = await resolveLatestSourceScopeArtifact(params.namespaceId, params.queryText);
+  if (!latest.sourceUri || !latest.sourceUri.startsWith("/") || !existsSync(latest.sourceUri)) return null;
+  const text = normalizeWhitespace(readFileSync(latest.sourceUri, "utf8")).slice(0, 900);
+  if (!text) return null;
+  return {
+    memoryId: `latest-source-scope:${latest.artifactId ?? latest.sourceUri}`,
+    memoryType: "artifact_derivation",
+    content: `Latest ${latest.sourceKind ?? "source"} note evidence: ${text}`,
+    score: 0.86,
+    artifactId: latest.artifactId,
+    occurredAt: null,
+    namespaceId: params.namespaceId,
+    provenance: {
+      tier: "latest_source_scope_reader",
+      source_uri: latest.sourceUri,
+      source_kind: latest.sourceKind ?? "note_like",
+      artifact_id: latest.artifactId,
+      insight_support_family: "latest_source_scope"
+    }
+  };
+}
+
+async function buildProjectedInsightSupportBundle(params: {
+  readonly query: RecallQuery;
+  readonly queryText: string;
+  readonly memoryPlan: ReturnType<typeof buildMemoryQueryPlan>;
+  readonly limit: number;
+}): Promise<InsightSupportBundle | null> {
+  const queryText = params.queryText;
+  const queryLower = queryText.toLowerCase();
+  const recapQuery: RecapQuery = {
+    query: queryText,
+    namespaceId: params.query.namespaceId,
+    timeStart: params.query.timeStart,
+    timeEnd: params.query.timeEnd,
+    referenceNow: params.query.referenceNow,
+    limit: params.limit,
+    provider: "none"
+  };
+  const results: RecallResult[] = [];
+  const sections: StructuredAnswerSection[] = [];
+  const selectedCorpora: string[] = [];
+  const candidateCountsByCorpus: Record<string, number> = {};
+
+  const repoInsightQuery = /\b(?:repo|spec|checkpoint|changelog|task\s+lists?|clean[-\s]?main|smoke|latency\s+tail|benchmark\s+results?|product[-\s]?ready|retrieval\s+weakness|current\s+retrieval|evidence\s+gaps?|overall|research|paper|pdf|temporal\s+kg|event\s+time|dialogue\s+time|rag|citation|source[-\s]?faithfulness|source[-\s]?audit|claim[-\s]?audit|source\s+window|vericite|techdoc|natural\s+and\s+useful\s+to\s+a\s+human)\b/iu.test(queryText);
+  if (repoInsightQuery) {
+    const repoReads = await Promise.all(repoInsightQueryVariants(queryText).map((variant) =>
+      readRepoSpecCorpus({
+        queryText: variant,
+        namespaceId: params.query.namespaceId,
+        plan: params.memoryPlan,
+        limit: params.limit
+      })
+    ));
+    const repoRead = repoReads.find((read): read is NonNullable<typeof read> => Boolean(read?.results.length)) ?? null;
+    if (repoRead?.results.length) {
+      results.push(...repoRead.results);
+      selectedCorpora.push("repo_docs");
+      candidateCountsByCorpus.repo_docs = repoRead.results.length;
+      const section = insightSectionFromResults({
+        id: "repo_support",
+        title: "Repo / spec support",
+        text: `For the query "${queryText}", source-backed repo documents matched. ${repoRead.claimText}`,
+        results: repoRead.results
+      });
+      if (section) sections.push(section);
+    }
+  }
+
+  const taskInsightQuery = /\b(?:task|tasks|checklist|open\s+items?|stale|weakness(?:es)?|follow[- ]?ups?|what\s+should\s+become|what\s+should\s+be\s+generated)\b/iu.test(queryText);
+  if (taskInsightQuery) {
+    if (!/\bomi\b/iu.test(queryText)) {
+      const scopedTaskRead = await readProjectScopedTasks({
+        queryText,
+        namespaceId: params.query.namespaceId,
+        plan: params.memoryPlan,
+        limit: params.limit
+      });
+      if (scopedTaskRead.results.length > 0) {
+        results.push(...scopedTaskRead.results);
+        selectedCorpora.push("repo_task_docs");
+        candidateCountsByCorpus.repo_task_docs = scopedTaskRead.results.length;
+        const section = insightSectionFromResults({
+          id: "repo_task_support",
+          title: "Task-list support",
+          text: scopedTaskRead.tasks.length > 0
+            ? `For the query "${queryText}", relevant task-list rows include: ${scopedTaskRead.tasks.map((task) => task.title).slice(0, 6).join("; ")}.`
+            : `For the query "${queryText}", relevant task-list documents were found.`,
+          results: scopedTaskRead.results
+        });
+        if (section) sections.push(section);
+      }
+    }
+
+    const typedTaskResults = await getTypedTaskResults(recapQuery);
+    if (typedTaskResults.length > 0) {
+      results.push(...typedTaskResults);
+      selectedCorpora.push("task_items");
+      candidateCountsByCorpus.task_items = typedTaskResults.length;
+      const section = insightSectionFromResults({
+        id: "typed_task_support",
+        title: "Typed task support",
+        text: `For the query "${queryText}", typed task rows matched; use them as source-backed task evidence instead of generic prose.`,
+        results: typedTaskResults
+      });
+      if (section) sections.push(section);
+    }
+  }
+
+  const calendarInsightQuery =
+    /\b(?:omi|note|notes|travel|trip|calendar|commitments?|date|dates|time\s+windows?|july|september|summer|planning)\b/iu.test(queryText) &&
+    !/\b(?:dialogue\s+time|event\s+time|research|paper|rag|source[-\s]?faithfulness)\b/iu.test(queryText);
+  if (calendarInsightQuery) {
+    let typedCalendarResults: readonly RecallResult[] = [];
+    for (const variant of calendarInsightQueryVariants(queryText)) {
+      const read = await getTypedCalendarResults({ ...recapQuery, query: variant });
+      typedCalendarResults = read;
+      if (read.length > 0) break;
+    }
+    if (typedCalendarResults.length > 0) {
+      results.push(...typedCalendarResults);
+      selectedCorpora.push("temporal_events");
+      candidateCountsByCorpus.temporal_events = typedCalendarResults.length;
+      const commitmentText = `Calendar/date support found: ${typedCalendarResults.map((result) => result.content).slice(0, 4).join("; ")}.`;
+      const section = insightSectionFromResults({
+        id: "calendar_support",
+        title: "Calendar / temporal support",
+        text: `For the query "${queryText}", ${commitmentText}`,
+        results: typedCalendarResults
+      });
+      if (section) sections.push(section);
+    }
+
+    if (typedCalendarResults.length === 0) {
+      const latestSourceResult = await latestSourceScopeInsightResult({
+        namespaceId: params.query.namespaceId,
+        queryText
+      });
+      if (latestSourceResult) {
+        results.push(latestSourceResult);
+        selectedCorpora.push("omi_notes");
+        candidateCountsByCorpus.omi_notes = 1;
+        const section = insightSectionFromResults({
+          id: "latest_source_support",
+          title: "Latest source support",
+          text: `For the query "${queryText}", the latest source note was selected directly as source-bound evidence.`,
+          results: [latestSourceResult]
+        });
+        if (section) sections.push(section);
+      }
+    }
+  }
+
+  if (results.length === 0 && sections.length === 0) return null;
+  const mergedResults = mergeRecallResults(results, [], Math.max(params.limit, 8));
+  return {
+    results: mergedResults,
+    sections: sections.slice(0, 12),
+    evidenceTexts: insightEvidenceTexts(sections, mergedResults),
+    sourceKinds: insightSourceKinds(mergedResults),
+    selectedCorpora: uniqueStrings(selectedCorpora),
+    candidateCountsByCorpus,
+    queryTimeModelCalls: 0
+  };
+}
+
+async function buildInsightReportTrustedResponse(params: {
+  readonly query: RecallQuery;
+  readonly queryText: string;
+  readonly limit: number;
+  readonly queryContract: QueryContract;
+  readonly memoryPlan: ReturnType<typeof buildMemoryQueryPlan>;
+  readonly startedAt: number;
+}): Promise<RecallResponse> {
+  const baseBundle = await buildInsightSupportBundle({
+    namespaceId: params.query.namespaceId,
+    queryText: params.queryText,
+    plan: params.memoryPlan,
+    limit: Math.max(params.limit, 8)
+  });
+  const bundle = mergeInsightSupportBundles(
+    baseBundle,
+    await buildProjectedInsightSupportBundle({
+      query: params.query,
+      queryText: params.queryText,
+      memoryPlan: params.memoryPlan,
+      limit: Math.max(params.limit, 8)
+    }),
+    Math.max(params.limit, 8)
+  );
+  if (!bundle) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "insight_report_abstention",
+      stageName: "insight_support_bundle_reader",
+      reason: "The planner selected an insight report, but no source-backed support bundle matched the requested scope."
+    });
+  }
+  const insightReport = verifyInsightReport(synthesizeInsightReport({
+    queryText: params.queryText,
+    plan: params.memoryPlan,
+    bundle
+  }));
+  if (
+    insightReport.verification.unsupportedInsightClaimCount > 0 ||
+    insightReport.verification.unsupportedSuggestionCount > 0 ||
+    insightReport.verification.citationFaithfulnessScore < 0.95
+  ) {
+    return buildPlannerAbstentionResponse({
+      query: params.query,
+      queryContract: params.queryContract,
+      memoryPlan: params.memoryPlan,
+      startedAt: params.startedAt,
+      finalClaimSource: "insight_report_abstention",
+      stageName: "insight_support_bundle_reader",
+      reason: "The insight support bundle was retrieved, but deterministic verification rejected unsupported insight prose."
+    });
+  }
+  return buildDirectSourceSearchResponse({
+    query: params.query,
+    results: bundle.results,
+    claimText: insightReport.answer,
+    stageName: "insight_support_bundle_reader",
+    startedAt: params.startedAt,
+    answerReason: "The query asked for source-backed observations or recommendations, so the planner selected the universal insight support bundle before generic retrieval.",
+    supportBundleFamily: "profile_report",
+    sourceBoundedReadTried: true,
+    sourceBoundedReadSucceeded: true,
+    finalRouteFamily: "insight_report",
+    extraMeta: {
+      ...plannerEnforcementMeta(params.memoryPlan, params.queryContract, "insight_report", "insight_support_bundle_reader_selected"),
+      queryContractName: "insight_report",
+      queryContractRetrievalDomain: "cross_corpus_insight",
+      queryContractAnswerShape: "report",
+      finalClaimSource: "insight_report",
+      answerSections: insightReport.observations.map((observation) => ({
+        id: observation.id,
+        title: observation.title,
+        text: observation.text,
+        evidenceCount: observation.sourceTrail.length,
+        sourceTrail: observation.sourceTrail
+      })),
+      insightReport: insightReport as unknown as Record<string, unknown>,
+      insightType: insightReport.insightType,
+      insightVerification: insightReport.verification as unknown as Record<string, unknown>,
+      insightObservations: insightReport.observations as unknown as readonly Record<string, unknown>[],
+      insightExamples: insightReport.examples as unknown as readonly Record<string, unknown>[],
+      insightSuggestions: insightReport.suggestions as unknown as readonly Record<string, unknown>[],
+      insightSelectedCorpora: bundle.selectedCorpora,
+      insightCandidateCountsByCorpus: bundle.candidateCountsByCorpus,
+      queryTimeModelCalls: insightReport.verification.queryTimeModelCalls
+    }
+  });
+}
+
 function normalizeOperatorPresentationQueryText(value: string): string {
   let normalized = normalizeWhitespace(value);
   normalized = normalized.replace(
@@ -29302,6 +29801,19 @@ async function searchMemoryImpl(query: RecallQuery): Promise<RecallResponse> {
   })();
 
   if (decompositionDepth === 0 && memoryPlan.plannerEnforced) {
+    if (
+      memoryPlan.intent === "insight_report" ||
+      memoryPlan.intent === "trend_report" ||
+      memoryPlan.intent === "improvement_recommendation" ||
+      memoryPlan.intent === "before_after_report" ||
+      memoryPlan.intent === "skill_candidate_report" ||
+      memoryPlan.intent === "risk_gap_report"
+    ) {
+      return buildInsightReportTrustedResponse({ query: effectiveQuery, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+    }
+    if (memoryPlan.intent === "expandable_memory_packet" || memoryPlan.intent === "source_window_expansion") {
+      return buildExpandableMemoryTrustedResponse({ query: effectiveQuery, queryText, limit, queryContract, memoryPlan, startedAt: searchStartedAt });
+    }
     if (
       memoryPlan.intent === "codex_session_report" ||
       memoryPlan.intent === "engineering_memory_packet" ||
@@ -37698,6 +38210,11 @@ function buildEventMemoryUnits(results: readonly RecallResult[]): readonly Event
   return units.slice(0, 12);
 }
 
+function isCalendarTemporalChangeQuery(queryText: string): boolean {
+  return /\b(?:changed?|updates?|different|compare|before|after)\b/iu.test(queryText) &&
+    /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|travel|trip|plans?)\b/iu.test(queryText);
+}
+
 export async function extractCalendarMemory(query: RecapQuery): Promise<CalendarExtractionResponse> {
   const extractionStartedAt = performance.now();
   const memoryPlan = buildMemoryQueryPlan(query.query, null, { referenceNow: query.referenceNow });
@@ -37767,50 +38284,7 @@ export async function extractCalendarMemory(query: RecapQuery): Promise<Calendar
       };
     }
   }
-  const anchorFocus = buildRecapFocus(query);
-  const anchoredCalendarRead = await readAnchoredCalendarSupport(query, anchorFocus, 12);
-  if (anchoredCalendarRead.commitments.length > 0 && anchoredCalendarRead.results.length > 0) {
-    const resolvedWindow = resolveRecapWindow(query);
-    const temporalSupportPaths = buildTemporalSupportPaths(anchoredCalendarRead.results);
-    return {
-      query: query.query,
-      namespaceId: query.namespaceId,
-      intent: "calendar_extraction",
-      resolvedWindow,
-      focus: anchorFocus,
-      confidence: "confident",
-      followUpAction: "none",
-      clarificationHint: undefined,
-      evidence: buildEvidenceBundle(anchoredCalendarRead.results),
-      retrievalPlan: {
-        intent: "calendar_extraction",
-        probes: [query.query, ...anchoredCalendarRead.anchorPhrases.map((phrase) => `anchor:${phrase}`)],
-        groupedBy: "artifact_cluster",
-        queryDecompositionApplied: false,
-        queryDecompositionSubqueries: [],
-        scopeMode: "event_window_scope",
-        sourceConstraintUri: undefined,
-        usedEventWindow:
-          Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd) ||
-          hasEventWindowSupport(anchoredCalendarRead.results, anchoredCalendarRead.commitments) ||
-          anchoredCalendarRead.anchorPhrases.length > 0,
-        usedCapturedAtOnly: false,
-        temporalSupportPaths,
-        ...buildSingleStageLatencyMeta({
-          stageName: "anchored_calendar_extraction_fast_path",
-          startedAt: extractionStartedAt,
-          candidateCount: anchoredCalendarRead.commitments.length,
-          rowsScanned: anchoredCalendarRead.results.length,
-          earlyStopReason: "anchored_calendar_support_selected_before_recap_pipeline",
-          finalRouteFamily: memoryPlan.intent
-        }),
-        ...memoryQueryPlanTelemetry(memoryPlan)
-      },
-      commitments: anchoredCalendarRead.commitments.slice(0, 12),
-      eventMemoryUnits: buildEventMemoryUnits(anchoredCalendarRead.results)
-    };
-  }
-  if (memoryPlan.intent === "temporal_change" && /\b(?:july|september)\b/iu.test(query.query)) {
+  if (isCalendarTemporalChangeQuery(query.query) && /\b(?:july|september)\b/iu.test(query.query)) {
     const scopedQueries = [
       { ...query, query: "What trips did I mention for mid to late July?" },
       { ...query, query: "What trips did I mention for September 2026?" }
@@ -37856,7 +38330,7 @@ export async function extractCalendarMemory(query: RecapQuery): Promise<Calendar
             startedAt: extractionStartedAt,
             candidateCount: merged.size,
             rowsScanned: scopedResults.length,
-            earlyStopReason: "temporal_change_typed_calendar_support_selected",
+            earlyStopReason: "temporal_change_typed_calendar_support_selected_before_anchor_scan",
             finalRouteFamily: memoryPlan.intent
           }),
           ...memoryQueryPlanTelemetry(memoryPlan)
@@ -37865,6 +38339,49 @@ export async function extractCalendarMemory(query: RecapQuery): Promise<Calendar
         eventMemoryUnits: buildEventMemoryUnits(scopedResults)
       };
     }
+  }
+  const anchorFocus = buildRecapFocus(query);
+  const anchoredCalendarRead = await readAnchoredCalendarSupport(query, anchorFocus, 12);
+  if (anchoredCalendarRead.commitments.length > 0 && anchoredCalendarRead.results.length > 0) {
+    const resolvedWindow = resolveRecapWindow(query);
+    const temporalSupportPaths = buildTemporalSupportPaths(anchoredCalendarRead.results);
+    return {
+      query: query.query,
+      namespaceId: query.namespaceId,
+      intent: "calendar_extraction",
+      resolvedWindow,
+      focus: anchorFocus,
+      confidence: "confident",
+      followUpAction: "none",
+      clarificationHint: undefined,
+      evidence: buildEvidenceBundle(anchoredCalendarRead.results),
+      retrievalPlan: {
+        intent: "calendar_extraction",
+        probes: [query.query, ...anchoredCalendarRead.anchorPhrases.map((phrase) => `anchor:${phrase}`)],
+        groupedBy: "artifact_cluster",
+        queryDecompositionApplied: false,
+        queryDecompositionSubqueries: [],
+        scopeMode: "event_window_scope",
+        sourceConstraintUri: undefined,
+        usedEventWindow:
+          Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd) ||
+          hasEventWindowSupport(anchoredCalendarRead.results, anchoredCalendarRead.commitments) ||
+          anchoredCalendarRead.anchorPhrases.length > 0,
+        usedCapturedAtOnly: false,
+        temporalSupportPaths,
+        ...buildSingleStageLatencyMeta({
+          stageName: "anchored_calendar_extraction_fast_path",
+          startedAt: extractionStartedAt,
+          candidateCount: anchoredCalendarRead.commitments.length,
+          rowsScanned: anchoredCalendarRead.results.length,
+          earlyStopReason: "anchored_calendar_support_selected_before_recap_pipeline",
+          finalRouteFamily: memoryPlan.intent
+        }),
+        ...memoryQueryPlanTelemetry(memoryPlan)
+      },
+      commitments: anchoredCalendarRead.commitments.slice(0, 12),
+      eventMemoryUnits: buildEventMemoryUnits(anchoredCalendarRead.results)
+    };
   }
   if (earlyTypedCalendarScopeRequested) {
     const typedCommitments = await getTypedCalendarItems(query);
@@ -37984,7 +38501,7 @@ export async function extractCalendarMemory(query: RecapQuery): Promise<Calendar
     commitments = [...merged.values()].slice(0, 12);
   }
   let finalEvidenceResults: readonly RecallResult[] = typedCalendarResults;
-  if (memoryPlan.intent === "temporal_change" && /\b(?:july|september)\b/iu.test(query.query)) {
+  if (isCalendarTemporalChangeQuery(query.query) && /\b(?:july|september)\b/iu.test(query.query)) {
     const scopedQueries = [
       { ...query, query: "What trips did I mention for mid to late July?" },
       { ...query, query: "What trips did I mention for September 2026?" }

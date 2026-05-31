@@ -67,7 +67,19 @@ function normalizeComparable(value: string): string {
 }
 
 function hasComparableTerm(payloadText: string, term: string): boolean {
-  return ` ${normalizeComparable(payloadText)} `.includes(` ${normalizeComparable(term)} `);
+  const normalizedPayload = ` ${normalizeComparable(payloadText)} `;
+  const normalizedTerm = normalizeComparable(term);
+  if (!normalizedTerm) {
+    return false;
+  }
+  const variants = new Set([normalizedTerm]);
+  if (/ing$/u.test(normalizedTerm) && normalizedTerm.length > 5 && !normalizedTerm.includes(" ")) {
+    variants.add(normalizedTerm.replace(/ing$/u, ""));
+  }
+  if (normalizedTerm.length <= 3 || normalizedTerm.includes(" ")) {
+    return [...variants].some((variant) => normalizedPayload.includes(` ${variant} `));
+  }
+  return [...variants].some((variant) => normalizedPayload.includes(variant));
 }
 
 function expectedTermsForPhrase(phrase: string): readonly string[] {

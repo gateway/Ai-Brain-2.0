@@ -17,6 +17,7 @@ export type QueryContractName =
   | "engineering_memory_packet"
   | "workflow_pattern_report"
   | "codex_source_audit"
+  | "insight_report"
   | "task_list"
   | "procedure_lookup"
   | "source_audit"
@@ -32,6 +33,7 @@ export type QueryContractFamily =
   | "task_ops"
   | "procedural_memory"
   | "source_audit"
+  | "insight_report"
   | "temporal_detail"
   | "typed_list_set"
   | "exact_detail"
@@ -478,6 +480,25 @@ export function inferQueryContract(queryText: string): QueryContract {
   const unknownDefinitionSubject = extractUnknownDefinitionReviewSubject(normalized);
   const sharedSocialPair = extractSharedSocialPair(normalized, names);
   const friendSetPlaceScope = extractFriendSetPlaceScope(normalized);
+
+  if (
+    /\b(?:what\s+did\s+(?:we|i)\s+learn|what\s+could\s+(?:we|i)\s+do\s+better|what\s+could\s+make|what\s+.*\bdo\s+about\s+them|suggest(?:ed|ions?)?|recommend(?:ations?)?|patterns?\s+(?:are\s+)?(?:repeating|show\s+up|keep\s+repeating)|patterns?\s+repeat|repeated\s+instructions?|reusable\s+skills?|what\s+is\s+still\s+(?:weak|uncertain)|what\s+(?:tasks?\s+)?should\s+(?:become|come\s+out\s+of|be\s+generated)|should\s+become\s+permanent\s+agent\s+rules?|should\s+come\s+out\s+of|how\s+did\s+we\s+improve|benchmark\s+results\s+improve|retrieval\s+improve|what\s+changed\s+(?:since|about)|why\s+is\s+this\s+happening|what\s+are\s+the\s+risks?|top\s+risks?|product[-\s]?ready|what\s+remains|recurring\s+weaknesses|next\s+(?:three\s+)?engineering\s+tasks?|research-backed\s+ideas?|source[-\s]?faithfulness\s+research|compare\b[\s\S]{0,120}\b(?:what\s+is\s+)?(?:still\s+)?missing|evidence\s+gaps?|top\s+three\s+ways|calendar-like\s+commitments?|stale\s+(?:tasks?|or\s+uncertain)|latency\s+tail|should\s+(?:we|i)\s+(?:track|improve)|new\s+(?:skill|automation|checklist)|teach\s+us|should\s+we\s+change|what\s+should\s+we\s+implement\s+next|dates?\s+or\s+time\s+windows?\s+are\s+connected|natural\s+and\s+useful\s+to\s+a\s+human)\b/iu.test(
+      normalized
+    )
+  ) {
+    return baseContract({
+      contractName: "insight_report",
+      contractFamily: "insight_report",
+      answerShape: "report",
+      subjectHints: subjects,
+      temporalHints: times,
+      allowedReadModels: ["insight_support_bundle", "codex_memory_reader", "expandable_memory_reader", "document_section_projection", "task_projection"],
+      blockedFallbacks: ["generic_lexical_without_support", "weak_canonical_profile"],
+      confidence: 0.92,
+      routingReasons: ["insight_report_cue", "source_bound_observation_or_recommendation_required"],
+      startedAt
+    });
+  }
 
   if (projectSubject) {
     return baseContract({

@@ -203,6 +203,24 @@ export const QUERY_CATALOG_V1: readonly QueryCatalogEntry[] = [
     abstainWhen: ["the source is absent", "no provenance link exists"]
   },
   {
+    id: "insight_report_v1",
+    retrievalDomain: "cross_corpus_insight",
+    queryContract: "insight_report",
+    answerShape: "report",
+    primaryTool: "memory.search",
+    allowedReadModels: ["insight_support_bundle", "codex_memory_reader", "expandable_memory_reader", "document_section_projection", "task_projection"],
+    supportedByDefault: true,
+    minimumEvidence: 1,
+    expectedFinalClaimSources: ["insight_report"],
+    sampleQueries: [
+      "what did we learn from this?",
+      "what could we do better?",
+      "what patterns are repeating?",
+      "what should become a task or skill?"
+    ],
+    abstainWhen: ["no source-backed support bundle exists", "suggestions would be unsupported", "citation verification fails"]
+  },
+  {
     id: "review_only_v1",
     retrievalDomain: "review_unknown",
     queryContract: "review_only",
