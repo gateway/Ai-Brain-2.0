@@ -531,7 +531,8 @@ function projectLabelFromRows(rows: readonly RecallResult[]): string | null {
 
 function engineeringMemoryPacketText(queryText: string, rows: readonly RecallResult[]): string {
   const projectLabel = projectLabelFromQuery(queryText) ?? projectLabelFromRows(rows) ?? "this repo";
-  return `For future ${projectLabel} Codex work, preload these rules: use curated summaries instead of raw transcripts, keep changes tied to task lists/docs/changelog, preserve source trails, and check prior architecture decisions before editing.`;
+  const includedCount = rows.length;
+  return `Agent memory packet for future ${projectLabel} Codex work included ${includedCount} source-backed memory items: use curated summaries instead of raw transcripts, keep changes tied to task lists/docs/changelog, preserve source trails, and check prior architecture decisions before editing.`;
 }
 
 function matchesProjectLabel(row: CodexProjectDetailSummaryRow, projectLabel: string | null): boolean {
@@ -901,11 +902,20 @@ async function readCodexProjectDetailMemory(params: {
     })
     .filter((entry) => entry.evidenceCount > 0);
   const sourceSection = section("source_trail", "Source Trail", results.slice(0, 6), "These project-detail claims come from curated Codex session summaries, not raw transcript retrieval.");
-  const answerSections = [...sections, sourceSection];
   const rawCuratedPolicy =
     /\b(?:raw\s+transcripts?|curated\s+summaries)\b/iu.test(params.queryText)
       ? "Raw Codex transcripts stay archive-only and are not embedded for retrieval; curated summaries are embedded after projection/vector sync and are the source-backed retrieval substrate. "
       : "";
+  const policySection =
+    rawCuratedPolicy.length > 0
+      ? section(
+          "raw_curated_retrieval_policy",
+          "Raw Transcript / Curated Summary Policy",
+          results.slice(0, 6),
+          "Raw Codex transcripts stay archive-only and are not embedded for retrieval. Curated summaries get embedding coverage after projection/vector sync and are used for source-backed retrieval with source trail and claim audit."
+        )
+      : null;
+  const answerSections = [policySection, ...sections, sourceSection].filter((entry): entry is StructuredAnswerSection => entry !== null);
   const claimText = `${rawCuratedPolicy}${answerSections
     .filter((entry) => entry.evidenceCount > 0)
     .map((entry) => `${entry.title}: ${entry.text}`)

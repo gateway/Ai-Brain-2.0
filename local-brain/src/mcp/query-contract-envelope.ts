@@ -224,7 +224,14 @@ function deriveSelectionTrace(params: {
   readonly finalClaimSource: string | null;
   readonly evidenceCount: number;
 }): readonly Record<string, unknown>[] {
-  const meta = (params.payload?.meta ?? {}) as Record<string, unknown>;
+  const retrievalPlanMeta =
+    params.payload?.retrievalPlan && typeof params.payload.retrievalPlan === "object"
+      ? (params.payload.retrievalPlan as Record<string, unknown>)
+      : {};
+  const meta = {
+    ...retrievalPlanMeta,
+    ...((params.payload?.meta ?? {}) as Record<string, unknown>)
+  } as Record<string, unknown>;
   const explicit = normalizeSelectionTrace(meta.selectionTrace);
   if (explicit.length > 0) {
     return explicit;
@@ -928,6 +935,12 @@ export async function attachStableQueryContractEnvelope(params: {
     queryEmbeddingCacheHit,
     vectorContribution,
     vectorBlockedReason,
+    recallChannels: normalizeArray(meta.recallChannels),
+    rerankDecision: typeof meta.rerankDecision === "string" ? meta.rerankDecision : null,
+    filterTrace: Array.isArray(meta.filterTrace) ? meta.filterTrace : [],
+    finalSelectionReason: typeof meta.finalSelectionReason === "string" ? meta.finalSelectionReason : null,
+    candidateCountsByStage: meta.candidateCountsByStage && typeof meta.candidateCountsByStage === "object" ? meta.candidateCountsByStage : {},
+    rowsScannedByStage: meta.rowsScannedByStage && typeof meta.rowsScannedByStage === "object" ? meta.rowsScannedByStage : {},
     followUpAction,
     abstentionReason,
     blockedFallbacks,

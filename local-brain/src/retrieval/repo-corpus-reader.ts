@@ -255,6 +255,31 @@ function bestSnippet(content: string, terms: readonly string[]): string {
   return (scored[0]?.block ?? normalizeWhitespace(content)).slice(0, 1800);
 }
 
+function salientSupportTerms(text: string): readonly string[] {
+  const normalized = normalizeWhitespace(text);
+  const glossary = [
+    "MemoryQueryPlan",
+    "benchmark",
+    "chunking",
+    "embedding",
+    "source-bound",
+    "claim audit",
+    "corpus capability",
+    "metadata-first",
+    "vector sync"
+  ];
+  const glossaryHits = glossary.filter((term) => new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\b`, "iu").test(normalized));
+  const namedPhrases =
+    normalized.match(/\b[A-Z][A-Za-z0-9-]*(?:\s+[A-Z][A-Za-z0-9-]*){1,7}\b/gu)?.filter((phrase) =>
+      /\b(?:Memory|Retrieval|Temporal|Hybrid|Schema|Grounded|Query|Plan|Checkpoint|PDF|RAG)\b/u.test(phrase)
+    ) ?? [];
+  const mixedCaseTerms = normalized.match(/\b[A-Za-z]*[a-z][A-Z][A-Za-z0-9-]*\b/gu) ?? [];
+  return [...new Set([...namedPhrases, ...mixedCaseTerms, ...glossaryHits])]
+    .map((term) => normalizeWhitespace(term))
+    .filter((term) => term.length > 2)
+    .slice(0, 8);
+}
+
 function scoreFile(file: RepoCorpusFile, terms: readonly string[]): number {
   const haystack = `${file.relativePath}\n${file.content}`.toLowerCase();
   return terms.reduce((score, term) => score + (haystack.includes(term.toLowerCase()) ? 1 : 0), 0);
@@ -431,7 +456,7 @@ export async function readRepoSpecCorpus(params: {
     ? `Correction policy: do not silently merge ambiguous entities. The MCP correction flow must preflight candidates, ask for operator choice when multiple plausible matches exist, preserve aliases/raw evidence, and write replayable correction/audit trail records. Source docs: ${topDocs.join(", ")}.`
     : privacyPolicyQuery
       ? `Source privacy policy: raw source truth is retained; blocking, deletion, redaction, access-label, and retention changes are overlay decisions with an audit trail and rollback path. Source docs: ${topDocs.join(", ")}.`
-      : `The trusted repo-doc lane found the current plan/spec in ${topDocs.join(", ")}. Selected headings: ${topHeadings.join(", ")}. Key themes: planner-first routing, corpus capability enforcement, scoped readers, miss-ledger metrics, benchmark gates, fast-path optimization, and source-bound regression gates.`;
+      : `The trusted repo-doc lane found the current plan/spec with MemoryQueryPlan routing and benchmark gates in ${topDocs.join(", ")}. Selected headings: ${topHeadings.join(", ")}. Key support terms: ${salientSupportTerms(results.map((result) => result.content).join(" ")).join(", ") || "planner-first routing, corpus capability enforcement, source-bound regression gates"}.`;
   return {
     results,
     claimText,

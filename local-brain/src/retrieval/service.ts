@@ -15436,6 +15436,26 @@ function isTaskEventContextQuery(queryText: string): boolean {
   return /\b(?:july|september|june)\b/iu.test(queryText) && /\b(?:trip|travel|flight|fly|leave|arrive|land)\b/iu.test(queryText);
 }
 
+function isExplicitDueScopedTaskQuery(queryText: string): boolean {
+  return /\b(?:tasks?|to[- ]?dos?|need\s+to\s+do|should\s+i\s+do|action\s+items?|open\s+tasks?|remaining\s+tasks?|what\s+is\s+due|what'?s\s+due|due)\b/iu.test(queryText) &&
+    /\b(?:due|deadline|by\s+(?:today|tomorrow|next\s+week|this\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|next\s+week|tomorrow)\b/iu.test(queryText);
+}
+
+function taskHasExplicitDueSupport(task: RecapTaskItem): boolean {
+  const text = `${task.title} ${task.description} ${task.dueHint ?? ""} ${task.dueWindowStart ?? ""} ${task.dueWindowEnd ?? ""}`;
+  return Boolean(task.dueHint || task.dueWindowStart || task.dueWindowEnd || /\b(?:due|deadline|by\s+(?:today|tomorrow|next\s+week|this\s+week|\d{4}-\d{2}-\d{2}))\b/iu.test(text));
+}
+
+function resultHasExplicitDueSupport(result: RecallResult): boolean {
+  const text = `${result.content} ${recallProvenanceText(result, "due_hint") ?? ""} ${recallProvenanceText(result, "due_window_start") ?? ""} ${recallProvenanceText(result, "due_window_end") ?? ""}`;
+  return Boolean(
+    recallProvenanceText(result, "due_hint") ||
+      recallProvenanceText(result, "due_window_start") ||
+      recallProvenanceText(result, "due_window_end") ||
+      /\b(?:due|deadline|by\s+(?:today|tomorrow|next\s+week|this\s+week|\d{4}-\d{2}-\d{2}))\b/iu.test(text)
+  );
+}
+
 function taskEventContextQueries(query: RecapQuery): readonly RecapQuery[] {
   if (/\b(?:changed|change)\b/iu.test(query.query) && /\bjuly\b/iu.test(query.query) && /\bseptember\b/iu.test(query.query)) {
     return [
@@ -37830,6 +37850,81 @@ export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtracti
       };
     }
   }
+  if (isExplicitDueScopedTaskQuery(query.query)) {
+    const typedTasks = await getTypedTaskItems(query);
+    const typedTaskResults = typedTasks.length > 0 ? await getTypedTaskResults(query) : [];
+    const sourceTaskResults = await loadTaskBearingSupportResults(query, buildRecapFocus(query), 12);
+    const sourceTasks = sourceTaskResults.length > 0 ? parseTaskItems(sourceTaskResults, buildRecapFocus(query)) : [];
+    const dueTasks = mergeTaskItemsByTitle(typedTasks, sourceTasks).filter(taskHasExplicitDueSupport);
+    const dueResults = [...typedTaskResults, ...sourceTaskResults].filter(resultHasExplicitDueSupport);
+    const resolvedWindow = resolveRecapWindow(query);
+    if (dueTasks.length > 0 && dueResults.length > 0) {
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "task_extraction",
+        resolvedWindow,
+        focus: buildRecapFocus(query),
+        confidence: "confident",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: buildTaskEvidenceBundle(dueResults),
+        retrievalPlan: {
+          intent: "task_extraction",
+          probes: [query.query],
+          groupedBy: "result_order",
+          queryDecompositionApplied: false,
+          queryDecompositionSubqueries: [],
+          scopeMode: "lifecycle_scope",
+          sourceConstraintUri: undefined,
+          usedEventWindow: Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd),
+          usedCapturedAtOnly: false,
+          ...buildSingleStageLatencyMeta({
+            stageName: "due_scoped_task_fast_path",
+            startedAt: extractionStartedAt,
+            candidateCount: dueTasks.length,
+            rowsScanned: dueResults.length,
+            earlyStopReason: "explicit_due_backed_task_support_selected_before_recap_pipeline",
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        tasks: dueTasks.slice(0, 12)
+      };
+    }
+    return {
+      query: query.query,
+      namespaceId: query.namespaceId,
+      intent: "task_extraction",
+      resolvedWindow,
+      focus: buildRecapFocus(query),
+      confidence: "missing",
+      followUpAction: "none",
+      clarificationHint: undefined,
+      evidence: [],
+      retrievalPlan: {
+        intent: "task_extraction",
+        probes: [query.query],
+        groupedBy: "result_order",
+        queryDecompositionApplied: false,
+        queryDecompositionSubqueries: [],
+        scopeMode: "lifecycle_scope",
+        sourceConstraintUri: undefined,
+        usedEventWindow: Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd),
+        usedCapturedAtOnly: false,
+        ...buildSingleStageLatencyMeta({
+          stageName: "due_scoped_task_abstention",
+          startedAt: extractionStartedAt,
+          candidateCount: typedTasks.length + sourceTasks.length,
+          rowsScanned: typedTaskResults.length + sourceTaskResults.length,
+          earlyStopReason: "explicit_due_scope_requires_due_backed_task_support",
+          finalRouteFamily: memoryPlan.intent
+        }),
+        ...memoryQueryPlanTelemetry(memoryPlan)
+      },
+      tasks: []
+    };
+  }
   if (
     (taskScopeMode === "source_scope" && /\b(?:most\s+recent|latest|last)\s+(?:omi\s+)?note\b/iu.test(query.query)) ||
     memoryPlan.taskScope === "travel"
@@ -38074,6 +38169,47 @@ export async function extractTaskMemory(query: RecapQuery): Promise<TaskExtracti
   if (memoryPlan.taskScope === "travel") {
     tasks = filterTravelTaskItems(tasks);
     evidenceResults = filterTravelTaskResults(evidenceResults);
+  }
+  if (isExplicitDueScopedTaskQuery(query.query)) {
+    const dueTasks = tasks.filter(taskHasExplicitDueSupport);
+    const dueEvidenceResults = evidenceResults.filter(resultHasExplicitDueSupport);
+    if (dueTasks.length === 0) {
+      const resolvedWindow = resolveRecapWindow(query);
+      return {
+        query: query.query,
+        namespaceId: query.namespaceId,
+        intent: "task_extraction",
+        resolvedWindow,
+        focus: buildRecapFocus(query),
+        confidence: "missing",
+        followUpAction: "none",
+        clarificationHint: undefined,
+        evidence: [],
+        retrievalPlan: {
+          intent: "task_extraction",
+          probes: [query.query],
+          groupedBy: "result_order",
+          queryDecompositionApplied: false,
+          queryDecompositionSubqueries: [],
+          scopeMode: "lifecycle_scope",
+          sourceConstraintUri: undefined,
+          usedEventWindow: Boolean(resolvedWindow.timeStart || resolvedWindow.timeEnd),
+          usedCapturedAtOnly: false,
+          ...buildSingleStageLatencyMeta({
+            stageName: "due_scoped_task_abstention",
+            startedAt: extractionStartedAt,
+            candidateCount: tasks.length,
+            rowsScanned: evidenceResults.length > 0 ? evidenceResults.length : pipeline.evidence.length,
+            earlyStopReason: "explicit_due_scope_requires_due_backed_task_support",
+            finalRouteFamily: memoryPlan.intent
+          }),
+          ...memoryQueryPlanTelemetry(memoryPlan)
+        },
+        tasks: []
+      };
+    }
+    tasks = dueTasks;
+    evidenceResults = dueEvidenceResults.length > 0 ? dueEvidenceResults : evidenceResults;
   }
 
   return {

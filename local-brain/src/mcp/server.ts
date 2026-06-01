@@ -711,6 +711,12 @@ function compactPayloadForDetailMode(payload: Record<string, unknown>, detailMod
     stageTimingsMs: originalMeta.stageTimingsMs && typeof originalMeta.stageTimingsMs === "object" ? originalMeta.stageTimingsMs : null,
     memoryQueryPlanIntent: typeof originalMeta.memoryQueryPlanIntent === "string" ? originalMeta.memoryQueryPlanIntent : null,
     selectedCorpusCapability: typeof originalMeta.selectedCorpusCapability === "string" ? originalMeta.selectedCorpusCapability : null,
+    recallChannels: Array.isArray(originalMeta.recallChannels) ? originalMeta.recallChannels : Array.isArray(compact.recallChannels) ? compact.recallChannels : [],
+    rerankDecision: typeof originalMeta.rerankDecision === "string" ? originalMeta.rerankDecision : compact.rerankDecision ?? null,
+    filterTrace: Array.isArray(originalMeta.filterTrace) ? originalMeta.filterTrace.slice(0, 8) : Array.isArray(compact.filterTrace) ? compact.filterTrace.slice(0, 8) : [],
+    finalSelectionReason: typeof originalMeta.finalSelectionReason === "string" ? originalMeta.finalSelectionReason : compact.finalSelectionReason ?? null,
+    candidateCountsByStage: originalMeta.candidateCountsByStage && typeof originalMeta.candidateCountsByStage === "object" ? originalMeta.candidateCountsByStage : compact.candidateCountsByStage ?? {},
+    rowsScannedByStage: originalMeta.rowsScannedByStage && typeof originalMeta.rowsScannedByStage === "object" ? originalMeta.rowsScannedByStage : compact.rowsScannedByStage ?? {},
     queryContractName: typeof originalMeta.queryContractName === "string" ? originalMeta.queryContractName : compact.queryContract ?? null,
     queryContractRetrievalDomain: typeof originalMeta.queryContractRetrievalDomain === "string" ? originalMeta.queryContractRetrievalDomain : compact.retrievalDomain ?? null
   };

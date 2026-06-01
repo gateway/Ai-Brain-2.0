@@ -76,7 +76,7 @@ function isSourceAuditQuestion(query: string, payload: any): boolean {
   return (
     payload?.queryContract === "source_audit" ||
     /\b(?:where did|where was).{0,80}\b(?:come from|source|evidence)\b/u.test(normalized) ||
-    /\b(?:show|list).{0,40}\bsources?\b/u.test(normalized) ||
+    /\b(?:show|list)\b.{0,40}\bsources?\b/u.test(normalized) ||
     /\b(?:source trail|provenance|evidence for|why do you think|why does)\b/u.test(normalized)
   );
 }

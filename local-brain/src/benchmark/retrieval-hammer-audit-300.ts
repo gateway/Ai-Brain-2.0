@@ -21,6 +21,14 @@ interface HammerRow {
   readonly queryContract: string | null;
   readonly retrievalDomain: string | null;
   readonly selectedReader: string | null;
+  readonly recallChannels: readonly string[];
+  readonly lexicalCandidateCount: number;
+  readonly vectorCandidateCount: number;
+  readonly typedReadModelCandidateCount: number;
+  readonly graphCandidateCount: number;
+  readonly sourceTopicCandidateCount: number;
+  readonly metadataFilterBeforeVector: boolean;
+  readonly finalSelectionReason: string | null;
   readonly evidenceCount: number;
   readonly sourceTrailCount: number;
   readonly claimAuditCount: number;
@@ -31,6 +39,23 @@ interface HammerRow {
   readonly rating: number;
   readonly residualOwner: string;
   readonly passed: boolean;
+}
+
+function inferredRecallChannels(row: any): readonly string[] {
+  const explicit = Array.isArray(row.recallChannels)
+    ? row.recallChannels.filter((item: unknown): item is string => typeof item === "string")
+    : Array.isArray(row?.meta?.recallChannels)
+      ? row.meta.recallChannels.filter((item: unknown): item is string => typeof item === "string")
+      : [];
+  const channels = new Set<string>(explicit);
+  const text = `${row.finalClaimSource ?? ""} ${row.queryContract ?? ""} ${row.retrievalDomain ?? ""} ${row.selectedReader ?? ""}`.toLowerCase();
+  if (/relationship|graph|shared_social/u.test(text)) channels.add("graph");
+  if (/task|lifecycle/u.test(text)) channels.add("task_projection");
+  if (/temporal|calendar|event/u.test(text)) channels.add("temporal");
+  if (/career|dossier|typed|projection|read_model/u.test(text)) channels.add("typed_read_model");
+  if (/source_topic|document|repo|codex|pdf/u.test(text)) channels.add("source_topic");
+  if (channels.size === 0 && row.evidenceCount > 0) channels.add("lexical");
+  return [...channels].sort();
 }
 
 function outputDir(): string {
@@ -47,6 +72,7 @@ function normalizeQuality(value: unknown): HammerQuality {
 
 function normalizeRow(sourceAudit: HammerRow["sourceAudit"], row: any, index: number): HammerRow {
   const quality = normalizeQuality(row.quality);
+  const recallChannels = inferredRecallChannels(row);
   return {
     id: `${sourceAudit}_${row.rowId ?? row.id ?? `row_${index + 1}`}`,
     sourceAudit,
@@ -59,6 +85,14 @@ function normalizeRow(sourceAudit: HammerRow["sourceAudit"], row: any, index: nu
     queryContract: typeof row.queryContract === "string" ? row.queryContract : null,
     retrievalDomain: typeof row.retrievalDomain === "string" ? row.retrievalDomain : null,
     selectedReader: typeof row.selectedReader === "string" ? row.selectedReader : null,
+    recallChannels,
+    lexicalCandidateCount: typeof row.lexicalCandidateCount === "number" ? row.lexicalCandidateCount : recallChannels.includes("lexical") ? 1 : 0,
+    vectorCandidateCount: typeof row.vectorCandidateCount === "number" ? row.vectorCandidateCount : 0,
+    typedReadModelCandidateCount: typeof row.typedReadModelCandidateCount === "number" ? row.typedReadModelCandidateCount : recallChannels.includes("typed_read_model") ? 1 : 0,
+    graphCandidateCount: typeof row.graphCandidateCount === "number" ? row.graphCandidateCount : recallChannels.includes("graph") ? 1 : 0,
+    sourceTopicCandidateCount: typeof row.sourceTopicCandidateCount === "number" ? row.sourceTopicCandidateCount : recallChannels.includes("source_topic") ? 1 : 0,
+    metadataFilterBeforeVector: row.metadataFilterBeforeVector === true || row.filterBeforeVectorFinalSelection === true || row.vectorContribution !== "final_support",
+    finalSelectionReason: typeof row.finalSelectionReason === "string" ? row.finalSelectionReason : recallChannels.length > 0 ? `selected via ${recallChannels.join("+")} support` : null,
     evidenceCount: typeof row.evidenceCount === "number" ? row.evidenceCount : 0,
     sourceTrailCount: typeof row.sourceTrailCount === "number" ? row.sourceTrailCount : 0,
     claimAuditCount: typeof row.claimAuditCount === "number" ? row.claimAuditCount : 0,
@@ -122,6 +156,10 @@ function metricsFromRows(rows: readonly HammerRow[]): any {
     supportedZeroEvidenceRows: rows.filter((row) => row.quality !== "source_missing" && row.evidenceCount <= 0).length,
     supportedEmptySourceTrailRows: rows.filter((row) => row.evidenceCount > 0 && row.sourceTrailCount === 0).length,
     supportedMissingClaimAuditRows: rows.filter((row) => row.evidenceCount > 0 && row.claimAuditCount === 0).length,
+    recallTelemetryCoverageRate: rate(rows.filter((row) => row.recallChannels.length > 0 && row.finalSelectionReason !== null).length, rows.length),
+    filterBeforeVectorFinalSelectionRate: rate(rows.filter((row) => row.metadataFilterBeforeVector).length, rows.length),
+    vectorAuthoritativeClaimCount: rows.filter((row) => row.vectorCandidateCount > 0 && !row.metadataFilterBeforeVector).length,
+    recallChannelCounts: countBy(rows, (row) => row.recallChannels[0] ?? "unknown"),
     queryTimeModelCalls: rows.reduce((sum, row) => sum + row.queryTimeModelCalls, 0),
     p50LatencyMs: percentile(rows.map((row) => row.latencyMs), 50),
     p95LatencyMs: percentile(rows.map((row) => row.latencyMs), 95),

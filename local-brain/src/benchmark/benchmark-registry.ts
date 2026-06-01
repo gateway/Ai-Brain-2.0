@@ -285,6 +285,19 @@ export const BENCHMARK_REGISTRY: readonly BenchmarkRegistryEntry[] = [
     requiredTelemetry: ["evidence_count", "query_time_model_calls", "latency", "namespace_id"]
   },
   {
+    id: "bounded_llm_presenter_shadow_audit_50",
+    scriptName: "benchmark:bounded-llm-presenter-shadow-audit-50",
+    tier: "diagnostic",
+    mutatesDb: false,
+    namespacePolicy: "read_only_artifact",
+    fixturePolicy: "artifact_only",
+    projectionPolicy: "none",
+    artifactSchemaVersion: "bounded_llm_presenter_shadow_pack_v2",
+    productGateEligible: false,
+    canUseLatestArtifacts: false,
+    requiredTelemetry: ["query_time_model_calls", "latency"]
+  },
+  {
     id: "codex_project_detail_pack",
     scriptName: "benchmark:codex-project-detail-pack",
     tier: "product_gate",

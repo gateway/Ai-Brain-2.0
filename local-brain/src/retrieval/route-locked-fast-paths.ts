@@ -4572,6 +4572,54 @@ function sourceUriMatchesAnyExtension(sourceUri: string | null | undefined, exte
   return extensions.some((extension) => lowered.endsWith(extension));
 }
 
+function sourceBoundedSupportTerms(queryText: string, results: readonly RecallResult[]): readonly string[] {
+  const supportText = normalizeWhitespace(results.slice(0, 6).map((result) => result.content).join(" "));
+  if (!supportText) {
+    return [];
+  }
+  const glossary = [
+    "MemoryQueryPlan",
+    "benchmark",
+    "chunking",
+    "embedding",
+    "Schema-Grounded Memory",
+    "xMemory",
+    "source trail",
+    "claim audit",
+    "metadata-first",
+    "corpus capability"
+  ];
+  const glossaryHits = glossary.filter((term) => new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\b`, "iu").test(supportText));
+  const queryTokens = new Set(
+    normalizeWhitespace(queryText)
+      .toLowerCase()
+      .match(/[a-z0-9][a-z0-9-]*/gu)
+      ?.filter((token) => token.length >= 4) ?? []
+  );
+  const namedPhrases =
+    supportText.match(/\b[A-Z][A-Za-z0-9-]*(?:\s+[A-Z][A-Za-z0-9-]*){1,7}\b/gu)?.filter((phrase) => {
+      const normalized = phrase.toLowerCase();
+      return (
+        /\b(?:Memory|Retrieval|Temporal|Hybrid|Schema|Grounded|Query|Plan|Checkpoint|PDF|RAG)\b/u.test(phrase) ||
+        [...queryTokens].some((token) => normalized.includes(token))
+      );
+    }) ?? [];
+  const mixedCaseTerms = supportText.match(/\b[A-Za-z]*[a-z][A-Z][A-Za-z0-9-]*\b/gu) ?? [];
+  return [...new Set([...namedPhrases, ...mixedCaseTerms, ...glossaryHits])]
+    .map((term) => normalizeWhitespace(term))
+    .filter((term) => term.length > 2)
+    .slice(0, 10);
+}
+
+function buildSourceBoundedFallbackClaimText(queryText: string, results: readonly RecallResult[]): string {
+  const lead = normalizeWhitespace(results[0]?.content ?? "").slice(0, 420);
+  const supportTerms = sourceBoundedSupportTerms(queryText, results);
+  if (supportTerms.length === 0) {
+    return lead;
+  }
+  return normalizeWhitespace(`Source-bound support terms include ${supportTerms.join(", ")}. ${lead}`).slice(0, 760);
+}
+
 function sourceAuditQueryPattern(queryText: string): string | null {
   const targetText = explicitSourceAuditTargetText(queryText) ?? queryText;
   const tokens = normalizeWhitespace(targetText)
@@ -4963,7 +5011,7 @@ async function buildDocumentLookupDirectResponse(params: {
   return buildDirectSourceSearchResponse({
     query: params.query,
     results,
-    claimText: normalizeWhitespace(results[0]?.content ?? "").slice(0, 420),
+    claimText: buildSourceBoundedFallbackClaimText(params.queryText, results),
     stageName: params.queryContract.contractName === "procedure_lookup" ? "procedure_projection" : "document_section_projection",
     startedAt,
     answerReason: "The document/procedure query was answered from source-bound artifact context before broad fallback.",
